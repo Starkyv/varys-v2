@@ -6,11 +6,14 @@
 > *Not published to an issue tracker — none configured; the `ready-for-agent` label could not be
 > applied. Build order = dependency order below.*
 >
-> **Status: ⬜ Not started — now unblocked.** The external prerequisite, MVP **Issue 2** (baseline
-> lifecycle + diff verdicts + approve/reject), is **landed** — the whole MVP backend (Issues 1–5) is
-> complete, and the per-checkpoint review read-model this slice consumes (`GET /runs/:id` →
-> `reviewState · actualUrl · baselineUrl · diffUrl · diffScore · threshold · healed`) exists. This
-> slice can begin whenever.
+> **Status: 🟡 In progress.** Issue 1 (walking skeleton) is **done and test-driven**; Issues 2–4 remain.
+>
+> | Issue | Status |
+> |---|---|
+> | 1 — Walking skeleton: deep-linked diff viewer | ✅ Done |
+> | 2 — Two view modes (side-by-side ↔ overlay) | ⬜ Not started |
+> | 3 — Approve / Reject + irreversible-confirm gate | ⬜ Not started |
+> | 4 — "Needs review" list | ⬜ Not started |
 >
 > **Dependency shape:** `1 → {2, 3}`, and `{1, 3} → 4`.
 
@@ -18,7 +21,7 @@
 
 # Issue 1 — Walking skeleton: deep-linked diff viewer renders baseline/actual/diff
 
-**Type:** AFK
+**Type:** AFK · **Status: ✅ Done**
 
 ## What to build
 
@@ -42,14 +45,14 @@ approval" affordance rather than a broken diff.
 
 ## Acceptance criteria
 
-- [ ] `apps/web` builds and runs from the monorepo with the existing single-command dev flow, alongside the API and worker.
-- [ ] The per-checkpoint review read-model is a single shared typed contract consumed by both the SPA and the API (compile-time agreement; no drift).
-- [ ] An API read endpoint returns the read-model for a given run/checkpoint, with baseline/actual/diff served via the authenticated artifact route.
-- [ ] Opening the SPA at a deep link for a diffed run displays the baseline, actual, and diff images at full captured resolution.
-- [ ] A `pending-baseline` (first-seed) checkpoint renders the seeded actual as the candidate baseline and indicates this is a first approval (no diff shown).
-- [ ] The UI displays the server-computed status/score and does not recompute the verdict.
-- [ ] Loading and error states render for the viewer fetch.
-- [ ] A browser-driven E2E (Playwright over the real SPA + real API + testcontainers Postgres + local-FS, extending the slice-1 backend harness) seeds a diffed run and asserts the three images render.
+- [x] `apps/web` builds and runs from the monorepo (Vite 7 + React 18 + TanStack Query + CSS Modules); `pnpm --filter @varys/web dev` serves it same-origin via a proxy to the API. *(production build verified; a single-command `dev` across all services is still the tracked follow-up)*
+- [x] The per-checkpoint review read-model is a single shared typed contract consumed by both the SPA and the API (`@varys/review-contract`, pure types — compile-time agreement; no drift).
+- [x] An API read endpoint returns the read-model for a given run/checkpoint, with baseline/actual/diff served via the authenticated artifact route (`GET /runs/:id`; `getUrl` → `/artifacts/:token`).
+- [x] Opening the SPA at a deep link for a diffed run displays the baseline, actual, and diff images at full captured resolution. *(deep link is `?run=<id>`; the `/runs/:id` path is the API's under the same origin)*
+- [x] A `pending-baseline` (first-seed) checkpoint renders the seeded actual as the candidate baseline and indicates this is a first approval (no diff shown).
+- [x] The UI displays the server-computed status/score and does not recompute the verdict.
+- [x] Loading and error states render for the viewer fetch.
+- [x] A browser-driven E2E (Playwright over the real SPA + real API + testcontainers Postgres + local-FS, extending the slice-1 backend harness) seeds a diffed run and asserts the three images render.
 
 ## Blocked by
 

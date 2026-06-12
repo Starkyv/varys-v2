@@ -32,6 +32,7 @@
     "@testcontainers/postgresql": "^10.18.0",
     "@types/pg": "^8.11.11",
     "@types/supertest": "^6.0.2",
+    "playwright": "^1.50.1",
     "supertest": "^7.0.0",
     "testcontainers": "^10.18.0",
     "unplugin-swc": "^1.5.1",
