@@ -6,12 +6,13 @@
 > *Not published to an issue tracker — none configured; the `ready-for-agent` label could not be
 > applied. Build order = dependency order below.*
 >
-> **External prerequisite for the whole slice:** MVP **Issue 2** (baseline lifecycle + diff verdicts +
-> approve/reject endpoints — see `issues/mvp.md`). The committed backend is only at MVP Issue 1
-> (walking skeleton): no `baselines` table, `RunStatus` is `queued | running | passed | failed`, no
-> approve/reject. None of these issues can ship until MVP Issue 2 lands.
+> **Status: ⬜ Not started — now unblocked.** The external prerequisite, MVP **Issue 2** (baseline
+> lifecycle + diff verdicts + approve/reject), is **landed** — the whole MVP backend (Issues 1–5) is
+> complete, and the per-checkpoint review read-model this slice consumes (`GET /runs/:id` →
+> `reviewState · actualUrl · baselineUrl · diffUrl · diffScore · threshold · healed`) exists. This
+> slice can begin whenever.
 >
-> **Dependency shape:** `MVP-Issue-2 → 1 → {2, 3}`, and `{1, 3} → 4`.
+> **Dependency shape:** `1 → {2, 3}`, and `{1, 3} → 4`.
 
 ---
 

@@ -9,6 +9,10 @@ test-results/
 playwright-report/
 *.tsbuildinfo
 
+# WXT extension build output
+.wxt/
+.output/
+
 # Local Claude Code / skills tooling — not part of the project
 .agents/
 .claude/

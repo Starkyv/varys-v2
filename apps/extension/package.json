@@ -1,0 +1,20 @@
+{
+  "name": "@varys/extension",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wxt",
+    "build": "wxt build",
+    "typecheck": "wxt prepare && tsc --noEmit"
+  },
+  "dependencies": {
+    "@varys/capture": "workspace:*",
+    "@varys/recorder": "workspace:*",
+    "@varys/step-schema": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "wxt": "^0.19.13"
+  }
+}
