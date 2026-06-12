@@ -98,7 +98,7 @@ describe("Baseline lifecycle", () => {
       viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
       steps: [
         { type: "navigate", url: fixture.url },
-        { type: "screenshot", name: "hero", selector: "#hero" },
+        { type: "screenshot", name: "hero", target: { tag: "div", attributes: { id: "hero" }, text: "Hero" } },
       ],
     };
     const res = await request(app.getHttpServer())
@@ -115,7 +115,7 @@ describe("Baseline lifecycle", () => {
       viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
       steps: [
         { type: "navigate", url: fixture.url },
-        { type: "screenshot", name: "hero", selector: "#hero" },
+        { type: "screenshot", name: "hero", target: { tag: "div", attributes: { id: "hero" }, text: "Hero" } },
       ],
     };
     const test = await request(app.getHttpServer())
@@ -212,5 +212,54 @@ describe("Baseline lifecycle", () => {
     const after = await runToCompletion(testId); // default vs default → still matches
     expect(after.status).toBe("passed");
     expect(after.checkpoints[0].reviewState).toBe("passed");
+  });
+
+  // TB2b — the locator heals to a lower signal and flags it.
+  it("flags a checkpoint as healed when the locator falls back to a lower signal", async () => {
+    fixture.setVariant("default");
+    // testId 'gone' isn't on the fixture, so resolution heals to the id signal.
+    const definition = {
+      name: "heal test",
+      viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+      steps: [
+        { type: "navigate", url: fixture.url },
+        {
+          type: "screenshot",
+          name: "hero",
+          target: { tag: "div", testId: "gone", attributes: { id: "hero" }, text: "Hero" },
+        },
+      ],
+    };
+    const test = await request(app.getHttpServer())
+      .post("/tests")
+      .send(definition)
+      .expect(201);
+
+    const run = await runToCompletion(test.body.id);
+    expect(run.checkpoints[0].healed).toBe(true);
+  });
+
+  // TB2c — no signal matches → the run hard-fails.
+  it("hard-fails the run when no fingerprint signal matches", async () => {
+    fixture.setVariant("default");
+    const definition = {
+      name: "not-found test",
+      viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+      steps: [
+        { type: "navigate", url: fixture.url },
+        {
+          type: "screenshot",
+          name: "ghost",
+          target: { tag: "div", attributes: { id: "does-not-exist" }, text: "Nope" },
+        },
+      ],
+    };
+    const test = await request(app.getHttpServer())
+      .post("/tests")
+      .send(definition)
+      .expect(201);
+
+    const run = await runToCompletion(test.body.id);
+    expect(run.status).toBe("failed");
   });
 });

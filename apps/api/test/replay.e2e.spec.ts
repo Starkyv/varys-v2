@@ -72,7 +72,7 @@ describe("Replay → screenshot → artifact", () => {
       viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
       steps: [
         { type: "navigate", url: fixture.url },
-        { type: "screenshot", name: "hero", selector: "#hero" },
+        { type: "screenshot", name: "hero", target: { tag: "div", attributes: { id: "hero" }, text: "Hero" } },
       ],
     };
 

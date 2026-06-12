@@ -112,6 +112,19 @@ importers:
         specifier: workspace:*
         version: link:../../packages/storage-adapter
 
+  packages/capture:
+    dependencies:
+      '@varys/step-schema':
+        specifier: workspace:*
+        version: link:../step-schema
+    devDependencies:
+      playwright:
+        specifier: ^1.50.1
+        version: 1.60.0
+      vitest:
+        specifier: ^3.0.5
+        version: 3.2.6(@types/node@22.19.21)(tsx@4.22.4)(yaml@2.9.0)
+
   packages/db:
     dependencies:
       drizzle-orm:
@@ -146,6 +159,19 @@ importers:
 
   packages/fixture-app: {}
 
+  packages/locator-engine:
+    dependencies:
+      '@varys/step-schema':
+        specifier: workspace:*
+        version: link:../step-schema
+      playwright:
+        specifier: ^1.50.1
+        version: 1.60.0
+    devDependencies:
+      vitest:
+        specifier: ^3.0.5
+        version: 3.2.6(@types/node@22.19.21)(tsx@4.22.4)(yaml@2.9.0)
+
   packages/queue:
     dependencies:
       pg-boss:
@@ -160,6 +186,9 @@ importers:
       '@varys/diff-engine':
         specifier: workspace:*
         version: link:../diff-engine
+      '@varys/locator-engine':
+        specifier: workspace:*
+        version: link:../locator-engine
       '@varys/step-schema':
         specifier: workspace:*
         version: link:../step-schema

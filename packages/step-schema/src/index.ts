@@ -14,10 +14,41 @@ export const navigateStep = z.object({
   url: z.string().min(1),
 });
 
+/**
+ * Multi-signal element fingerprint captured at record time. The ranked matcher
+ * (MVP) and the confidence-scored matcher (later) both resolve against these
+ * signals — capturing the bundle, not a single selector, is what lets the
+ * matcher evolve without re-recording.
+ */
+export const fingerprint = z.object({
+  testId: z.string().optional(),
+  role: z.string().optional(),
+  accessibleName: z.string().optional(),
+  text: z.string().optional(),
+  tag: z.string(),
+  attributes: z.record(z.string()).optional(),
+  ancestors: z
+    .array(z.object({ tag: z.string(), role: z.string().optional() }))
+    .optional(),
+  domIndex: z.number().int().nonnegative().optional(),
+  neighborText: z.array(z.string()).optional(),
+  moduleClasses: z.array(z.string()).optional(),
+  boundingBox: z
+    .object({
+      x: z.number(),
+      y: z.number(),
+      width: z.number(),
+      height: z.number(),
+    })
+    .optional(),
+});
+
+export type Fingerprint = z.infer<typeof fingerprint>;
+
 export const screenshotStep = z.object({
   type: z.literal("screenshot"),
   name: z.string().min(1),
-  selector: z.string().min(1),
+  target: fingerprint,
   /** Max mismatched-pixel ratio (0..1) tolerated before a diff is flagged. */
   threshold: z.number().positive().max(1).optional(),
 });

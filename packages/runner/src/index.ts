@@ -1,5 +1,6 @@
 import { baselines, type Db, runResults, runs, testVersions } from "@varys/db";
 import { diffPng } from "@varys/diff-engine";
+import { resolve } from "@varys/locator-engine";
 import type { TestDefinition } from "@varys/step-schema";
 import type { StorageAdapter } from "@varys/storage-adapter";
 import { and, eq } from "drizzle-orm";
@@ -62,7 +63,14 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
         continue;
       }
 
-      const actual = await page.locator(step.selector).screenshot();
+      const found = await resolve(page, step.target);
+      if (!found) {
+        throw new Error(
+          `could not locate checkpoint "${step.name}" — no fingerprint signal matched`,
+        );
+      }
+      const actual = await found.locator.screenshot();
+      const healed = found.healed;
       const actualKey = `runs/${runId}/${step.name}.png`;
       await storage.put(actualKey, actual);
       const threshold = step.threshold ?? DEFAULT_THRESHOLD;
@@ -88,7 +96,7 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
           reviewState: "pending-baseline",
           actualArtifactKey: actualKey,
           threshold,
-          healed: false,
+          healed,
         });
         reviewStates.push("pending-baseline");
       } else {
@@ -105,7 +113,7 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
             baselineArtifactKey: baseline.artifactKey,
             diffScore: score,
             threshold,
-            healed: false,
+            healed,
           });
           reviewStates.push("passed");
         } else {
@@ -120,7 +128,7 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
             diffArtifactKey: diffKey,
             diffScore: score,
             threshold,
-            healed: false,
+            healed,
           });
           reviewStates.push("diff");
         }

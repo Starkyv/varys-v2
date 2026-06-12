@@ -34,7 +34,7 @@ describe("Tests API", () => {
       viewport: { width: 1280, height: 720, deviceScaleFactor: 1 },
       steps: [
         { type: "navigate", url: "http://fixture.local/" },
-        { type: "screenshot", name: "hero", selector: "#hero" },
+        { type: "screenshot", name: "hero", target: { tag: "div", attributes: { id: "hero" }, text: "Hero" } },
       ],
     };
 
