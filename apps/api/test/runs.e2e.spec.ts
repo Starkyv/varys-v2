@@ -84,10 +84,11 @@ describe("Runs API", () => {
         .get(`/runs/${run.body.runId}`)
         .expect(200);
       status = res.body.status;
-      if (status === "passed" || status === "failed") break;
+      if (status === "passed" || status === "needs_review" || status === "failed") break;
       await sleep(200);
     }
 
-    expect(status).toBe("passed");
+    // A first run with no baseline seeds a pending baseline → needs_review.
+    expect(status).toBe("needs_review");
   });
 });

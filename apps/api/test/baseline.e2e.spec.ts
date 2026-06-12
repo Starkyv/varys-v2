@@ -1,0 +1,216 @@
+import "reflect-metadata";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { INestApplication } from "@nestjs/common";
+import { Test } from "@nestjs/testing";
+import { createDb, type DbHandle } from "@varys/db";
+import { type FixtureServer, startFixtureServer } from "@varys/fixture-app";
+import { type Boss, createBoss, startBoss, workRuns } from "@varys/queue";
+import { processRun } from "@varys/runner";
+import { LocalFsAdapter } from "@varys/storage-adapter";
+import request from "supertest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { AppModule } from "../src/app.module";
+import { startTestDb, type TestDb } from "./db-harness";
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const TERMINAL = ["passed", "needs_review", "failed"];
+
+interface Checkpoint {
+  name: string;
+  reviewState: string;
+  diffScore: number | null;
+  threshold: number;
+  healed: boolean;
+  actualUrl: string;
+  baselineUrl: string | null;
+  diffUrl: string | null;
+}
+interface RunView {
+  status: string;
+  checkpoints: Checkpoint[];
+}
+
+describe("Baseline lifecycle", () => {
+  let app: INestApplication;
+  let db: TestDb;
+  let fixture: FixtureServer;
+  let storageDir: string;
+  let consumerBoss: Boss;
+  let consumerDb: DbHandle;
+
+  beforeAll(async () => {
+    fixture = await startFixtureServer();
+    db = await startTestDb();
+    storageDir = await mkdtemp(join(tmpdir(), "varys-art-"));
+    process.env.DATABASE_URL = db.connectionString;
+    process.env.VARYS_STORAGE_DIR = storageDir;
+
+    const moduleRef = await Test.createTestingModule({
+      imports: [AppModule],
+    }).compile();
+    app = moduleRef.createNestApplication();
+    await app.init();
+
+    consumerDb = createDb(db.connectionString);
+    consumerBoss = createBoss(db.connectionString);
+    await startBoss(consumerBoss);
+    const storage = new LocalFsAdapter(storageDir);
+    await workRuns(consumerBoss, (runId) =>
+      processRun({ db: consumerDb.db, storage }, runId),
+    );
+  });
+
+  afterAll(async () => {
+    await consumerBoss?.stop();
+    await consumerDb?.pool.end();
+    await app?.close();
+    await db?.container.stop();
+    await fixture?.close();
+    if (storageDir) await rm(storageDir, { recursive: true, force: true });
+  });
+
+  async function runToCompletion(testId: string): Promise<RunView & { runId: string }> {
+    const run = await request(app.getHttpServer())
+      .post("/runs")
+      .send({ testId })
+      .expect(201);
+    const runId = run.body.runId as string;
+    let body: RunView = { status: "queued", checkpoints: [] };
+    for (let i = 0; i < 100; i++) {
+      const res = await request(app.getHttpServer()).get(`/runs/${runId}`);
+      if (res.status !== 200) {
+        throw new Error(
+          `GET /runs/${runId} -> ${res.status}: ${res.text ?? JSON.stringify(res.body)}`,
+        );
+      }
+      body = res.body;
+      if (TERMINAL.includes(body.status)) break;
+      await sleep(200);
+    }
+    return { runId, ...body };
+  }
+
+  async function createTest(): Promise<string> {
+    const definition = {
+      name: "baseline test",
+      viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+      steps: [
+        { type: "navigate", url: fixture.url },
+        { type: "screenshot", name: "hero", selector: "#hero" },
+      ],
+    };
+    const res = await request(app.getHttpServer())
+      .post("/tests")
+      .send(definition)
+      .expect(201);
+    return res.body.id;
+  }
+
+  // TB1 — a first run with no baseline seeds a pending baseline.
+  it("a first run with no baseline yields a pending-baseline checkpoint", async () => {
+    const definition = {
+      name: "seed test",
+      viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+      steps: [
+        { type: "navigate", url: fixture.url },
+        { type: "screenshot", name: "hero", selector: "#hero" },
+      ],
+    };
+    const test = await request(app.getHttpServer())
+      .post("/tests")
+      .send(definition)
+      .expect(201);
+
+    const run = await runToCompletion(test.body.id);
+
+    expect(run.status).toBe("needs_review");
+    const cp = run.checkpoints[0];
+    expect(cp).toMatchObject({ name: "hero", reviewState: "pending-baseline" });
+    expect(cp.actualUrl).toEqual(expect.any(String));
+    expect(cp.baselineUrl).toBeNull();
+    expect(cp.diffUrl).toBeNull();
+  });
+
+  // TB2 — approving a seed makes it the active baseline; an identical re-run passes.
+  it("an identical re-run passes once the seeded baseline is approved", async () => {
+    const testId = await createTest();
+
+    const seed = await runToCompletion(testId);
+    expect(seed.checkpoints[0].reviewState).toBe("pending-baseline");
+
+    await request(app.getHttpServer())
+      .post(`/runs/${seed.runId}/checkpoints/hero/approve`)
+      .expect(201);
+
+    const rerun = await runToCompletion(testId);
+    expect(rerun.status).toBe("passed");
+    const cp = rerun.checkpoints[0];
+    expect(cp.reviewState).toBe("passed");
+    expect(cp.diffScore).toBe(0);
+    expect(cp.baselineUrl).toEqual(expect.any(String));
+  });
+
+  // TB3 — a changed render diffs against the approved baseline.
+  it("a changed render produces a diff against the approved baseline", async () => {
+    fixture.setVariant("default");
+    const testId = await createTest();
+
+    const seed = await runToCompletion(testId);
+    await request(app.getHttpServer())
+      .post(`/runs/${seed.runId}/checkpoints/hero/approve`)
+      .expect(201);
+
+    fixture.setVariant("changed");
+    const diffRun = await runToCompletion(testId);
+    fixture.setVariant("default");
+
+    expect(diffRun.status).toBe("needs_review");
+    const cp = diffRun.checkpoints[0];
+    expect(cp.reviewState).toBe("diff");
+    expect(cp.diffScore).toBeGreaterThan(cp.threshold);
+    expect(cp.diffUrl).toEqual(expect.any(String));
+    expect(cp.baselineUrl).toEqual(expect.any(String));
+  });
+
+  async function decide(runId: string, action: "approve" | "reject") {
+    await request(app.getHttpServer())
+      .post(`/runs/${runId}/checkpoints/hero/${action}`)
+      .expect(201);
+  }
+
+  // TB4a — approving a diff replaces the baseline (the changed render now passes).
+  it("approving a diff replaces the active baseline", async () => {
+    fixture.setVariant("default");
+    const testId = await createTest();
+    await decide((await runToCompletion(testId)).runId, "approve"); // seed → baseline=default
+
+    fixture.setVariant("changed");
+    const diffRun = await runToCompletion(testId);
+    expect(diffRun.checkpoints[0].reviewState).toBe("diff");
+    await decide(diffRun.runId, "approve"); // baseline := changed
+
+    const after = await runToCompletion(testId); // changed vs changed → match
+    expect(after.status).toBe("passed");
+    expect(after.checkpoints[0].reviewState).toBe("passed");
+    fixture.setVariant("default");
+  });
+
+  // TB4b — rejecting a diff leaves the baseline unchanged.
+  it("rejecting a diff leaves the baseline unchanged", async () => {
+    fixture.setVariant("default");
+    const testId = await createTest();
+    await decide((await runToCompletion(testId)).runId, "approve"); // baseline=default
+
+    fixture.setVariant("changed");
+    const diffRun = await runToCompletion(testId);
+    expect(diffRun.checkpoints[0].reviewState).toBe("diff");
+    await decide(diffRun.runId, "reject"); // baseline stays default
+
+    fixture.setVariant("default");
+    const after = await runToCompletion(testId); // default vs default → still matches
+    expect(after.status).toBe("passed");
+    expect(after.checkpoints[0].reviewState).toBe("passed");
+  });
+});

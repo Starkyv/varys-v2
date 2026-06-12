@@ -1,4 +1,13 @@
-import { integer, jsonb, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import {
+  boolean,
+  doublePrecision,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uuid,
+} from "drizzle-orm/pg-core";
 
 export const tests = pgTable("tests", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -16,8 +25,12 @@ export const testVersions = pgTable("test_versions", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
-/** A run status. Issue 1/2 subset: baseline/diff/heal statuses arrive later. */
-export type RunStatus = "queued" | "running" | "passed" | "failed";
+export type RunStatus =
+  | "queued"
+  | "running"
+  | "passed"
+  | "needs_review"
+  | "failed";
 
 export const runs = pgTable("runs", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -29,18 +42,44 @@ export const runs = pgTable("runs", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+/** Per-checkpoint review state. Matches the UI read-model literals. */
+export type ReviewState = "pending-baseline" | "diff" | "passed";
+export type Resolution = "approved" | "rejected";
+
 export const runResults = pgTable("run_results", {
   id: uuid("id").defaultRandom().primaryKey(),
   runId: uuid("run_id")
     .notNull()
     .references(() => runs.id),
   checkpointName: text("checkpoint_name").notNull(),
-  status: text("status").notNull(),
-  artifactKey: text("artifact_key"),
+  reviewState: text("review_state").notNull(),
+  actualArtifactKey: text("actual_artifact_key"),
+  baselineArtifactKey: text("baseline_artifact_key"),
+  diffArtifactKey: text("diff_artifact_key"),
+  diffScore: doublePrecision("diff_score"),
+  threshold: doublePrecision("threshold").notNull(),
+  healed: boolean("healed").notNull().default(false),
+  resolution: text("resolution"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
-export const schema = { tests, testVersions, runs, runResults };
+/** The current active baseline per (test, checkpoint, environment, viewport). */
+export const baselines = pgTable("baselines", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  testId: uuid("test_id")
+    .notNull()
+    .references(() => tests.id),
+  checkpointName: text("checkpoint_name").notNull(),
+  environment: text("environment").notNull().default("default"),
+  viewportKey: text("viewport_key").notNull(),
+  artifactKey: text("artifact_key").notNull(),
+  approvedBy: text("approved_by"),
+  approvedAt: timestamp("approved_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const schema = { tests, testVersions, runs, runResults, baselines };
 
 /**
  * Raw DDL applied at bootstrap and in tests — walking-skeleton stand-in for
@@ -71,8 +110,27 @@ CREATE TABLE IF NOT EXISTS run_results (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   run_id uuid NOT NULL REFERENCES runs(id),
   checkpoint_name text NOT NULL,
-  status text NOT NULL,
-  artifact_key text,
+  review_state text NOT NULL,
+  actual_artifact_key text,
+  baseline_artifact_key text,
+  diff_artifact_key text,
+  diff_score double precision,
+  threshold double precision NOT NULL,
+  healed boolean NOT NULL DEFAULT false,
+  resolution text,
   created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS baselines (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  test_id uuid NOT NULL REFERENCES tests(id),
+  checkpoint_name text NOT NULL,
+  environment text NOT NULL DEFAULT 'default',
+  viewport_key text NOT NULL,
+  artifact_key text NOT NULL,
+  approved_by text,
+  approved_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (test_id, checkpoint_name, environment, viewport_key)
 );
 `;

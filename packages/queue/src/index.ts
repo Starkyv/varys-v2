@@ -19,6 +19,14 @@ export function createBoss(connectionString: string): PgBoss {
 
 /** Start the boss and ensure the run queue exists (both idempotent). */
 export async function startBoss(boss: PgBoss): Promise<void> {
+  // pg-boss is an EventEmitter that surfaces transient/maintenance errors via
+  // 'error'. An unhandled 'error' event makes Node throw and crash the process
+  // (which severs any in-flight request as a "socket hang up"), so this handler
+  // is mandatory, not optional.
+  boss.on("error", (err) => {
+    // eslint-disable-next-line no-console
+    console.error("[pg-boss] error:", err);
+  });
   await boss.start();
   await boss.createQueue(RUN_QUEUE);
 }

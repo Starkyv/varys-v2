@@ -14,4 +14,14 @@ export class RunsController {
   get(@Param("id") id: string) {
     return this.runs.getById(id);
   }
+
+  @Post(":id/checkpoints/:name/approve")
+  approve(@Param("id") id: string, @Param("name") name: string) {
+    return this.runs.approve(id, name);
+  }
+
+  @Post(":id/checkpoints/:name/reject")
+  reject(@Param("id") id: string, @Param("name") name: string) {
+    return this.runs.reject(id, name);
+  }
 }

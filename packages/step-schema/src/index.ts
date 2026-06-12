@@ -18,6 +18,8 @@ export const screenshotStep = z.object({
   type: z.literal("screenshot"),
   name: z.string().min(1),
   selector: z.string().min(1),
+  /** Max mismatched-pixel ratio (0..1) tolerated before a diff is flagged. */
+  threshold: z.number().positive().max(1).optional(),
 });
 
 export const step = z.discriminatedUnion("type", [navigateStep, screenshotStep]);

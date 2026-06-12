@@ -86,26 +86,28 @@ describe("Replay → screenshot → artifact", () => {
       .send({ testId: test.body.id })
       .expect(201);
 
-    let body: { status: string; checkpoints?: Array<{ name: string; status: string; artifactUrl: string }> } = {
-      status: "queued",
-    };
+    let body: {
+      status: string;
+      checkpoints?: Array<{ name: string; reviewState: string; actualUrl: string }>;
+    } = { status: "queued" };
     for (let i = 0; i < 100; i++) {
       const res = await request(app.getHttpServer())
         .get(`/runs/${run.body.runId}`)
         .expect(200);
       body = res.body;
-      if (body.status === "passed" || body.status === "failed") break;
+      if (body.status === "passed" || body.status === "needs_review" || body.status === "failed") break;
       await sleep(200);
     }
 
-    expect(body.status).toBe("passed");
+    // First run seeds a pending baseline; the actual screenshot is still stored + served.
+    expect(body.status).toBe("needs_review");
 
     const checkpoint = body.checkpoints?.[0];
-    expect(checkpoint).toMatchObject({ name: "hero", status: "passed" });
-    expect(checkpoint?.artifactUrl).toEqual(expect.any(String));
+    expect(checkpoint).toMatchObject({ name: "hero", reviewState: "pending-baseline" });
+    expect(checkpoint?.actualUrl).toEqual(expect.any(String));
 
     const img = await request(app.getHttpServer())
-      .get(checkpoint!.artifactUrl)
+      .get(checkpoint!.actualUrl)
       .buffer()
       .parse(binaryParser as never)
       .expect(200)
