@@ -6,12 +6,16 @@ approved baseline per environment.
 
 - Full design: [`DESIGN.md`](./DESIGN.md)
 - MVP spec + issues: [`prd/mvp.md`](./prd/mvp.md), [`issues/mvp.md`](./issues/mvp.md)
+- Visual Review UI slice: [`prd/visual-review-ui.md`](./prd/visual-review-ui.md), [`issues/visual-review-ui.md`](./issues/visual-review-ui.md)
 
 > **Status:** the MVP **backend** (record-format → replay → baseline/diff → approve/reject →
 > fingerprint locators → environments/variables/secrets → waits/masking/determinism) is complete
-> and test-driven, and the **recorder extension** is built. There is **no results UI yet** (that's
-> the next slice, `prd/visual-review-ui.md`), so today you "run" Varys via its **test suites** and
-> the **extension**.
+> and test-driven; the **recorder extension** is built; and the **Visual Review UI** (`apps/web` —
+> a diff viewer with side-by-side ↔ diff-highlight modes, in-browser approve/reject behind an
+> irreversible-confirm gate, and a "needs review" list) is complete and test-driven (MSW component
+> tests + a Playwright browser E2E over the real stack). What's **not** wired yet is a one-command
+> way to run the long-running services as a live app — so today you exercise Varys via its **test
+> suites** (which drive the full stack, UI included) and the recorder **extension**.
 
 ## Prerequisites
 
@@ -36,6 +40,11 @@ pnpm -r typecheck
 
 # The full backend lifecycle (seed → approve → diff → approve-replace / reject → masking → waits → login/secrets)
 pnpm --filter @varys/api test
+
+# The Visual Review UI: component tests at the HTTP boundary (MSW) + a browser E2E
+# (Playwright drives the real built SPA against the real API/worker/Postgres/local-FS)
+pnpm --filter @varys/web test                               # MSW component tests (jsdom)
+pnpm --filter @varys/api exec vitest run test/review-ui.e2e.spec.ts  # browser E2E
 
 # Pure-core unit suites
 pnpm --filter @varys/diff-engine     test   # pixel diff + masking
@@ -77,10 +86,12 @@ Until then, the **test suites above are the way to exercise the full engine.**
 
 ```
 apps/
-  api/         NestJS API — tests, runs, environments, artifacts, approve/reject
+  api/         NestJS API — tests, runs, environments, artifacts, approve/reject, needs-review
   worker/      Playwright replay worker (consumes the pg-boss queue)
   extension/   WXT MV3 recorder extension
+  web/         React SPA — diff viewer (side-by-side / overlay), approve/reject, needs-review list
 packages/
+  review-contract/  shared typed read-model the API and web SPA agree on (pure types)
   step-schema/      versioned test-definition contract (zod)
   capture/          DOM element → multi-signal fingerprint
   recorder/         page interactions → step definition

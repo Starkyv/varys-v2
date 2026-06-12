@@ -141,9 +141,9 @@ describe("Visual review UI (browser E2E)", () => {
     return { runId, status };
   }
 
-  async function createTest(): Promise<string> {
+  async function createTest(name = "review ui test"): Promise<string> {
     const definition = {
-      name: "review ui test",
+      name,
       viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
       steps: [
         { type: "navigate", url: fixture.url },
@@ -257,5 +257,41 @@ describe("Visual review UI (browser E2E)", () => {
     expect(await page.getByRole("dialog").count()).toBe(0);
     expect(await page.getByRole("button", { name: "Approve", exact: true }).count()).toBe(1);
     await page.close();
+  }, 120_000);
+
+  it("the needs-review list shows work, opens it, and drops it once resolved", async () => {
+    // A diff checkpoint...
+    fixture.setVariant("default");
+    const diffTestId = await createTest("queue-diff");
+    await approveSeed(diffTestId); // baseline := default
+    fixture.setVariant("changed");
+    const diffRun = await runToCompletion(diffTestId);
+    expect(diffRun.status).toBe("needs_review");
+    fixture.setVariant("default");
+
+    // ...and a pending-baseline checkpoint (left unapproved).
+    const pendingTestId = await createTest("queue-pending");
+    const pendingRun = await runToCompletion(pendingTestId);
+    expect(pendingRun.status).toBe("needs_review");
+
+    // The list shows both entries.
+    const page = await browser.newPage();
+    await page.goto(webBase);
+    await page.getByRole("link", { name: /queue-diff/i }).waitFor({ state: "visible", timeout: 10_000 });
+    await page.getByRole("link", { name: /queue-pending/i }).waitFor({ state: "visible", timeout: 10_000 });
+
+    // Open the diff entry, approve it through the confirm.
+    await page.getByRole("link", { name: /queue-diff/i }).click();
+    await page.getByRole("button", { name: "Approve", exact: true }).click();
+    await page.getByRole("button", { name: /confirm approve/i }).click();
+    await page.getByText(/already approved/i).waitFor({ state: "visible", timeout: 10_000 });
+
+    // Back on the list, the resolved entry is gone; the pending one remains.
+    await page.getByRole("link", { name: /review queue/i }).click();
+    await page.getByRole("link", { name: /queue-pending/i }).waitFor({ state: "visible", timeout: 10_000 });
+    expect(await page.getByRole("link", { name: /queue-diff/i }).count()).toBe(0);
+
+    await page.close();
+    fixture.setVariant("default");
   }, 120_000);
 });

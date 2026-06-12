@@ -6,14 +6,15 @@
 > *Not published to an issue tracker — none configured; the `ready-for-agent` label could not be
 > applied. Build order = dependency order below.*
 >
-> **Status: 🟡 In progress.** Issue 1 (walking skeleton) is **done and test-driven**; Issues 2–4 remain.
+> **Status: ✅ Complete.** All four issues are done and test-driven (MSW component
+> tests + a Playwright browser E2E over the real stack; ~18 tests green).
 >
 > | Issue | Status |
 > |---|---|
 > | 1 — Walking skeleton: deep-linked diff viewer | ✅ Done |
 > | 2 — Two view modes (side-by-side ↔ overlay) | ✅ Done |
 > | 3 — Approve / Reject + irreversible-confirm gate | ✅ Done |
-> | 4 — "Needs review" list | ⬜ Not started |
+> | 4 — "Needs review" list | ✅ Done |
 >
 > **Dependency shape:** `1 → {2, 3}`, and `{1, 3} → 4`.
 
@@ -130,7 +131,7 @@ The hard-confirm dialog is the **sole guard on the product's only irreversible, 
 
 # Issue 4 — "Needs review" list: the way in
 
-**Type:** AFK
+**Type:** AFK · **Status: ✅ Done**
 
 ## What to build
 
@@ -144,13 +145,13 @@ test × environment dashboard — just a flat list, enough to find work.
 
 ## Acceptance criteria
 
-- [ ] An API read endpoint returns checkpoints in `pending-baseline` or `diff` state with the shared read-model.
-- [ ] The list shows test name, checkpoint name, environment, run time, and the review reason per entry.
-- [ ] Clicking an entry opens that checkpoint in the diff viewer.
-- [ ] Resolving a checkpoint removes it from the list (the list refreshes after a decision).
-- [ ] A clear empty state renders when nothing needs review.
-- [ ] Loading and error states render for the list fetch.
-- [ ] Browser-E2E: seed pending-baseline and diff checkpoints → they appear in the list → open one → resolve it → it drops off; MSW tests cover empty/loading/error states.
+- [x] An API read endpoint returns checkpoints in `pending-baseline` or `diff` state with the shared read-model. *(`GET /runs/needs-review`, declared before the `:id` route; excludes resolved checkpoints)*
+- [x] The list shows test name, checkpoint name, environment, run time, and the review reason per entry.
+- [x] Clicking an entry opens that checkpoint in the diff viewer. *(same-origin `?run=<id>` link)*
+- [x] Resolving a checkpoint removes it from the list (the list refreshes after a decision). *(needs-review query invalidated on decision; a fresh list load excludes it)*
+- [x] A clear empty state renders when nothing needs review.
+- [x] Loading and error states render for the list fetch.
+- [x] Browser-E2E: seed pending-baseline and diff checkpoints → they appear in the list → open one → resolve it → it drops off; MSW tests cover empty/loading/error states.
 
 ## Blocked by
 

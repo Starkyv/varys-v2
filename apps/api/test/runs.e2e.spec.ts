@@ -171,4 +171,58 @@ describe("Runs API", () => {
     const after = await request(app.getHttpServer()).get(`/runs/${runId}`).expect(200);
     expect(after.body.checkpoints[0].resolution).toBe("approved");
   });
+
+  // visual-review-ui Issue 4 TB1 — the needs-review list returns unresolved
+  // checkpoints with the read-model context, and drops them once decided.
+  it("lists checkpoints needing review and excludes resolved ones", async () => {
+    const definition = {
+      name: "needs-review test",
+      viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+      steps: [
+        { type: "navigate", url: fixture.url },
+        { type: "screenshot", name: "hero", target: { tag: "div", attributes: { id: "hero" }, text: "Hero" } },
+      ],
+    };
+    const test = await request(app.getHttpServer())
+      .post("/tests")
+      .send(definition)
+      .expect(201);
+
+    const created = await request(app.getHttpServer())
+      .post("/runs")
+      .send({ testId: test.body.id })
+      .expect(201);
+    const runId = created.body.runId as string;
+    for (let i = 0; i < 100; i++) {
+      const res = await request(app.getHttpServer()).get(`/runs/${runId}`).expect(200);
+      if (["passed", "needs_review", "failed"].includes(res.body.status)) break;
+      await sleep(200);
+    }
+
+    type Item = {
+      runId: string;
+      testName: string;
+      environment: string;
+      runTimestamp: string;
+      checkpointName: string;
+      reviewState: string;
+    };
+    const listed = await request(app.getHttpServer()).get("/runs/needs-review").expect(200);
+    const mine = (listed.body as Item[]).find((i) => i.runId === runId);
+    expect(mine).toBeDefined();
+    expect(mine).toMatchObject({
+      testName: "needs-review test",
+      environment: "default",
+      checkpointName: "hero",
+      reviewState: "pending-baseline",
+    });
+    expect(Number.isNaN(Date.parse(mine?.runTimestamp ?? "x"))).toBe(false);
+
+    // Decide it → it leaves the list.
+    await request(app.getHttpServer())
+      .post(`/runs/${runId}/checkpoints/hero/approve`)
+      .expect(201);
+    const after = await request(app.getHttpServer()).get("/runs/needs-review").expect(200);
+    expect((after.body as Item[]).find((i) => i.runId === runId)).toBeUndefined();
+  });
 });

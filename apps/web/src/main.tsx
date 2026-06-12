@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { DiffViewer } from "./DiffViewer";
+import { NeedsReviewList } from "./NeedsReviewList";
 
 const queryClient = new QueryClient();
 
@@ -20,14 +21,7 @@ export function runIdFromLocation(loc: Location = window.location): string | nul
 
 function App() {
   const runId = runIdFromLocation();
-  if (!runId) {
-    return (
-      <p style={{ fontFamily: "system-ui", padding: 16 }}>
-        Open a run at <code>/?run=&lt;id&gt;</code>.
-      </p>
-    );
-  }
-  return <DiffViewer runId={runId} />;
+  return runId ? <DiffViewer runId={runId} /> : <NeedsReviewList />;
 }
 
 const root = document.getElementById("root");

@@ -9,13 +9,14 @@ import { baselines, environments, runResults, runs, testVersions, tests } from "
 import { type Boss, enqueueRun } from "@varys/queue";
 import type {
   CheckpointView,
+  NeedsReviewItem,
   Resolution,
   ReviewState,
   RunView,
 } from "@varys/review-contract";
 import type { TestDefinition } from "@varys/step-schema";
 import type { StorageAdapter } from "@varys/storage-adapter";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
 import { BOSS } from "../queue/queue.module";
 import { STORAGE } from "../storage/storage.module";
@@ -126,6 +127,55 @@ export class RunsService {
         }),
       ),
     };
+  }
+
+  /** The flat "needs review" list: checkpoints awaiting a decision
+   *  (pending-baseline | diff, not yet resolved), newest run first. */
+  async needsReview(): Promise<NeedsReviewItem[]> {
+    const rows = await this.db
+      .select({
+        runId: runs.id,
+        testName: tests.name,
+        environmentId: runs.environmentId,
+        runTimestamp: runs.createdAt,
+        checkpointName: runResults.checkpointName,
+        reviewState: runResults.reviewState,
+      })
+      .from(runResults)
+      .innerJoin(runs, eq(runs.id, runResults.runId))
+      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
+      .innerJoin(tests, eq(tests.id, testVersions.testId))
+      .where(
+        and(
+          inArray(runResults.reviewState, ["pending-baseline", "diff"]),
+          isNull(runResults.resolution),
+        ),
+      )
+      .orderBy(desc(runs.createdAt));
+
+    // Resolve environment names in one batch ("default" when a run has no env).
+    const envIds = [
+      ...new Set(rows.map((r) => r.environmentId).filter((x): x is string => x != null)),
+    ];
+    const envNames = new Map<string, string>();
+    if (envIds.length) {
+      const envs = await this.db
+        .select({ id: environments.id, name: environments.name })
+        .from(environments)
+        .where(inArray(environments.id, envIds));
+      for (const e of envs) envNames.set(e.id, e.name);
+    }
+
+    return rows.map(
+      (r): NeedsReviewItem => ({
+        runId: r.runId,
+        testName: r.testName,
+        environment: r.environmentId ? (envNames.get(r.environmentId) ?? ENVIRONMENT) : ENVIRONMENT,
+        runTimestamp: r.runTimestamp.toISOString(),
+        checkpointName: r.checkpointName,
+        reviewState: r.reviewState as Exclude<ReviewState, "passed">,
+      }),
+    );
   }
 
   /** Approve a checkpoint: promote a pending seed (or replace an active baseline) and audit it. */

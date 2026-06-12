@@ -35,6 +35,9 @@ export function DiffViewer({ runId }: { runId: string }) {
   return (
     <main className={styles.viewer}>
       <header className={styles.header}>
+        <a className={styles.back} href="/">
+          ← Review queue
+        </a>
         <h1>{data.testName}</h1>
         <p className={styles.meta}>
           {data.environment} · {new Date(data.runTimestamp).toLocaleString()} · {data.status}

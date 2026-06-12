@@ -1,0 +1,71 @@
+.list {
+  font-family: system-ui, Arial, sans-serif;
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.list h1 {
+  font-size: 1.25rem;
+}
+
+.items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.items li {
+  border-top: 1px solid #eee;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1.5fr 1.5fr;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 8px;
+  text-decoration: none;
+  color: inherit;
+}
+
+.row:hover {
+  background: #f6f8fa;
+}
+
+.test {
+  font-weight: 600;
+}
+
+.checkpoint {
+  color: #444;
+}
+
+.env,
+.time {
+  color: #888;
+  font-size: 0.85rem;
+}
+
+.reason {
+  color: #1f6feb;
+  font-size: 0.85rem;
+}
+
+.notice {
+  font-family: system-ui, Arial, sans-serif;
+  color: #555;
+  padding: 16px;
+}
+
+.error {
+  font-family: system-ui, Arial, sans-serif;
+  color: #b00020;
+  padding: 16px;
+}
+
+.empty {
+  font-family: system-ui, Arial, sans-serif;
+  color: #555;
+  padding: 16px;
+}

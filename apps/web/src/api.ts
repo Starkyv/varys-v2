@@ -1,4 +1,4 @@
-import type { RunView } from "@varys/review-contract";
+import type { NeedsReviewItem, RunView } from "@varys/review-contract";
 
 /**
  * Base URL of the NestJS API. Same-origin ("") by default: the SPA and API are
@@ -16,6 +16,15 @@ export async function fetchRunView(runId: string): Promise<RunView> {
     throw new Error(`Failed to load run ${runId} (${res.status})`);
   }
   return (await res.json()) as RunView;
+}
+
+/** Fetch the flat "needs review" list. Throws on a non-2xx response. */
+export async function fetchNeedsReview(): Promise<NeedsReviewItem[]> {
+  const res = await fetch(`${API_BASE}/runs/needs-review`);
+  if (!res.ok) {
+    throw new Error(`Failed to load the review queue (${res.status})`);
+  }
+  return (await res.json()) as NeedsReviewItem[];
 }
 
 export type DecisionAction = "approve" | "reject";

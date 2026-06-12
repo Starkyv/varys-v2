@@ -33,6 +33,21 @@ export interface CheckpointView {
   diffUrl: string | null;
 }
 
+/**
+ * One entry in the "needs review" list — a checkpoint currently awaiting a human
+ * decision (`pending-baseline` or `diff`), with just enough context to triage and
+ * open it. Not the slice-7 dashboard; a flat list, enough to find work.
+ */
+export interface NeedsReviewItem {
+  runId: string;
+  testName: string;
+  environment: string;
+  runTimestamp: string;
+  checkpointName: string;
+  /** Why it needs review: `pending-baseline` (first approval) or `diff`. */
+  reviewState: Exclude<ReviewState, "passed">;
+}
+
 /** A run and its checkpoints, with the identifying context the reviewer needs. */
 export interface RunView {
   runId: string;
