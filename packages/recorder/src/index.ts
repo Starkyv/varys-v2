@@ -1,6 +1,6 @@
 import type { Fingerprint, Rect, Step, TestDefinition, Variable, Viewport } from "@varys/step-schema";
 
-export type CaptureFn = (el: Element) => Fingerprint;
+export type CaptureFn = (el: Element, opts?: { climb?: boolean }) => Fingerprint;
 
 /**
  * The "ambiguous middle" heuristic (DESIGN §2): is a typed value environment-specific
@@ -200,7 +200,8 @@ export function startRecorder(
   const onClick = (e: Event) => {
     if (ignore?.(e)) return;
     const el = e.target as Element | null;
-    if (el) push({ type: "click", target: capture(el) });
+    // Climb to the actionable control — you usually click an inner icon/span, not the button.
+    if (el) push({ type: "click", target: capture(el, { climb: true }) });
   };
 
   const onChange = (e: Event) => {

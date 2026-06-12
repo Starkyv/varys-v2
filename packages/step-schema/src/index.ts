@@ -24,15 +24,35 @@ export const fingerprint = z.object({
   testId: z.string().optional(),
   role: z.string().optional(),
   accessibleName: z.string().optional(),
+  /** True when `accessibleName` came from a stable attribute (aria-label, title, …)
+   *  rather than volatile visible text — a durable-name signal for the matcher. */
+  nameFromAttr: z.boolean().optional(),
   text: z.string().optional(),
   tag: z.string(),
   attributes: z.record(z.string()).optional(),
+  /** Ancestor chain (nearest first). `id`/`testId` let a structural path anchor at
+   *  the nearest *stable* ancestor instead of climbing to <body>. */
   ancestors: z
-    .array(z.object({ tag: z.string(), role: z.string().optional() }))
+    .array(
+      z.object({
+        tag: z.string(),
+        role: z.string().optional(),
+        id: z.string().optional(),
+        testId: z.string().optional(),
+      }),
+    )
     .optional(),
   domIndex: z.number().int().nonnegative().optional(),
   neighborText: z.array(z.string()).optional(),
+  /** Scope to a repeated container — "the element inside the row that says <text>".
+   *  `container` is a row selector (li / tr / [role="row"] / …); `text` is a line of
+   *  the container's visible text verified unique among such containers. */
+  scope: z.object({ container: z.string(), text: z.string() }).optional(),
+  /** All raw classes (weak corroboration only — includes build-hashed ones). */
   moduleClasses: z.array(z.string()).optional(),
+  /** The durable subset: build-hashed (e.g. `Name__x___hash`), purely-numeric, and
+   *  utility-class-soup classes removed. Preferred over `moduleClasses` for matching. */
+  stableClasses: z.array(z.string()).optional(),
   boundingBox: z
     .object({
       x: z.number(),
