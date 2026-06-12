@@ -49,4 +49,63 @@ describe("locator resolve", () => {
     await page.setContent(`<section>Different</section>`);
     expect(await resolve(page, fp)).toBeNull();
   });
+
+  // The briefings-card failure mode: recorded on an older build, so the hashed class
+  // rotated and the text changed — testId/id/role/exact-class/exact-text all miss.
+  // Structure (stable ancestor id) + size resolve it where the old ranked matcher
+  // returned "no fingerprint signal matched".
+  it("resolves a previously-unmatchable container via structure + box size", async () => {
+    await page.setContent(
+      `<div id="board">` +
+        `<div class="Card__NEW___aaa" style="width:200px;height:200px">Alpha</div>` +
+        `<div class="Card__NEW___bbb" style="width:200px;height:80px">Beta</div>` +
+        `</div>`,
+    );
+    const card: Fingerprint = {
+      tag: "div",
+      accessibleName: "stale recorded text",
+      text: "stale recorded text",
+      moduleClasses: ["Card__OLD___xyz"], // rotated — absent on this build
+      ancestors: [{ tag: "div", id: "board" }],
+      domIndex: 1,
+      boundingBox: { x: 0, y: 0, width: 200, height: 80 },
+    };
+    const r = await resolve(page, card);
+    expect(r).not.toBeNull();
+    expect(await r!.locator.getAttribute("class")).toBe("Card__NEW___bbb");
+    expect(r!.healed).toBe(true);
+  });
+
+  it("resolves a repeated control to the correct row via its scope", async () => {
+    await page.setContent(
+      `<ul>` +
+        `<li>Apples <button aria-label="More" class="more">x</button></li>` +
+        `<li>Oranges <button aria-label="More" class="more">x</button></li>` +
+        `</ul>`,
+    );
+    const moreBtn: Fingerprint = {
+      tag: "button",
+      accessibleName: "More",
+      nameFromAttr: true,
+      scope: { container: "li", text: "Apples" },
+      stableClasses: ["more"],
+      boundingBox: { x: 0, y: 0, width: 30, height: 20 },
+    };
+    const r = await resolve(page, moreBtn);
+    expect(r).not.toBeNull();
+    const rowText = await r!.locator.evaluate((el) => el.closest("li")?.textContent ?? "");
+    expect(rowText).toContain("Apples");
+  });
+
+  it("does not resolve on a build-hashed class alone (it's only corroboration)", async () => {
+    await page.setContent(`<div class="X__a___1">content</div>`);
+    const onlyHashed: Fingerprint = { tag: "div", moduleClasses: ["X__a___1"] };
+    expect(await resolve(page, onlyHashed)).toBeNull();
+  });
+
+  it("refuses to guess between indistinguishable candidates", async () => {
+    await page.setContent(`<div>Same</div><div>Same</div>`);
+    const ambiguous: Fingerprint = { tag: "div", accessibleName: "Same", text: "Same" };
+    expect(await resolve(page, ambiguous)).toBeNull();
+  });
 });
