@@ -5,6 +5,8 @@ export type CaptureFn = (el: Element) => Fingerprint;
 export interface RecordedSession {
   checkpoint(el: Element, name: string): void;
   getDefinition(name: string, viewport: Viewport): TestDefinition;
+  /** Number of steps recorded so far (navigate + clicks + types + screenshots). */
+  stepCount(): number;
   stop(): void;
 }
 
@@ -20,6 +22,7 @@ export interface RecordedSession {
 export function startRecorder(
   capture: CaptureFn,
   doc: Document = document,
+  ignore?: (e: Event) => boolean,
 ): RecordedSession {
   const steps: TestDefinition["steps"] = [];
 
@@ -28,11 +31,13 @@ export function startRecorder(
   steps.push({ type: "navigate", url: href.replace(origin, "{{baseUrl}}") });
 
   const onClick = (e: Event) => {
+    if (ignore?.(e)) return;
     const el = e.target as Element | null;
     if (el) steps.push({ type: "click", target: capture(el) });
   };
 
   const onChange = (e: Event) => {
+    if (ignore?.(e)) return;
     const el = e.target as HTMLInputElement | null;
     if (!el) return;
     const isSecret = el.type === "password";
@@ -51,6 +56,9 @@ export function startRecorder(
     },
     getDefinition(name, viewport) {
       return { name, viewport, steps: [...steps] };
+    },
+    stepCount() {
+      return steps.length;
     },
     stop() {
       doc.removeEventListener("click", onClick, true);

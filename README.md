@@ -63,9 +63,13 @@ The schema is applied automatically on API startup. The web dev server proxies A
    Chrome → `chrome://extensions` → enable Developer mode → **Load unpacked** →
    `apps/extension/.output/chrome-mv3`.
 
-2. **Record:** click the toolbar icon → **Start recording** → interact with any page (clicks +
-   typed values are captured; origin → `{{baseUrl}}`, password fields → `{{secret:…}}`) →
-   **Pick checkpoint** (click an element to screenshot) → **Save** (POSTs the test to the API).
+2. **Record:** click the **Varys toolbar icon** — a small panel appears *in the page* and stays put
+   while you work (it's an overlay, not a popup, so clicking the page won't dismiss it). Then:
+   - **Start recording** — now every click and typed value on the page is captured automatically
+     (origin → `{{baseUrl}}`, password fields → `{{secret:…}}`); the panel shows a live action count.
+   - **📷 Capture screenshot** — press it, then click the element you want to snapshot. Do this
+     whenever you want, as many times as you want, in between normal interactions (Esc cancels).
+   - **Save test** — posts the recorded definition to the API; the panel shows the new test id.
 
 3. **Trigger a run** (there's no "run" button in the UI yet — use the API; `<id>` is returned by Save):
 
