@@ -41,6 +41,9 @@ importers:
       '@varys/queue':
         specifier: workspace:*
         version: link:../../packages/queue
+      '@varys/review-contract':
+        specifier: workspace:*
+        version: link:../../packages/review-contract
       '@varys/step-schema':
         specifier: workspace:*
         version: link:../../packages/step-schema
@@ -215,6 +218,8 @@ importers:
       vitest:
         specifier: ^3.0.5
         version: 3.2.6(@types/node@22.19.21)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
+
+  packages/review-contract: {}
 
   packages/runner:
     dependencies:

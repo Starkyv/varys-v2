@@ -91,4 +91,39 @@ describe("Runs API", () => {
     // A first run with no baseline seeds a pending baseline → needs_review.
     expect(status).toBe("needs_review");
   });
+
+  // Visual-review-ui Issue 1 TB1 — the read-model carries the reviewer's identifying context.
+  it("the run read-model carries test name, environment, and run timestamp", async () => {
+    const definition = {
+      name: "read-model test",
+      viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+      steps: [
+        { type: "navigate", url: fixture.url },
+        { type: "screenshot", name: "hero", target: { tag: "div", attributes: { id: "hero" }, text: "Hero" } },
+      ],
+    };
+    const test = await request(app.getHttpServer())
+      .post("/tests")
+      .send(definition)
+      .expect(201);
+
+    const created = await request(app.getHttpServer())
+      .post("/runs")
+      .send({ testId: test.body.id })
+      .expect(201);
+    const runId = created.body.runId as string;
+
+    let body: { status: string; [k: string]: unknown } = { status: "queued" };
+    for (let i = 0; i < 100; i++) {
+      const res = await request(app.getHttpServer()).get(`/runs/${runId}`).expect(200);
+      body = res.body;
+      if (["passed", "needs_review", "failed"].includes(body.status)) break;
+      await sleep(200);
+    }
+
+    expect(body.runId).toBe(runId);
+    expect(body.testName).toBe("read-model test");
+    expect(body.environment).toBe("default");
+    expect(Number.isNaN(Date.parse(body.runTimestamp as string))).toBe(false);
+  });
 });

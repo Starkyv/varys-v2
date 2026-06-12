@@ -5,8 +5,9 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { baselines, runResults, runs, testVersions } from "@varys/db";
+import { baselines, environments, runResults, runs, testVersions, tests } from "@varys/db";
 import { type Boss, enqueueRun } from "@varys/queue";
+import type { CheckpointView, ReviewState, RunView } from "@varys/review-contract";
 import type { TestDefinition } from "@varys/step-schema";
 import type { StorageAdapter } from "@varys/storage-adapter";
 import { and, desc, eq } from "drizzle-orm";
@@ -24,23 +25,8 @@ export interface CreatedRun {
   runId: string;
 }
 
-/** Per-checkpoint review read-model — the contract the review UI consumes. */
-export interface CheckpointView {
-  name: string;
-  reviewState: string;
-  diffScore: number | null;
-  threshold: number;
-  healed: boolean;
-  actualUrl: string | null;
-  baselineUrl: string | null;
-  diffUrl: string | null;
-}
-
-export interface RunView {
-  runId: string;
-  status: string;
-  checkpoints: CheckpointView[];
-}
+// The per-checkpoint review read-model (CheckpointView / RunView) is the shared
+// API↔UI contract — see @varys/review-contract.
 
 @Injectable()
 export class RunsService {
@@ -74,11 +60,29 @@ export class RunsService {
 
   async getById(runId: string): Promise<RunView> {
     const [row] = await this.db
-      .select({ status: runs.status })
+      .select({
+        status: runs.status,
+        createdAt: runs.createdAt,
+        environmentId: runs.environmentId,
+        testName: tests.name,
+      })
       .from(runs)
+      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
+      .innerJoin(tests, eq(tests.id, testVersions.testId))
       .where(eq(runs.id, runId))
       .limit(1);
     if (!row) throw new NotFoundException(`Run ${runId} not found`);
+
+    // Environment name for the reviewer's context; "default" when none was chosen.
+    let environment = ENVIRONMENT;
+    if (row.environmentId) {
+      const [env] = await this.db
+        .select({ name: environments.name })
+        .from(environments)
+        .where(eq(environments.id, row.environmentId))
+        .limit(1);
+      if (env) environment = env.name;
+    }
 
     const results = await this.db
       .select({
@@ -99,16 +103,21 @@ export class RunsService {
     return {
       runId,
       status: row.status,
-      checkpoints: results.map((r) => ({
-        name: r.name,
-        reviewState: r.reviewState,
-        diffScore: r.diffScore,
-        threshold: r.threshold,
-        healed: r.healed,
-        actualUrl: url(r.actualArtifactKey),
-        baselineUrl: url(r.baselineArtifactKey),
-        diffUrl: url(r.diffArtifactKey),
-      })),
+      testName: row.testName,
+      environment,
+      runTimestamp: row.createdAt.toISOString(),
+      checkpoints: results.map(
+        (r): CheckpointView => ({
+          name: r.name,
+          reviewState: r.reviewState as ReviewState,
+          diffScore: r.diffScore,
+          threshold: r.threshold,
+          healed: r.healed,
+          actualUrl: url(r.actualArtifactKey),
+          baselineUrl: url(r.baselineArtifactKey),
+          diffUrl: url(r.diffArtifactKey),
+        }),
+      ),
     };
   }
 

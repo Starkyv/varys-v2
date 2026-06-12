@@ -15,6 +15,7 @@
     "@nestjs/platform-express": "^11.0.6",
     "@varys/db": "workspace:*",
     "@varys/queue": "workspace:*",
+    "@varys/review-contract": "workspace:*",
     "@varys/step-schema": "workspace:*",
     "@varys/storage-adapter": "workspace:*",
     "drizzle-orm": "^0.39.1",
