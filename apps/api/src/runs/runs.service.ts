@@ -7,7 +7,12 @@ import {
 } from "@nestjs/common";
 import { baselines, environments, runResults, runs, testVersions, tests } from "@varys/db";
 import { type Boss, enqueueRun } from "@varys/queue";
-import type { CheckpointView, ReviewState, RunView } from "@varys/review-contract";
+import type {
+  CheckpointView,
+  Resolution,
+  ReviewState,
+  RunView,
+} from "@varys/review-contract";
 import type { TestDefinition } from "@varys/step-schema";
 import type { StorageAdapter } from "@varys/storage-adapter";
 import { and, desc, eq } from "drizzle-orm";
@@ -88,6 +93,7 @@ export class RunsService {
       .select({
         name: runResults.checkpointName,
         reviewState: runResults.reviewState,
+        resolution: runResults.resolution,
         diffScore: runResults.diffScore,
         threshold: runResults.threshold,
         healed: runResults.healed,
@@ -110,6 +116,7 @@ export class RunsService {
         (r): CheckpointView => ({
           name: r.name,
           reviewState: r.reviewState as ReviewState,
+          resolution: r.resolution as Resolution | null,
           diffScore: r.diffScore,
           threshold: r.threshold,
           healed: r.healed,

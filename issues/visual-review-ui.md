@@ -12,7 +12,7 @@
 > |---|---|
 > | 1 — Walking skeleton: deep-linked diff viewer | ✅ Done |
 > | 2 — Two view modes (side-by-side ↔ overlay) | ✅ Done |
-> | 3 — Approve / Reject + irreversible-confirm gate | ⬜ Not started |
+> | 3 — Approve / Reject + irreversible-confirm gate | ✅ Done |
 > | 4 — "Needs review" list | ⬜ Not started |
 >
 > **Dependency shape:** `1 → {2, 3}`, and `{1, 3} → 4`.
@@ -91,7 +91,7 @@ is the one the slice-1 `diff-engine` already produced.
 
 # Issue 3 — Approve / Reject with the irreversible-confirm gate
 
-**Type:** AFK
+**Type:** AFK · **Status: ✅ Done**
 
 ## What to build
 
@@ -113,14 +113,14 @@ The hard-confirm dialog is the **sole guard on the product's only irreversible, 
 
 ## Acceptance criteria
 
-- [ ] Approve cannot be completed without clearing the hard-confirmation dialog; cancel/dismiss changes nothing.
-- [ ] Approving a `pending-baseline` activates the test; approving a `diff` replaces the active baseline with the run's actual.
-- [ ] Reject records a regression, leaves the baseline unchanged, and requires no destructive confirm.
-- [ ] After a successful decision the checkpoint reflects its new state and cannot be acted on again from the same view.
-- [ ] A checkpoint already resolved (e.g. by another reviewer) renders as already-decided instead of offering a stale approve.
-- [ ] A failed approve/reject surfaces an error and leaves the checkpoint reviewable (no silent loss).
-- [ ] Each approve/reject records approver + timestamp via the existing audited API.
-- [ ] Browser-E2E covers approve-with-confirm → baseline activated/replaced, reject → regression + baseline unchanged, and cancel → nothing changed; MSW tests cover the confirm gate, request shapes, and error state.
+- [x] Approve cannot be completed without clearing the hard-confirmation dialog; cancel/dismiss changes nothing.
+- [x] Approving a `pending-baseline` activates the test; approving a `diff` replaces the active baseline with the run's actual.
+- [x] Reject records a regression, leaves the baseline unchanged, and requires no destructive confirm.
+- [x] After a successful decision the checkpoint reflects its new state and cannot be acted on again from the same view. *(on success the run + needs-review queries are invalidated; the re-fetched checkpoint renders as already-decided)*
+- [x] A checkpoint already resolved (e.g. by another reviewer) renders as already-decided instead of offering a stale approve. *(read-model now carries `resolution`)*
+- [x] A failed approve/reject surfaces an error and leaves the checkpoint reviewable (no silent loss).
+- [x] Each approve/reject records approver + timestamp via the existing audited API. *(slice-1 behavior, consumed here)*
+- [x] Browser-E2E covers approve-with-confirm → baseline activated/replaced, reject → regression + baseline unchanged, and cancel → nothing changed; MSW tests cover the confirm gate, request shapes, and error state.
 
 ## Blocked by
 

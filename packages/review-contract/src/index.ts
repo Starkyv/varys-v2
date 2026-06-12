@@ -11,11 +11,16 @@
 /** The two states that need a human decision, plus the resolved `passed`. */
 export type ReviewState = "pending-baseline" | "diff" | "passed";
 
+/** The audited decision a reviewer can take on a checkpoint. */
+export type Resolution = "approved" | "rejected";
+
 /** One checkpoint within a run, as the reviewer sees it. */
 export interface CheckpointView {
   /** Checkpoint (screenshot) name within the test. */
   name: string;
   reviewState: ReviewState;
+  /** The recorded decision, or null while the checkpoint still needs review. */
+  resolution: Resolution | null;
   /** Pixel-diff score the server computed; null on a first seed (nothing to diff). */
   diffScore: number | null;
   /** The per-checkpoint threshold the diff was judged against. */

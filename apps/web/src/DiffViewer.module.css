@@ -94,3 +94,57 @@
 .error {
   color: #b00020;
 }
+
+.decision {
+  margin-top: 16px;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+.approve,
+.reject {
+  border: 0;
+  border-radius: 6px;
+  padding: 8px 16px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.approve {
+  background: #1a7f37;
+  color: #fff;
+}
+
+.reject {
+  background: #fff;
+  color: #b00020;
+  border: 1px solid #b00020;
+}
+
+.approve:disabled,
+.reject:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.decided {
+  margin-top: 16px;
+  color: #555;
+  font-weight: 600;
+}
+
+.dialog {
+  margin-top: 12px;
+  border: 1px solid #b00020;
+  border-radius: 8px;
+  padding: 16px;
+  background: #fff6f6;
+  max-width: 480px;
+}
+
+.dialog p {
+  margin: 0 0 12px;
+}

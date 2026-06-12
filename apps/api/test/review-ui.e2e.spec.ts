@@ -193,4 +193,69 @@ describe("Visual review UI (browser E2E)", () => {
 
     await page.close();
   }, 120_000);
+
+  async function approveSeed(testId: string): Promise<void> {
+    const seed = await runToCompletion(testId);
+    await request(app.getHttpServer())
+      .post(`/runs/${seed.runId}/checkpoints/hero/approve`)
+      .expect(201);
+  }
+
+  async function seedThenDiff(): Promise<{ testId: string; diffRunId: string }> {
+    fixture.setVariant("default");
+    const testId = await createTest();
+    await approveSeed(testId); // baseline := default
+    fixture.setVariant("changed");
+    const diff = await runToCompletion(testId);
+    expect(diff.status).toBe("needs_review");
+    return { testId, diffRunId: diff.runId };
+  }
+
+  it("approve through the hard-confirm replaces the baseline", async () => {
+    const { testId, diffRunId } = await seedThenDiff();
+
+    const page = await browser.newPage();
+    await page.goto(`${webBase}/?run=${diffRunId}`);
+    await page.getByRole("button", { name: "Approve", exact: true }).click();
+    await page.getByRole("button", { name: /confirm approve/i }).click();
+    // The decision is reflected in the UI (run query invalidated → re-fetched).
+    await page.getByText(/already approved/i).waitFor({ state: "visible", timeout: 10_000 });
+    await page.close();
+
+    // Baseline was replaced with the changed capture: re-running changed now passes.
+    const after = await runToCompletion(testId);
+    fixture.setVariant("default");
+    expect(after.status).toBe("passed");
+  }, 120_000);
+
+  it("reject records a regression and leaves the baseline unchanged", async () => {
+    const { testId, diffRunId } = await seedThenDiff();
+
+    const page = await browser.newPage();
+    await page.goto(`${webBase}/?run=${diffRunId}`);
+    await page.getByRole("button", { name: "Reject", exact: true }).click();
+    await page.getByText(/already rejected/i).waitFor({ state: "visible", timeout: 10_000 });
+    await page.close();
+
+    // Baseline is still the default: re-running default passes.
+    fixture.setVariant("default");
+    const after = await runToCompletion(testId);
+    expect(after.status).toBe("passed");
+  }, 120_000);
+
+  it("cancelling the confirm dialog changes nothing", async () => {
+    const { diffRunId } = await seedThenDiff();
+    fixture.setVariant("default");
+
+    const page = await browser.newPage();
+    await page.goto(`${webBase}/?run=${diffRunId}`);
+    await page.getByRole("button", { name: "Approve", exact: true }).click();
+    await page.getByRole("dialog").waitFor({ state: "visible", timeout: 10_000 });
+    await page.getByRole("button", { name: /cancel/i }).click();
+
+    // Dialog dismissed, nothing sent, checkpoint still reviewable.
+    expect(await page.getByRole("dialog").count()).toBe(0);
+    expect(await page.getByRole("button", { name: "Approve", exact: true }).count()).toBe(1);
+    await page.close();
+  }, 120_000);
 });

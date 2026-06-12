@@ -126,4 +126,49 @@ describe("Runs API", () => {
     expect(body.environment).toBe("default");
     expect(Number.isNaN(Date.parse(body.runTimestamp as string))).toBe(false);
   });
+
+  // visual-review-ui Issue 3 TB1 — the read-model reports a checkpoint's audited
+  // decision, so the review UI can show "already decided" instead of a stale approve.
+  it("reports a checkpoint's resolution after a decision", async () => {
+    const definition = {
+      name: "resolution test",
+      viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+      steps: [
+        { type: "navigate", url: fixture.url },
+        { type: "screenshot", name: "hero", target: { tag: "div", attributes: { id: "hero" }, text: "Hero" } },
+      ],
+    };
+    const test = await request(app.getHttpServer())
+      .post("/tests")
+      .send(definition)
+      .expect(201);
+
+    const created = await request(app.getHttpServer())
+      .post("/runs")
+      .send({ testId: test.body.id })
+      .expect(201);
+    const runId = created.body.runId as string;
+
+    let body: { status: string; checkpoints: { resolution: string | null }[] } = {
+      status: "queued",
+      checkpoints: [],
+    };
+    for (let i = 0; i < 100; i++) {
+      const res = await request(app.getHttpServer()).get(`/runs/${runId}`).expect(200);
+      body = res.body;
+      if (["passed", "needs_review", "failed"].includes(body.status)) break;
+      await sleep(200);
+    }
+
+    // Undecided checkpoints report a null resolution...
+    expect(body.checkpoints[0].resolution).toBeNull();
+
+    await request(app.getHttpServer())
+      .post(`/runs/${runId}/checkpoints/hero/approve`)
+      .expect(201);
+
+    // ...and the recorded decision afterwards.
+    const after = await request(app.getHttpServer()).get(`/runs/${runId}`).expect(200);
+    expect(after.body.checkpoints[0].resolution).toBe("approved");
+  });
 });

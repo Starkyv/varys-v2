@@ -1,5 +1,5 @@
 import type { RunView } from "@varys/review-contract";
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
@@ -23,6 +23,7 @@ const diffRun: RunView = {
     {
       name: "hero",
       reviewState: "diff",
+      resolution: null,
       diffScore: 0.12,
       threshold: 0.01,
       healed: false,
@@ -43,6 +44,7 @@ const seedRun: RunView = {
     {
       name: "hero",
       reviewState: "pending-baseline",
+      resolution: null,
       diffScore: null,
       threshold: 0.01,
       healed: false,
@@ -127,5 +129,83 @@ describe("DiffViewer", () => {
     expect(screen.queryByRole("img", { name: "diff highlight" })).toBeNull();
     // No overlay control — there is no diff to switch to.
     expect(screen.queryByRole("button", { name: /diff highlight/i })).toBeNull();
+  });
+
+  it("gates Approve behind a hard-confirm; cancel is a true no-op", async () => {
+    let approveCalls = 0;
+    server.use(
+      http.get(`${API_BASE}/runs/run-1`, () => HttpResponse.json(diffRun)),
+      http.post(`${API_BASE}/runs/run-1/checkpoints/hero/approve`, () => {
+        approveCalls++;
+        return new HttpResponse(null, { status: 201 });
+      }),
+    );
+
+    renderWithClient(<DiffViewer runId="run-1" />);
+    await userEvent.click(await screen.findByRole("button", { name: /approve/i }));
+
+    // The dialog names the irreversible consequence; nothing has been sent yet.
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveTextContent(/no undo/i);
+    expect(approveCalls).toBe(0);
+
+    // Cancel closes the dialog and sends nothing.
+    await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(approveCalls).toBe(0);
+
+    // Re-open and confirm: now the approve is sent.
+    await userEvent.click(screen.getByRole("button", { name: /approve/i }));
+    await userEvent.click(screen.getByRole("button", { name: /confirm approve/i }));
+    await waitFor(() => expect(approveCalls).toBe(1));
+  });
+
+  it("rejects without any destructive confirm", async () => {
+    let rejectCalls = 0;
+    server.use(
+      http.get(`${API_BASE}/runs/run-1`, () => HttpResponse.json(diffRun)),
+      http.post(`${API_BASE}/runs/run-1/checkpoints/hero/reject`, () => {
+        rejectCalls++;
+        return new HttpResponse(null, { status: 201 });
+      }),
+    );
+
+    renderWithClient(<DiffViewer runId="run-1" />);
+    await userEvent.click(await screen.findByRole("button", { name: /reject/i }));
+
+    // No dialog stands in the way — the friction matches the (non-destructive) risk.
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await waitFor(() => expect(rejectCalls).toBe(1));
+  });
+
+  it("renders an already-decided checkpoint without action buttons", async () => {
+    const decidedRun: RunView = {
+      ...diffRun,
+      checkpoints: [{ ...diffRun.checkpoints[0], resolution: "approved" }],
+    };
+    server.use(http.get(`${API_BASE}/runs/run-1`, () => HttpResponse.json(decidedRun)));
+
+    renderWithClient(<DiffViewer runId="run-1" />);
+
+    expect(await screen.findByText(/already approved/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /approve/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /reject/i })).toBeNull();
+  });
+
+  it("surfaces a failed decision and leaves the checkpoint reviewable", async () => {
+    server.use(
+      http.get(`${API_BASE}/runs/run-1`, () => HttpResponse.json(diffRun)),
+      http.post(`${API_BASE}/runs/run-1/checkpoints/hero/approve`, () =>
+        new HttpResponse(null, { status: 500 }),
+      ),
+    );
+
+    renderWithClient(<DiffViewer runId="run-1" />);
+    await userEvent.click(await screen.findByRole("button", { name: /approve/i }));
+    await userEvent.click(screen.getByRole("button", { name: /confirm approve/i }));
+
+    // The error is surfaced and the approve control is still there to retry.
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /approve/i })).toBeInTheDocument();
   });
 });

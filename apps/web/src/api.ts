@@ -17,3 +17,21 @@ export async function fetchRunView(runId: string): Promise<RunView> {
   }
   return (await res.json()) as RunView;
 }
+
+export type DecisionAction = "approve" | "reject";
+
+/** Record a reviewer's decision via the existing audited API. Throws on failure
+ *  so the caller can surface an error and leave the checkpoint reviewable. */
+export async function postDecision(
+  runId: string,
+  checkpointName: string,
+  action: DecisionAction,
+): Promise<void> {
+  const res = await fetch(
+    `${API_BASE}/runs/${runId}/checkpoints/${encodeURIComponent(checkpointName)}/${action}`,
+    { method: "POST" },
+  );
+  if (!res.ok) {
+    throw new Error(`Failed to ${action} “${checkpointName}” (${res.status})`);
+  }
+}
