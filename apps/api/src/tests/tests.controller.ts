@@ -1,9 +1,10 @@
-import { Body, Controller, Get, Param, Post } from "@nestjs/common";
+import { Body, Controller, Get, Inject, Param, Post } from "@nestjs/common";
 import { TestsService } from "./tests.service";
 
 @Controller("tests")
 export class TestsController {
-  constructor(private readonly tests: TestsService) {}
+  // Explicit token so DI works without emitted decorator metadata.
+  constructor(@Inject(TestsService) private readonly tests: TestsService) {}
 
   @Post()
   create(@Body() body: unknown) {

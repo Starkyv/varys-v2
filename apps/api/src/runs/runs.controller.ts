@@ -1,9 +1,11 @@
-import { Body, Controller, Get, Param, Post } from "@nestjs/common";
+import { Body, Controller, Get, Inject, Param, Post } from "@nestjs/common";
 import { RunsService } from "./runs.service";
 
 @Controller("runs")
 export class RunsController {
-  constructor(private readonly runs: RunsService) {}
+  // Explicit token so DI works without emitted decorator metadata (the dev
+  // runner, tsx/esbuild, doesn't emit design:paramtypes).
+  constructor(@Inject(RunsService) private readonly runs: RunsService) {}
 
   @Post()
   create(@Body() body: { testId: string; environmentId?: string }) {

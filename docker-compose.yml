@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: varys-postgres
+    environment:
+      POSTGRES_USER: varys
+      POSTGRES_PASSWORD: varys
+      POSTGRES_DB: varys
+    # Host 5433 (not 5432) to avoid clashing with a local Postgres install.
+    ports:
+      - "5433:5432"
+    volumes:
+      - varys-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U varys -d varys"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  varys-pgdata:

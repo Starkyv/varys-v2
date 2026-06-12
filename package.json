@@ -4,6 +4,9 @@
   "packageManager": "pnpm@10.14.0",
   "engines": { "node": ">=22" },
   "scripts": {
+    "db:up": "docker compose up -d --wait",
+    "db:down": "docker compose down",
+    "dev": "turbo run dev --filter=@varys/api --filter=@varys/worker --filter=@varys/web",
     "test": "turbo run test",
     "build": "turbo run build",
     "typecheck": "turbo run typecheck"

@@ -2,7 +2,7 @@
  * Popup UI: drives the content-script recorder and saves the result to the API.
  * API base is configurable later (storage/options); a constant for now.
  */
-const API_BASE = "http://localhost:3000";
+const API_BASE = "http://localhost:4000";
 
 function setStatus(message: string): void {
   const el = document.getElementById("status");

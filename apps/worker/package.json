@@ -4,6 +4,7 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
+    "dev": "DATABASE_URL=${DATABASE_URL:-postgres://varys:varys@localhost:5433/varys} VARYS_STORAGE_DIR=${VARYS_STORAGE_DIR:-../../.varys-artifacts} tsx watch src/main.ts",
     "start": "node dist/main.js",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"
@@ -13,5 +14,8 @@
     "@varys/queue": "workspace:*",
     "@varys/runner": "workspace:*",
     "@varys/storage-adapter": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2"
   }
 }

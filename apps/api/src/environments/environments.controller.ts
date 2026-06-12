@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post } from "@nestjs/common";
+import { Body, Controller, Get, Inject, Param, Post } from "@nestjs/common";
 import {
   type CreateEnvironmentInput,
   EnvironmentsService,
@@ -6,7 +6,10 @@ import {
 
 @Controller("environments")
 export class EnvironmentsController {
-  constructor(private readonly environments: EnvironmentsService) {}
+  // Explicit token so DI works without emitted decorator metadata.
+  constructor(
+    @Inject(EnvironmentsService) private readonly environments: EnvironmentsService,
+  ) {}
 
   @Post()
   create(@Body() body: CreateEnvironmentInput) {

@@ -9,6 +9,9 @@ test-results/
 playwright-report/
 *.tsbuildinfo
 
+# Local dev artifact storage (shared by the API + worker)
+.varys-artifacts/
+
 # WXT extension build output
 .wxt/
 .output/
