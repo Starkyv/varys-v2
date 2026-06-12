@@ -79,7 +79,24 @@ export const baselines = pgTable("baselines", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
-export const schema = { tests, testVersions, runs, runResults, baselines };
+/** An environment to run against. Secret values are plaintext for the MVP
+ *  (local/single-tenant) but must never be returned by the API. */
+export const environments = pgTable("environments", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull(),
+  values: jsonb("values").notNull().default({}),
+  secrets: jsonb("secrets").notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const schema = {
+  tests,
+  testVersions,
+  runs,
+  runResults,
+  baselines,
+  environments,
+};
 
 /**
  * Raw DDL applied at bootstrap and in tests — walking-skeleton stand-in for
@@ -132,5 +149,12 @@ CREATE TABLE IF NOT EXISTS baselines (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (test_id, checkpoint_name, environment, viewport_key)
+);
+CREATE TABLE IF NOT EXISTS environments (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL,
+  values jsonb NOT NULL DEFAULT '{}'::jsonb,
+  secrets jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
 );
 `;
