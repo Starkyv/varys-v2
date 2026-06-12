@@ -1,7 +1,9 @@
 import type {
+  EnvironmentView,
   NeedsReviewItem,
   PersistResult,
   ReEvaluation,
+  RunSummary,
   RunView,
   TestSummary,
   TuningInput,
@@ -34,6 +36,15 @@ export async function fetchNeedsReview(): Promise<NeedsReviewItem[]> {
   return (await res.json()) as NeedsReviewItem[];
 }
 
+/** Fetch the Runs history (every run, newest first). Throws on a non-2xx response. */
+export async function fetchRuns(): Promise<RunSummary[]> {
+  const res = await fetch(`${API_BASE}/runs`);
+  if (!res.ok) {
+    throw new Error(`Failed to load runs (${res.status})`);
+  }
+  return (await res.json()) as RunSummary[];
+}
+
 /** Fetch the saved tests (recordings). Throws on a non-2xx response. */
 export async function fetchTests(): Promise<TestSummary[]> {
   const res = await fetch(`${API_BASE}/tests`);
@@ -43,12 +54,78 @@ export async function fetchTests(): Promise<TestSummary[]> {
   return (await res.json()) as TestSummary[];
 }
 
-/** Trigger a run of a saved test. Returns the new run id. */
-export async function runTest(testId: string): Promise<{ runId: string }> {
+/** Fetch all environments (secrets are names-only). Throws on a non-2xx response. */
+export async function fetchEnvironments(): Promise<EnvironmentView[]> {
+  const res = await fetch(`${API_BASE}/environments`);
+  if (!res.ok) {
+    throw new Error(`Failed to load environments (${res.status})`);
+  }
+  return (await res.json()) as EnvironmentView[];
+}
+
+export interface CreateEnvironmentBody {
+  name: string;
+  values?: Record<string, string>;
+  secrets?: Record<string, string>;
+}
+
+/** Create an environment. Returns the new id. Throws on a non-2xx response. */
+export async function createEnvironment(body: CreateEnvironmentBody): Promise<{ id: string }> {
+  const res = await fetch(`${API_BASE}/environments`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to create environment (${res.status})`);
+  }
+  return (await res.json()) as { id: string };
+}
+
+/** Update body: `values` REPLACES the whole map; secrets are a write-only delta
+ *  (`secrets` sets, `removeSecrets` clears). Omitted fields are left untouched. */
+export interface UpdateEnvironmentBody {
+  name?: string;
+  values?: Record<string, string>;
+  secrets?: Record<string, string>;
+  removeSecrets?: string[];
+}
+
+/** Update an environment. Returns the redacted view (secret names only). Throws on
+ *  a non-2xx response. */
+export async function updateEnvironment(
+  id: string,
+  body: UpdateEnvironmentBody,
+): Promise<EnvironmentView> {
+  const res = await fetch(`${API_BASE}/environments/${id}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to update environment (${res.status})`);
+  }
+  return (await res.json()) as EnvironmentView;
+}
+
+/** Delete an environment. Throws on a non-2xx response. */
+export async function deleteEnvironment(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/environments/${id}`, { method: "DELETE" });
+  if (!res.ok) {
+    throw new Error(`Failed to delete environment (${res.status})`);
+  }
+}
+
+/** Trigger a run of a saved test, optionally against an environment. Returns the new
+ *  run id. The worker resolves the recording's `{{tokens}}` against that environment. */
+export async function runTest(
+  testId: string,
+  environmentId?: string,
+): Promise<{ runId: string }> {
   const res = await fetch(`${API_BASE}/runs`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ testId }),
+    body: JSON.stringify(environmentId ? { testId, environmentId } : { testId }),
   });
   if (!res.ok) {
     throw new Error(`Failed to start run (${res.status})`);

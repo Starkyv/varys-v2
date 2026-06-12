@@ -8,14 +8,18 @@ import { API_BASE } from "./api";
 import { TestsList } from "./TestsList";
 import { renderWithClient } from "./test/render";
 
-const server = setupServer();
+// Default the environments fetch (TestsList loads it for the Run picker) so the
+// onUnhandledRequest:"error" guard doesn't trip; individual tests can override.
+const server = setupServer(
+  http.get(`${API_BASE}/environments`, () => HttpResponse.json([])),
+);
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
 afterEach(() => server.resetHandlers());
 afterAll(() => server.close());
 
 const tests: TestSummary[] = [
-  { id: "t-1", name: "Checkout page", createdAt: "2026-06-12T10:00:00.000Z" },
-  { id: "t-2", name: "Login page", createdAt: "2026-06-12T09:00:00.000Z" },
+  { id: "t-1", name: "Checkout page", createdAt: "2026-06-12T10:00:00.000Z", needsEnvironment: false },
+  { id: "t-2", name: "Login page", createdAt: "2026-06-12T09:00:00.000Z", needsEnvironment: false },
 ];
 
 describe("TestsList", () => {

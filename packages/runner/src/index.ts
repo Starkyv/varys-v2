@@ -8,11 +8,11 @@ import {
 } from "@varys/db";
 import { diffPng } from "@varys/diff-engine";
 import { resolve } from "@varys/locator-engine";
-import type { Fingerprint, TestDefinition, Wait } from "@varys/step-schema";
+import { describeStep, type Fingerprint, type TestDefinition, type Wait } from "@varys/step-schema";
 import type { StorageAdapter } from "@varys/storage-adapter";
-import { type EnvironmentProfile, resolveDefinition } from "@varys/variable-resolver";
+import { type EnvironmentProfile, resolveStep } from "@varys/variable-resolver";
 import { and, eq } from "drizzle-orm";
-import { chromium, type Locator, type Page } from "playwright";
+import { type Browser, chromium, type Locator, type Page } from "playwright";
 
 export interface ReplayDeps {
   db: Db;
@@ -76,44 +76,58 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
   const { testId } = row;
   const recorded = row.definition as TestDefinition;
 
-  // Resolve {{baseUrl}}/{{var}}/{{secret}} against the run's environment (if any).
-  // Secrets live only in this transient resolved definition — never persisted.
-  let environment = "default";
-  let definition = recorded;
-  if (row.environmentId) {
-    const [env] = await db
-      .select({
-        name: environments.name,
-        values: environments.values,
-        secrets: environments.secrets,
-      })
-      .from(environments)
-      .where(eq(environments.id, row.environmentId))
-      .limit(1);
-    if (!env) throw new Error(`Environment ${row.environmentId} not found`);
-    const profile: EnvironmentProfile = {
-      values: (env.values ?? {}) as Record<string, string>,
-      secrets: (env.secrets ?? {}) as Record<string, string>,
-    };
-    definition = resolveDefinition(recorded, profile);
-    environment = env.name;
-  }
-  const vpKey = viewportKey(definition.viewport);
-
-  const browser = await chromium.launch();
   const reviewStates: string[] = [];
+  // Which step is currently executing — read by the catch so the failure names it.
+  // Null before the loop / after it completes (so pre- and post-loop errors aren't
+  // misattributed to a step).
+  let failedStepIndex: number | null = null;
+  let failedStepLabel = "";
+  let browser: Browser | undefined;
   try {
+    // Load the run's environment profile (if any). Resolution happens PER STEP in the
+    // loop below — so an unresolved token (e.g. "{{baseUrl}}") is attributed to the
+    // exact step that uses it. Secrets live only in the transient resolved step and are
+    // never persisted.
+    let environment = "default";
+    let profile: EnvironmentProfile | null = null;
+    if (row.environmentId) {
+      const [env] = await db
+        .select({
+          name: environments.name,
+          values: environments.values,
+          secrets: environments.secrets,
+        })
+        .from(environments)
+        .where(eq(environments.id, row.environmentId))
+        .limit(1);
+      if (!env) throw new Error(`Environment ${row.environmentId} not found`);
+      profile = {
+        values: (env.values ?? {}) as Record<string, string>,
+        secrets: (env.secrets ?? {}) as Record<string, string>,
+      };
+      environment = env.name;
+    }
+    const vpKey = viewportKey(recorded.viewport);
+
+    browser = await chromium.launch();
     const context = await browser.newContext({
       viewport: {
-        width: definition.viewport.width,
-        height: definition.viewport.height,
+        width: recorded.viewport.width,
+        height: recorded.viewport.height,
       },
-      deviceScaleFactor: definition.viewport.deviceScaleFactor,
+      deviceScaleFactor: recorded.viewport.deviceScaleFactor,
       reducedMotion: "reduce",
     });
     const page = await context.newPage();
 
-    for (const step of definition.steps) {
+    for (let i = 0; i < recorded.steps.length; i++) {
+      const raw = recorded.steps[i];
+      // Optimistically blame this step; the catch reads these if anything throws
+      // (resolution OR execution). Cleared after the loop.
+      failedStepIndex = i;
+      failedStepLabel = describeStep(raw);
+      // Resolve this step's tokens now — an unresolved {{token}} fails THIS step.
+      const step = profile ? resolveStep(raw, profile) : raw;
       if (step.type === "navigate") {
         await page.goto(step.url, { waitUntil: "networkidle" });
         continue;
@@ -122,6 +136,11 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
       await applyWaits(page, step.waitBefore);
 
       if (step.type === "click" || step.type === "type") {
+        // A prior click may have triggered a navigation (e.g. an OAuth login redirect)
+        // that is still in flight — the recorder no longer emits explicit navigate steps
+        // for redirects, so settle the document before resolving the target, or the
+        // fingerprint would miss against a half-loaded page. Cheap when already loaded.
+        await page.waitForLoadState("domcontentloaded").catch(() => undefined);
         const target = await resolve(page, step.target);
         if (!target) throw new Error(`could not locate ${step.type} target`);
         if (step.type === "type") {
@@ -223,6 +242,9 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
         }
       }
     }
+    // Every step ran — a later error (close / status write) is not a step failure.
+    failedStepIndex = null;
+    failedStepLabel = "";
 
     await context.close();
     const status = reviewStates.some((s) => s !== "passed")
@@ -233,15 +255,21 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
       .set({ status, updatedAt: new Date() })
       .where(eq(runs.id, runId));
   } catch (err) {
-    // Persist why it failed so the viewer can show it (a failed run captures no
-    // checkpoints, so the error message is all the reviewer has to go on).
-    const message = (err instanceof Error ? err.message : String(err)).slice(0, 2000);
+    // Persist why it failed so the viewer can show it. A failed run captures no
+    // checkpoints, so this message + the failed step index are all the reviewer has —
+    // prefix the step ("Step 2/5 — click "Submit": …") when a step was running.
+    const base = err instanceof Error ? err.message : String(err);
+    const message = (
+      failedStepIndex != null
+        ? `Step ${failedStepIndex + 1}/${recorded.steps.length} — ${failedStepLabel}: ${base}`
+        : base
+    ).slice(0, 2000);
     await db
       .update(runs)
-      .set({ status: "failed", error: message, updatedAt: new Date() })
+      .set({ status: "failed", error: message, failedStepIndex, updatedAt: new Date() })
       .where(eq(runs.id, runId));
     throw err;
   } finally {
-    await browser.close();
+    await browser?.close();
   }
 }

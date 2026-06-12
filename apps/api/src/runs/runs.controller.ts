@@ -13,6 +13,12 @@ export class RunsController {
     return this.runs.create(body.testId, body.environmentId);
   }
 
+  // The Runs history — every run, newest first (all outcomes).
+  @Get()
+  list() {
+    return this.runs.listRuns();
+  }
+
   // Declared before the `:id` param route so it isn't matched as a run id.
   @Get("needs-review")
   needsReview() {

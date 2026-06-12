@@ -1,4 +1,4 @@
-import type { CaptureMode, CheckpointView, Rect } from "@varys/review-contract";
+import type { CaptureMode, CheckpointView, Rect, StepLabel } from "@varys/review-contract";
 import { useRef, useState } from "react";
 import {
   useApproveAll,
@@ -62,7 +62,7 @@ export function DiffViewer({ runId }: { runId: string }) {
         </p>
       </header>
       {data.status === "failed" ? (
-        <RunFailure error={data.error} />
+        <RunFailure error={data.error} steps={data.steps} failedStepIndex={data.failedStepIndex} />
       ) : data.checkpoints.length === 0 ? (
         <p role="status" className={styles.notice}>
           {data.status === "queued" || data.status === "running"
@@ -145,19 +145,61 @@ function RunApproveAll({ runId, count }: { runId: string; count: number }) {
 }
 
 /**
- * A failed run errored during replay before it could capture or diff anything —
- * so there is no diff to show. Surface *why* it failed (the persisted replay
- * error) rather than rendering blank.
+ * A failed run errored during replay before it could capture or diff anything — so
+ * there is no diff to show. Instead of a lone message, surface the run's whole step
+ * sequence with the failing step marked (and the error inline against it), so the
+ * reviewer sees exactly where it broke and which steps never ran. Falls back to the
+ * bare message when the failure happened before any step (e.g. env resolution).
  */
-function RunFailure({ error }: { error: string | null }) {
+function RunFailure({
+  error,
+  steps,
+  failedStepIndex,
+}: {
+  error: string | null;
+  steps: StepLabel[];
+  failedStepIndex: number | null;
+}) {
+  const hasSequence = failedStepIndex != null && steps.length > 0;
+
   return (
     <section className={styles.failure} aria-label="Run failed">
-      <h2>This run failed before any checkpoint was captured</h2>
-      <p>
-        The replay errored out, so there are no screenshots to compare and no diff to review. The
-        recorded error was:
-      </p>
-      <pre className={styles.failureMessage}>{error ?? "No error message was recorded."}</pre>
+      <h2>
+        {hasSequence
+          ? `This run failed at step ${failedStepIndex + 1} of ${steps.length}`
+          : "This run failed before any checkpoint was captured"}
+      </h2>
+
+      {failedStepIndex != null && steps.length > 0 ? (
+        <ol className={styles.stepList}>
+          {steps.map((s) => {
+            const state =
+              s.index < failedStepIndex
+                ? "ran"
+                : s.index === failedStepIndex
+                  ? "failed"
+                  : "notrun";
+            return (
+              <li key={s.index} className={`${styles.step} ${styles[`step_${state}`]}`}>
+                <span className={styles.stepMark} aria-hidden>
+                  {state === "ran" ? "✓" : state === "failed" ? "✗" : "•"}
+                </span>
+                <span className={styles.stepNum}>{s.index + 1}</span>
+                <span className={styles.stepLabel}>{s.label}</span>
+                {state === "notrun" && <span className={styles.stepNote}>didn’t run</span>}
+                {state === "failed" && (
+                  <pre className={styles.stepError}>{error ?? "No error message was recorded."}</pre>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      ) : (
+        <>
+          <p>The replay errored before running any step. The recorded error was:</p>
+          <pre className={styles.failureMessage}>{error ?? "No error message was recorded."}</pre>
+        </>
+      )}
     </section>
   );
 }

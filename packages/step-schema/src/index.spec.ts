@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseTestDefinition } from "./index";
+import { describeStep, parseTestDefinition, type Step } from "./index";
 
 const base = {
   name: "t",
@@ -73,5 +73,67 @@ describe("screenshot captureMode", () => {
         ],
       }),
     ).toThrow();
+  });
+});
+
+describe("declared variables", () => {
+  const steps = [
+    { type: "navigate", url: "{{baseUrl}}/" },
+    { type: "screenshot", name: "hero", target: { tag: "div" } },
+  ];
+
+  it("parses a definition carrying declared variables", () => {
+    const def = parseTestDefinition({
+      ...base,
+      steps,
+      variables: [
+        { name: "baseUrl", kind: "url" },
+        { name: "dataset", kind: "data" },
+        { name: "password", kind: "secret" },
+      ],
+    });
+    expect(def.variables).toEqual([
+      { name: "baseUrl", kind: "url" },
+      { name: "dataset", kind: "data" },
+      { name: "password", kind: "secret" },
+    ]);
+  });
+
+  it("is optional — a definition with no variables still parses (back-compat)", () => {
+    const def = parseTestDefinition({ ...base, steps });
+    expect(def.variables).toBeUndefined();
+  });
+
+  it("rejects a variable with an unknown kind", () => {
+    expect(() =>
+      parseTestDefinition({
+        ...base,
+        steps,
+        variables: [{ name: "dataset", kind: "nope" }],
+      }),
+    ).toThrow();
+  });
+});
+
+describe("describeStep", () => {
+  it("labels each step type for failed-run reporting", () => {
+    const cases: [Step, string][] = [
+      [{ type: "navigate", url: "{{baseUrl}}/" }, 'navigate to "{{baseUrl}}/"'],
+      [{ type: "click", target: { tag: "button", text: "Submit" } }, 'click "Submit"'],
+      [{ type: "type", target: { tag: "input", attributes: { id: "search" } }, value: "x" }, "type into #search"],
+      [
+        { type: "screenshot", name: "hero", captureMode: "element", target: { tag: "div" } },
+        'checkpoint "hero" (element)',
+      ],
+    ];
+    for (const [step, label] of cases) {
+      expect(describeStep(step)).toBe(label);
+    }
+  });
+
+  it("prefers a testid over text in the label", () => {
+    expect(describeStep({ type: "click", target: { tag: "button", testId: "go", text: "Go" } })).toBe(
+      'click [data-testid="go"]',
+    );
   });
 });

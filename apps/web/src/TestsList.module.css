@@ -28,6 +28,38 @@
   flex: 1;
 }
 
+.envBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+  font-size: 0.9rem;
+}
+
+.envSelect {
+  font: inherit;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.envHint {
+  color: #b00020;
+  font-size: 0.85rem;
+  text-decoration: none;
+}
+
+.badge {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #9a6700;
+  background: #fff8c5;
+  border: 1px solid #eac54f;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
 .time {
   color: #888;
   font-size: 0.85rem;

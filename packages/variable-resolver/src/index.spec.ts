@@ -18,8 +18,14 @@ describe("resolveString", () => {
     expect(resolveString("{{secret:password}}", profile)).toBe("s3cr3t");
   });
 
-  it("throws on an unresolved token", () => {
-    expect(() => resolveString("{{missing}}", profile)).toThrow();
+  it("throws a legible error naming an unresolved value variable", () => {
+    expect(() => resolveString("{{missing}}", profile)).toThrow("unresolved variable: missing");
+  });
+
+  it("throws a legible error naming an unresolved secret", () => {
+    expect(() => resolveString("{{secret:missing}}", profile)).toThrow(
+      "unresolved secret: missing",
+    );
   });
 });
 
@@ -39,5 +45,36 @@ describe("resolveDefinition", () => {
       type: "navigate",
       url: "https://demo.example.com/dashboard",
     });
+  });
+
+  it("resolves a {{variable}} bound into a target fingerprint's visible text", () => {
+    const def = {
+      name: "t",
+      viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+      steps: [
+        { type: "navigate", url: "{{baseUrl}}/" },
+        // A selector-guard "bind" puts the token in the fingerprint's text.
+        { type: "screenshot", name: "hero", target: { tag: "h1", text: "{{username}}" } },
+      ],
+    } as unknown as TestDefinition;
+
+    const resolved = resolveDefinition(def, profile);
+    const shot = resolved.steps[1] as { target: { text: string } };
+    expect(shot.target.text).toBe("alice");
+  });
+
+  it("leaves token-free fingerprint text unchanged", () => {
+    const def = {
+      name: "t",
+      viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+      steps: [
+        { type: "navigate", url: "{{baseUrl}}/" },
+        { type: "screenshot", name: "hero", target: { tag: "div", text: "Hero" } },
+      ],
+    } as unknown as TestDefinition;
+
+    const resolved = resolveDefinition(def, profile);
+    const shot = resolved.steps[1] as { target: { text: string } };
+    expect(shot.target.text).toBe("Hero");
   });
 });

@@ -1,3 +1,4 @@
+import { variablesFromSteps } from "@varys/recorder";
 import type { Step, TestDefinition, Viewport } from "@varys/step-schema";
 
 /**
@@ -48,7 +49,16 @@ async function save(): Promise<{ ok: boolean; status?: number; id?: string; erro
   if (!s.steps.length || !s.viewport) {
     return { ok: false, error: "nothing recorded yet" };
   }
-  const definition: TestDefinition = { name: s.name, viewport: s.viewport, steps: s.steps };
+  // Declare the recording's variables (derived from its {{tokens}}) so the API and
+  // the env editor know what it needs. The background store keeps only steps, so this
+  // is where the declared list is attached.
+  const variables = variablesFromSteps(s.steps);
+  const definition: TestDefinition = {
+    name: s.name,
+    viewport: s.viewport,
+    steps: s.steps,
+    ...(variables.length ? { variables } : {}),
+  };
   try {
     const res = await fetch(`${API_BASE}/tests`, {
       method: "POST",
@@ -83,13 +93,44 @@ export default defineBackground(() => {
           result: { ok: true },
         }));
       case "varys:step":
-        // Drop late steps from a page whose recording was already stopped.
-        return withState((s) => ({
-          next: s.recording ? { ...s, steps: [...s.steps, msg.step as Step] } : undefined,
-          result: { ok: s.recording },
-        }));
+        return withState((s) => {
+          // Drop late steps from a page whose recording was already stopped.
+          if (!s.recording) return { result: { ok: false } };
+          const step = msg.step as Step;
+          // Only the entry navigate (step #0) is meaningful. Every later full-page load
+          // is the effect of a recorded click or a server redirect — most painfully an
+          // OAuth/Keycloak login dance, whose landing URL carries a single-use code/state/
+          // nonce. Replaying the click reproduces the navigation with FRESH params; force-
+          // navigating to the captured (now-expired) URL only hangs. So drop non-initial
+          // navigates — a fresh content script records one on every page load (navigation
+          // survival), and all but the first are redirect/click effects.
+          if (step.type === "navigate" && s.steps.length > 0) {
+            return { result: { ok: true } };
+          }
+          return { next: { ...s, steps: [...s.steps, step] }, result: { ok: true } };
+        });
+      case "varys:replace-last-type":
+        // One-tap Variable/Static flip: rewrite the most recent `type` step with the
+        // corrected (tokenized or literal) version the content script rebuilt.
+        return withState((s) => {
+          if (!s.recording) return { result: { ok: false } };
+          const steps = [...s.steps];
+          for (let i = steps.length - 1; i >= 0; i--) {
+            if (steps[i].type === "type") {
+              steps[i] = msg.step as Step;
+              return { next: { ...s, steps }, result: { ok: true } };
+            }
+          }
+          return { result: { ok: false } };
+        });
       case "varys:stop":
         return withState((s) => ({ next: { ...s, recording: false }, result: { ok: true } }));
+      case "varys:clear":
+        // Discard the whole recording (steps + viewport) and stop — a fresh start.
+        return withState(() => ({
+          next: { recording: false, steps: [], viewport: null, name: "recorded" },
+          result: { ok: true },
+        }));
       case "varys:state":
         return withState((s) => ({
           result: {

@@ -29,6 +29,9 @@ interface Checkpoint {
 }
 interface RunView {
   status: string;
+  error?: string | null;
+  failedStepIndex?: number | null;
+  steps?: { index: number; label: string }[];
   checkpoints: Checkpoint[];
 }
 
@@ -264,6 +267,12 @@ describe("Baseline lifecycle", () => {
 
     const run = await runToCompletion(test.body.id);
     expect(run.status).toBe("failed");
+    // The failure is attributed to the screenshot step (index 1, navigate is 0), and
+    // the message names that step + carries the run's full step sequence for the viewer.
+    expect(run.failedStepIndex).toBe(1);
+    expect(run.error).toContain("Step 2/2");
+    expect(run.error).toContain('checkpoint "ghost"');
+    expect(run.steps).toHaveLength(2);
   });
 
   // Issue 4 TB3 — run against an environment: resolve {{baseUrl}}/{{secret}}, log in, never leak.
@@ -308,6 +317,88 @@ describe("Baseline lifecycle", () => {
       .get(`/tests/${test.body.id}`)
       .expect(200);
     expect(JSON.stringify(testGet.body)).not.toContain("s3cr3t");
+  });
+
+  // Slice 2 — per-environment baselines seed + approve INDEPENDENTLY, and approve
+  // seeds under the run's OWN environment (the approve-env fix), not a hardcoded
+  // "default". Both envs point {{baseUrl}} at the same fixture, so they render
+  // identically — the only thing keeping their baselines apart is the env name.
+  it("seeds and approves baselines per environment (the approve-env fix)", async () => {
+    fixture.setVariant("default");
+
+    const mkEnv = (name: string) =>
+      request(app.getHttpServer())
+        .post("/environments")
+        .send({ name, values: { baseUrl: fixture.url } })
+        .expect(201)
+        .then((r) => r.body.id as string);
+    const envA = await mkEnv("dev");
+    const envB = await mkEnv("demo");
+
+    const definition = {
+      name: "per-env baseline",
+      viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+      steps: [
+        { type: "navigate", url: "{{baseUrl}}" },
+        { type: "screenshot", name: "hero", target: { tag: "div", attributes: { id: "hero" }, text: "Hero" } },
+      ],
+    };
+    const test = await request(app.getHttpServer()).post("/tests").send(definition).expect(201);
+    const testId = test.body.id as string;
+    const approveHero = (runId: string) =>
+      request(app.getHttpServer()).post(`/runs/${runId}/checkpoints/hero/approve`).expect(201);
+
+    // Seed + approve against env A ("dev").
+    const seedA = await runToCompletion(testId, envA);
+    expect(seedA.checkpoints[0]).toMatchObject({ name: "hero", reviewState: "pending-baseline" });
+    await approveHero(seedA.runId);
+
+    // Approve-env fix: re-running against A passes — proving the baseline was seeded
+    // under "dev" (before the fix it landed under "default", so A would re-seed).
+    const rerunA = await runToCompletion(testId, envA);
+    expect(rerunA.status).toBe("passed");
+    expect(rerunA.checkpoints[0].reviewState).toBe("passed");
+
+    // Independence: the first run against B ("demo") seeds its OWN pending baseline —
+    // it does not match A's, even though the render is identical.
+    const seedB = await runToCompletion(testId, envB);
+    expect(seedB.checkpoints[0].reviewState).toBe("pending-baseline");
+    await approveHero(seedB.runId);
+
+    // Approving B leaves A untouched: A still passes against its own baseline.
+    const rerunA2 = await runToCompletion(testId, envA);
+    expect(rerunA2.checkpoints[0].reviewState).toBe("passed");
+  });
+
+  // Slice 3 — an unresolved token (the environment is missing a value the test
+  // uses) fails the run LEGIBLY: runs.error names the variable, surfaced in the
+  // viewer, instead of a raw Playwright "navigating to {{baseUrl}}/" error.
+  it("fails legibly when the environment is missing a variable the test uses", async () => {
+    fixture.setVariant("default");
+    // An environment with NO baseUrl, so {{baseUrl}} cannot resolve.
+    const env = await request(app.getHttpServer())
+      .post("/environments")
+      .send({ name: "empty", values: {} })
+      .expect(201);
+
+    const definition = {
+      name: "needs baseUrl",
+      viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+      steps: [
+        { type: "navigate", url: "{{baseUrl}}/" },
+        { type: "screenshot", name: "hero", target: { tag: "div", attributes: { id: "hero" }, text: "Hero" } },
+      ],
+      variables: [{ name: "baseUrl", kind: "url" }],
+    };
+    const test = await request(app.getHttpServer()).post("/tests").send(definition).expect(201);
+
+    const run = await runToCompletion(test.body.id, env.body.id);
+    expect(run.status).toBe("failed");
+    expect(run.error).toContain("unresolved variable: baseUrl");
+    // Per-step resolution attributes the unresolved token to the navigate step (0),
+    // so the message names it ("Step 1/2 — navigate to …").
+    expect(run.failedStepIndex).toBe(0);
+    expect(run.error).toContain("Step 1/2");
   });
 
   // Issue 5 TB1 — a fully-masked checkpoint never diffs, even when it changes.

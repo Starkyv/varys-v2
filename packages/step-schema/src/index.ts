@@ -112,11 +112,27 @@ export const viewport = z.object({
   deviceScaleFactor: z.number().positive().default(1),
 });
 
+/**
+ * A variable the test references via a `{{token}}`. Declared once per token so the
+ * environment editor and the resolver both know what the test needs (DESIGN §3):
+ *  - `url`    — the navigation origin → `{{baseUrl}}`
+ *  - `data`   — an environment-specific typed value → `{{name}}`
+ *  - `secret` — a credential → `{{secret:name}}` (resolved only inside the worker)
+ */
+export const variable = z.object({
+  name: z.string().min(1),
+  kind: z.enum(["url", "data", "secret"]),
+});
+export type Variable = z.infer<typeof variable>;
+
 export const testDefinition = z
   .object({
     name: z.string().min(1),
     viewport,
     steps: z.array(step).min(1),
+    /** The test's declared variables. Optional for back-compat — old definitions
+     *  (recorded before this slice) carry none. */
+    variables: z.array(variable).optional(),
   })
   // Per-mode requirements: element ⇒ target, region ⇒ rect, fullpage ⇒ neither.
   // (Refined here rather than on screenshotStep so it stays a discriminated-union
@@ -150,4 +166,32 @@ export type TestDefinition = z.infer<typeof testDefinition>;
 /** Parse + validate an unknown value as a TestDefinition (throws ZodError on failure). */
 export function parseTestDefinition(input: unknown): TestDefinition {
   return testDefinition.parse(input);
+}
+
+/** A short, human-readable handle for an element fingerprint (for step labels). */
+function fingerprintLabel(fp: Fingerprint): string {
+  if (fp.testId) return `[data-testid="${fp.testId}"]`;
+  if (fp.accessibleName) return `"${fp.accessibleName}"`;
+  if (fp.text) return `"${fp.text}"`;
+  if (fp.attributes?.id) return `#${fp.attributes.id}`;
+  if (fp.role) return `<${fp.role}>`;
+  return `<${fp.tag}>`;
+}
+
+/**
+ * A short human label for a step — used in failed-run reporting so a reviewer can see
+ * *which* step failed (e.g. `click "Submit"`, `navigate to "{{baseUrl}}/"`). Labels the
+ * recorded (tokenized) form, matching what the stored definition holds.
+ */
+export function describeStep(step: Step): string {
+  switch (step.type) {
+    case "navigate":
+      return `navigate to "${step.url}"`;
+    case "click":
+      return `click ${fingerprintLabel(step.target)}`;
+    case "type":
+      return `type into ${fingerprintLabel(step.target)}`;
+    case "screenshot":
+      return `checkpoint "${step.name}" (${step.captureMode ?? "element"})`;
+  }
 }

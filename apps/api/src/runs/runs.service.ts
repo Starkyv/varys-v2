@@ -17,10 +17,12 @@ import type {
   Rect,
   Resolution,
   ReviewState,
+  RunSummary,
   RunView,
+  StepLabel,
   TuningInput,
 } from "@varys/review-contract";
-import type { TestDefinition } from "@varys/step-schema";
+import { describeStep, type TestDefinition } from "@varys/step-schema";
 import type { StorageAdapter } from "@varys/storage-adapter";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
@@ -77,6 +79,7 @@ export class RunsService {
         createdAt: runs.createdAt,
         environmentId: runs.environmentId,
         error: runs.error,
+        failedStepIndex: runs.failedStepIndex,
         testId: testVersions.testId,
         testName: tests.name,
         definition: testVersions.definition,
@@ -104,15 +107,7 @@ export class RunsService {
     }
 
     // Environment name for the reviewer's context; "default" when none was chosen.
-    let environment = ENVIRONMENT;
-    if (row.environmentId) {
-      const [env] = await this.db
-        .select({ name: environments.name })
-        .from(environments)
-        .where(eq(environments.id, row.environmentId))
-        .limit(1);
-      if (env) environment = env.name;
-    }
+    const environment = await this.environmentName(row.environmentId);
 
     const results = await this.db
       .select({
@@ -131,6 +126,16 @@ export class RunsService {
 
     const url = (key: string | null) => (key ? this.storage.getUrl(key) : null);
 
+    // For a failed run there are no checkpoints — instead give the viewer the run's
+    // step sequence (labels) so it can show which step failed and which never ran.
+    const steps: StepLabel[] =
+      row.status === "failed"
+        ? (row.definition as TestDefinition).steps.map((s, index) => ({
+            index,
+            label: describeStep(s),
+          }))
+        : [];
+
     return {
       runId,
       status: row.status,
@@ -138,6 +143,8 @@ export class RunsService {
       environment,
       runTimestamp: row.createdAt.toISOString(),
       error: row.error,
+      steps,
+      failedStepIndex: row.failedStepIndex ?? null,
       checkpoints: results.map(
         (r): CheckpointView => ({
           name: r.name,
@@ -166,6 +173,64 @@ export class RunsService {
       .limit(1);
     if (!row) throw new NotFoundException(`No versions for test ${testId}`);
     return row.definition as TestDefinition;
+  }
+
+  /**
+   * The run's environment NAME — the key baselines are stored and looked up under.
+   * "default" when the run had no environment, or its environment was deleted (a
+   * dangling id degrades gracefully). Mirrors the runner's own resolution so approve
+   * seeds/replaces under the very environment the run executed against.
+   */
+  private async environmentName(environmentId: string | null): Promise<string> {
+    if (!environmentId) return ENVIRONMENT;
+    const [env] = await this.db
+      .select({ name: environments.name })
+      .from(environments)
+      .where(eq(environments.id, environmentId))
+      .limit(1);
+    return env?.name ?? ENVIRONMENT;
+  }
+
+  /** Every run, newest first — the Runs history (all outcomes, incl. passed/failed). */
+  async listRuns(limit = 100): Promise<RunSummary[]> {
+    const rows = await this.db
+      .select({
+        runId: runs.id,
+        status: runs.status,
+        environmentId: runs.environmentId,
+        error: runs.error,
+        createdAt: runs.createdAt,
+        testName: tests.name,
+      })
+      .from(runs)
+      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
+      .innerJoin(tests, eq(tests.id, testVersions.testId))
+      .orderBy(desc(runs.createdAt))
+      .limit(limit);
+
+    // Resolve environment names in one batch ("default" when a run has no env).
+    const envIds = [
+      ...new Set(rows.map((r) => r.environmentId).filter((x): x is string => x != null)),
+    ];
+    const envNames = new Map<string, string>();
+    if (envIds.length) {
+      const envs = await this.db
+        .select({ id: environments.id, name: environments.name })
+        .from(environments)
+        .where(inArray(environments.id, envIds));
+      for (const e of envs) envNames.set(e.id, e.name);
+    }
+
+    return rows.map(
+      (r): RunSummary => ({
+        runId: r.runId,
+        testName: r.testName,
+        environment: r.environmentId ? (envNames.get(r.environmentId) ?? ENVIRONMENT) : ENVIRONMENT,
+        status: r.status,
+        runTimestamp: r.createdAt.toISOString(),
+        error: r.error,
+      }),
+    );
   }
 
   /** The flat "needs review" list: checkpoints awaiting a decision
@@ -239,13 +304,21 @@ export class RunsService {
     }
 
     const [ctx] = await this.db
-      .select({ testId: testVersions.testId, definition: testVersions.definition })
+      .select({
+        testId: testVersions.testId,
+        definition: testVersions.definition,
+        environmentId: runs.environmentId,
+      })
       .from(runs)
       .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
       .where(eq(runs.id, runId))
       .limit(1);
     if (!ctx) throw new NotFoundException(`Run ${runId} not found`);
     const vpKey = viewportKey((ctx.definition as TestDefinition).viewport);
+    // Seed/replace under the run's OWN environment, not a hardcoded "default" — else
+    // the next run against that environment never finds the baseline. (Slice 2 fix.)
+    // reEvaluate/persistMasks touch no baselines, so they're unaffected by env.
+    const environment = await this.environmentName(ctx.environmentId);
 
     if (result.reviewState === "pending-baseline") {
       if (!result.actualArtifactKey) {
@@ -254,7 +327,7 @@ export class RunsService {
       await this.db.insert(baselines).values({
         testId: ctx.testId,
         checkpointName,
-        environment: ENVIRONMENT,
+        environment,
         viewportKey: vpKey,
         artifactKey: result.actualArtifactKey,
         approvedBy: "system",
@@ -268,7 +341,7 @@ export class RunsService {
           and(
             eq(baselines.testId, ctx.testId),
             eq(baselines.checkpointName, checkpointName),
-            eq(baselines.environment, ENVIRONMENT),
+            eq(baselines.environment, environment),
             eq(baselines.viewportKey, vpKey),
           ),
         )

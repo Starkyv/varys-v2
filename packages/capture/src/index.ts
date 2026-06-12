@@ -6,6 +6,17 @@ import type { Fingerprint } from "@varys/step-schema";
  * references at runtime — so it can be serialized and injected into a page.
  */
 export function captureFingerprint(el: Element): Fingerprint {
+  // SVG icons (and their inner <path>/<g>/<use>) are almost never the intended click
+  // target — the actionable control is a wrapping button/anchor. Climb to it so the
+  // fingerprint carries stable identity (role/id/label) instead of SVG internals (a
+  // generated id="Capa_1" or the <metadata> MIME string), which don't locate anything.
+  if (el.namespaceURI === "http://www.w3.org/2000/svg") {
+    const actionable = el.closest(
+      'a, button, [role="button"], [role="link"], [role="menuitem"], [role="tab"], input, label, [onclick], [tabindex]',
+    );
+    if (actionable) el = actionable;
+  }
+
   const STABLE_ATTRS = [
     "id",
     "name",
@@ -42,7 +53,15 @@ export function captureFingerprint(el: Element): Fingerprint {
     .split(/\s+/)
     .filter(Boolean);
 
-  const text = el.textContent?.trim() || undefined;
+  // Prefer rendered text (innerText) over textContent: it excludes non-rendered content
+  // — an inline SVG's <metadata>/<dc:format> ("image/svg+xml"), <script>/<style>, and
+  // hidden nodes — that would otherwise poison the text signal and the matcher. Then cap
+  // it: textContent of a container is the whole subtree's text (tens of KB, double-stored
+  // via accessibleName below), whereas a real label is short.
+  const TEXT_MAX = 200;
+  const rendered = el instanceof HTMLElement ? el.innerText : el.textContent;
+  const rawText = rendered?.trim() || undefined;
+  const text = rawText && rawText.length > TEXT_MAX ? rawText.slice(0, TEXT_MAX) : rawText;
   const rect = el.getBoundingClientRect();
 
   return {

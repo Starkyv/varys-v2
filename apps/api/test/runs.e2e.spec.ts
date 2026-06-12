@@ -567,4 +567,54 @@ describe("Runs API", () => {
     const after = await request(app.getHttpServer()).get("/runs/needs-review").expect(200);
     expect((after.body as Item[]).find((i) => i.runId === runId)).toBeUndefined();
   });
+
+  // The Runs history lists every run (all outcomes) with its identifying context —
+  // unlike needs-review, it keeps a run after it's resolved / passed / failed.
+  it("lists runs in the history regardless of outcome", async () => {
+    const definition = {
+      name: "history test",
+      viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+      steps: [
+        { type: "navigate", url: fixture.url },
+        { type: "screenshot", name: "hero", target: { tag: "div", attributes: { id: "hero" }, text: "Hero" } },
+      ],
+    };
+    const test = await request(app.getHttpServer()).post("/tests").send(definition).expect(201);
+    const created = await request(app.getHttpServer())
+      .post("/runs")
+      .send({ testId: test.body.id })
+      .expect(201);
+    const runId = created.body.runId as string;
+
+    // Wait for it to reach a terminal status.
+    for (let i = 0; i < 100; i++) {
+      const res = await request(app.getHttpServer()).get(`/runs/${runId}`).expect(200);
+      if (["passed", "needs_review", "failed"].includes(res.body.status)) break;
+      await sleep(200);
+    }
+
+    type Row = {
+      runId: string;
+      testName: string;
+      environment: string;
+      status: string;
+      runTimestamp: string;
+      error: string | null;
+    };
+    const listed = await request(app.getHttpServer()).get("/runs").expect(200);
+    const mine = (listed.body as Row[]).find((r) => r.runId === runId);
+    expect(mine).toMatchObject({
+      testName: "history test",
+      environment: "default",
+      status: "needs_review",
+    });
+    expect(Number.isNaN(Date.parse(mine?.runTimestamp ?? "x"))).toBe(false);
+
+    // Resolving it does NOT remove it from the history (unlike needs-review).
+    await request(app.getHttpServer())
+      .post(`/runs/${runId}/checkpoints/hero/approve`)
+      .expect(201);
+    const after = await request(app.getHttpServer()).get("/runs").expect(200);
+    expect((after.body as Row[]).find((r) => r.runId === runId)).toBeDefined();
+  });
 });

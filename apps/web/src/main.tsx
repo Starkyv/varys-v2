@@ -2,7 +2,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { DiffViewer } from "./DiffViewer";
+import { EnvironmentsList } from "./EnvironmentsList";
 import { NeedsReviewList } from "./NeedsReviewList";
+import { RunsList } from "./RunsList";
 import { TestsList } from "./TestsList";
 
 const queryClient = new QueryClient();
@@ -20,7 +22,9 @@ export function runIdFromLocation(loc: Location = window.location): string | nul
   return m ? m[1] : null;
 }
 
-function Nav({ active }: { active: "review" | "tests" }) {
+type Tab = "review" | "runs" | "tests" | "environments";
+
+function Nav({ active }: { active: Tab }) {
   const link = (on: boolean) => ({
     textDecoration: "none",
     fontWeight: on ? 700 : 400,
@@ -41,8 +45,14 @@ function Nav({ active }: { active: "review" | "tests" }) {
       <a href="/" style={link(active === "review")}>
         Needs review
       </a>
+      <a href="?view=runs" style={link(active === "runs")}>
+        Runs
+      </a>
       <a href="?view=tests" style={link(active === "tests")}>
         Tests
+      </a>
+      <a href="?view=environments" style={link(active === "environments")}>
+        Environments
       </a>
     </nav>
   );
@@ -52,12 +62,27 @@ function App() {
   const runId = runIdFromLocation();
   if (runId) return <DiffViewer runId={runId} />;
 
-  const tab =
-    new URLSearchParams(window.location.search).get("view") === "tests" ? "tests" : "review";
+  const view = new URLSearchParams(window.location.search).get("view");
+  const tab: Tab =
+    view === "tests"
+      ? "tests"
+      : view === "environments"
+        ? "environments"
+        : view === "runs"
+          ? "runs"
+          : "review";
   return (
     <>
       <Nav active={tab} />
-      {tab === "tests" ? <TestsList /> : <NeedsReviewList />}
+      {tab === "tests" ? (
+        <TestsList />
+      ) : tab === "environments" ? (
+        <EnvironmentsList />
+      ) : tab === "runs" ? (
+        <RunsList />
+      ) : (
+        <NeedsReviewList />
+      )}
     </>
   );
 }

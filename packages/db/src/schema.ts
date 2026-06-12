@@ -44,6 +44,8 @@ export const runs = pgTable("runs", {
   status: text("status").notNull().default("queued"),
   /** Why a `failed` run failed (the replay error) — null otherwise. */
   error: text("error"),
+  /** 0-based index of the step that failed (null when it failed before any step). */
+  failedStepIndex: integer("failed_step_index"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -136,6 +138,7 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 -- Bring an existing runs table (created before the error column) up to date.
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS error text;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS failed_step_index integer;
 CREATE TABLE IF NOT EXISTS run_results (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   run_id uuid NOT NULL REFERENCES runs(id),

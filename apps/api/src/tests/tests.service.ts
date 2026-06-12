@@ -1,9 +1,19 @@
 import { Inject, Injectable, NotFoundException } from "@nestjs/common";
 import type { TestSummary } from "@varys/review-contract";
 import { parseTestDefinition, type TestDefinition } from "@varys/step-schema";
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
 import { tests, testVersions } from "../db/schema";
+
+/**
+ * Does a recording need an environment to run? True when it declares variables, or
+ * (for recordings made before declared variables) its definition still carries an
+ * unresolved `{{token}}` anywhere. The Run UI uses this to require an environment.
+ */
+function needsEnvironment(definition: TestDefinition): boolean {
+  if (definition.variables && definition.variables.length > 0) return true;
+  return JSON.stringify(definition).includes("{{");
+}
 
 export interface CreatedTest {
   id: string;
@@ -33,16 +43,28 @@ export class TestsService {
     return { id: created.id, version: 1 };
   }
 
-  /** All saved tests (recordings), newest first. */
+  /** All saved tests (recordings), newest first — each tagged with whether it needs
+   *  an environment to run (from its latest version's definition). */
   async list(): Promise<TestSummary[]> {
+    // One row per test = its latest version (max version), via a correlated subquery.
     const rows = await this.db
-      .select({ id: tests.id, name: tests.name, createdAt: tests.createdAt })
+      .select({
+        id: tests.id,
+        name: tests.name,
+        createdAt: tests.createdAt,
+        definition: testVersions.definition,
+      })
       .from(tests)
+      .innerJoin(testVersions, eq(testVersions.testId, tests.id))
+      .where(
+        sql`${testVersions.version} = (select max(v.version) from test_versions v where v.test_id = ${tests.id})`,
+      )
       .orderBy(desc(tests.createdAt));
     return rows.map((r) => ({
       id: r.id,
       name: r.name,
       createdAt: r.createdAt.toISOString(),
+      needsEnvironment: needsEnvironment(r.definition as TestDefinition),
     }));
   }
 

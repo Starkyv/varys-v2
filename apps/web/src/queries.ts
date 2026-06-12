@@ -2,14 +2,21 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { TuningInput } from "@varys/review-contract";
 import {
   approveAllInRun,
+  type CreateEnvironmentBody,
+  createEnvironment,
   type DecisionAction,
+  deleteEnvironment,
+  fetchEnvironments,
   fetchNeedsReview,
+  fetchRuns,
   fetchRunView,
   fetchTests,
   persistCheckpointMasks,
   postDecision,
   reEvaluateCheckpoint,
   runTest,
+  type UpdateEnvironmentBody,
+  updateEnvironment,
 } from "./api";
 
 /** TanStack Query owns the run read-model; the key is reused for invalidation
@@ -22,6 +29,17 @@ export function runQueryKey(runId: string) {
  *  resolved checkpoint leaves the list. */
 export function needsReviewQueryKey() {
   return ["needs-review"] as const;
+}
+
+/** Key for the Runs history; invalidated when a run is triggered so it appears. */
+export function runsQueryKey() {
+  return ["runs"] as const;
+}
+
+/** The Runs history (every run). Polled so a run's status updates as the worker
+ *  progresses (queued → running → terminal) without a manual refresh. */
+export function useRuns() {
+  return useQuery({ queryKey: runsQueryKey(), queryFn: fetchRuns, refetchInterval: 3000 });
 }
 
 export function useRunView(runId: string) {
@@ -48,13 +66,53 @@ export function useTests() {
   return useQuery({ queryKey: testsQueryKey(), queryFn: fetchTests });
 }
 
-/** Trigger a run of a saved test, then refresh the needs-review queue. */
+export function environmentsQueryKey() {
+  return ["environments"] as const;
+}
+
+/** The environments list — drives the management screen and the Run picker. */
+export function useEnvironments() {
+  return useQuery({ queryKey: environmentsQueryKey(), queryFn: fetchEnvironments });
+}
+
+/** Create an environment, then refresh the list. */
+export function useCreateEnvironment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CreateEnvironmentBody) => createEnvironment(body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: environmentsQueryKey() }),
+  });
+}
+
+/** Update an environment (rename / replace values / set+clear secrets), then refresh. */
+export function useUpdateEnvironment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { id: string; body: UpdateEnvironmentBody }) =>
+      updateEnvironment(vars.id, vars.body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: environmentsQueryKey() }),
+  });
+}
+
+/** Delete an environment, then refresh the list. */
+export function useDeleteEnvironment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => deleteEnvironment(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: environmentsQueryKey() }),
+  });
+}
+
+/** Trigger a run of a saved test (optionally against an environment), then refresh
+ *  the needs-review queue. */
 export function useRunTest() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (testId: string) => runTest(testId),
+    mutationFn: (vars: { testId: string; environmentId?: string }) =>
+      runTest(vars.testId, vars.environmentId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: needsReviewQueryKey() });
+      qc.invalidateQueries({ queryKey: runsQueryKey() });
     },
   });
 }

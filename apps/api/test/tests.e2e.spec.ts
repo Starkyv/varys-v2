@@ -1,6 +1,7 @@
 import "reflect-metadata";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
+import { parseTestDefinition } from "@varys/step-schema";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
@@ -50,7 +51,10 @@ describe("Tests API", () => {
       .expect(200);
 
     expect(fetched.body.version).toBe(1);
-    expect(fetched.body.definition).toEqual(definition);
+    // Stored definition is the PARSED form — the schema normalizes it (e.g. injects
+    // the `captureMode: "element"` default), so compare against that canonical shape
+    // rather than the raw input (which would drift as new defaults land).
+    expect(fetched.body.definition).toEqual(parseTestDefinition(definition));
   });
 
   // The Tests view lists saved recordings so they can be found and run.
@@ -76,5 +80,34 @@ describe("Tests API", () => {
       expect(it.name).toEqual(expect.any(String));
       expect(Number.isNaN(Date.parse(it.createdAt))).toBe(false);
     }
+  });
+
+  // Slice 5 — the list flags whether each test needs an environment, so the Run UI
+  // can require one. A {{token}} (or declared variables) ⇒ true; otherwise false.
+  it("flags whether a test needs an environment", async () => {
+    const withToken = {
+      name: "needs-env",
+      viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+      steps: [
+        { type: "navigate", url: "{{baseUrl}}/" },
+        { type: "screenshot", name: "hero", target: { tag: "div", attributes: { id: "hero" } } },
+      ],
+      variables: [{ name: "baseUrl", kind: "url" }],
+    };
+    const noToken = {
+      name: "no-env",
+      viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+      steps: [
+        { type: "navigate", url: "http://fixture.local/" },
+        { type: "screenshot", name: "hero", target: { tag: "div", attributes: { id: "hero" } } },
+      ],
+    };
+    const a = await request(app.getHttpServer()).post("/tests").send(withToken).expect(201);
+    const b = await request(app.getHttpServer()).post("/tests").send(noToken).expect(201);
+
+    const listed = await request(app.getHttpServer()).get("/tests").expect(200);
+    const items = listed.body as { id: string; needsEnvironment: boolean }[];
+    expect(items.find((i) => i.id === a.body.id)?.needsEnvironment).toBe(true);
+    expect(items.find((i) => i.id === b.body.id)?.needsEnvironment).toBe(false);
   });
 });

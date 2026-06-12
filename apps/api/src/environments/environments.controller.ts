@@ -1,7 +1,8 @@
-import { Body, Controller, Get, Inject, Param, Post } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Inject, Param, Post, Put } from "@nestjs/common";
 import {
   type CreateEnvironmentInput,
   EnvironmentsService,
+  type UpdateEnvironmentInput,
 } from "./environments.service";
 
 @Controller("environments")
@@ -16,8 +17,24 @@ export class EnvironmentsController {
     return this.environments.create(body);
   }
 
+  @Get()
+  list() {
+    return this.environments.list();
+  }
+
   @Get(":id")
   get(@Param("id") id: string) {
     return this.environments.getById(id);
+  }
+
+  // Body: { name?, values? (full replace), secrets? (set map), removeSecrets? (clear) }.
+  @Put(":id")
+  update(@Param("id") id: string, @Body() body: UpdateEnvironmentInput) {
+    return this.environments.update(id, body ?? {});
+  }
+
+  @Delete(":id")
+  delete(@Param("id") id: string) {
+    return this.environments.delete(id);
   }
 }

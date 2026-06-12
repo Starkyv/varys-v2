@@ -20,6 +20,8 @@ const diffRun: RunView = {
   environment: "default",
   runTimestamp: "2026-06-12T10:00:00.000Z",
   error: null,
+  steps: [],
+  failedStepIndex: null,
   checkpoints: [
     {
       name: "hero",
@@ -44,6 +46,8 @@ const seedRun: RunView = {
   environment: "default",
   runTimestamp: "2026-06-12T10:00:00.000Z",
   error: null,
+  steps: [],
+  failedStepIndex: null,
   checkpoints: [
     {
       name: "hero",
@@ -109,7 +113,8 @@ describe("DiffViewer", () => {
 
     expect(screen.getByText(/diff score/i)).toBeInTheDocument();
     expect(screen.getByText(/0\.12/)).toBeInTheDocument(); // diffScore
-    expect(screen.getByText(/threshold/i)).toBeInTheDocument();
+    // Exact match: "Tune masks & threshold" (the tuning toggle) also contains "threshold".
+    expect(screen.getByText("Threshold")).toBeInTheDocument();
     expect(screen.getByText(/healed/i)).toBeInTheDocument();
   });
 
@@ -160,7 +165,7 @@ describe("DiffViewer", () => {
     );
 
     renderWithClient(<DiffViewer runId="run-1" />);
-    await userEvent.click(await screen.findByRole("button", { name: /approve/i }));
+    await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
 
     // The dialog names the irreversible consequence; nothing has been sent yet.
     const dialog = screen.getByRole("dialog");
@@ -173,9 +178,37 @@ describe("DiffViewer", () => {
     expect(approveCalls).toBe(0);
 
     // Re-open and confirm: now the approve is sent.
-    await userEvent.click(screen.getByRole("button", { name: /approve/i }));
+    await userEvent.click(screen.getByRole("button", { name: "Approve" }));
     await userEvent.click(screen.getByRole("button", { name: /confirm approve/i }));
     await waitFor(() => expect(approveCalls).toBe(1));
+  });
+
+  it("shows the step sequence for a failed run, marking the failed step", async () => {
+    const failedRun: RunView = {
+      runId: "run-1",
+      status: "failed",
+      testName: "Checkout page",
+      environment: "dev",
+      runTimestamp: "2026-06-12T10:00:00.000Z",
+      error: "could not locate click target",
+      steps: [
+        { index: 0, label: 'navigate to "{{baseUrl}}/"' },
+        { index: 1, label: 'click "Submit"' },
+        { index: 2, label: 'checkpoint "hero" (element)' },
+      ],
+      failedStepIndex: 1,
+      checkpoints: [],
+    };
+    server.use(http.get(`${API_BASE}/runs/run-1`, () => HttpResponse.json(failedRun)));
+
+    renderWithClient(<DiffViewer runId="run-1" />);
+
+    expect(await screen.findByText(/failed at step 2 of 3/i)).toBeInTheDocument();
+    expect(screen.getByText('click "Submit"')).toBeInTheDocument();
+    // The error is shown inline against the failing step…
+    expect(screen.getByText(/could not locate click target/)).toBeInTheDocument();
+    // …and the later step is marked as not run (the earlier one is not).
+    expect(screen.getAllByText(/didn’t run/)).toHaveLength(1);
   });
 
   it("rejects without any destructive confirm", async () => {
@@ -219,11 +252,11 @@ describe("DiffViewer", () => {
     );
 
     renderWithClient(<DiffViewer runId="run-1" />);
-    await userEvent.click(await screen.findByRole("button", { name: /approve/i }));
+    await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
     await userEvent.click(screen.getByRole("button", { name: /confirm approve/i }));
 
     // The error is surfaced and the approve control is still there to retry.
     expect(await screen.findByRole("alert")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /approve/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
   });
 });

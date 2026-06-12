@@ -1,4 +1,4 @@
-import type { TestDefinition } from "@varys/step-schema";
+import type { Fingerprint, Step, TestDefinition, Wait } from "@varys/step-schema";
 
 /**
  * Per-environment values. `secrets` are kept apart from `values` so callers can
@@ -23,19 +23,60 @@ export function resolveString(input: string, profile: EnvironmentProfile): strin
   });
 }
 
+/** Resolve tokens in a fingerprint's visible-text signals (a selector-guard "bind"
+ *  puts a `{{variable}}` there). Token-free text is returned unchanged. */
+function resolveFingerprint(fp: Fingerprint, profile: EnvironmentProfile): Fingerprint {
+  const out = { ...fp };
+  if (fp.text !== undefined) out.text = resolveString(fp.text, profile);
+  if (fp.accessibleName !== undefined) {
+    out.accessibleName = resolveString(fp.accessibleName, profile);
+  }
+  return out;
+}
+
+/** Resolve fingerprint tokens inside selector waits; other wait kinds are untouched. */
+function resolveWaits(waits: Wait[], profile: EnvironmentProfile): Wait[] {
+  return waits.map((w) =>
+    w.kind === "selector" ? { ...w, target: resolveFingerprint(w.target, profile) } : w,
+  );
+}
+
+/** Resolve every token in a single step against a profile (transient, worker-only).
+ *  Covers navigate urls, typed values, and the visible-text signals of step + wait
+ *  target fingerprints. Throwing here (an unresolved token) is what lets the runner
+ *  attribute the failure to *this* step. */
+export function resolveStep(step: Step, profile: EnvironmentProfile): Step {
+  switch (step.type) {
+    case "navigate":
+      return { ...step, url: resolveString(step.url, profile) };
+    case "type":
+      return {
+        ...step,
+        value: resolveString(step.value, profile),
+        target: resolveFingerprint(step.target, profile),
+        ...(step.waitBefore ? { waitBefore: resolveWaits(step.waitBefore, profile) } : {}),
+      };
+    case "click":
+      return {
+        ...step,
+        target: resolveFingerprint(step.target, profile),
+        ...(step.waitBefore ? { waitBefore: resolveWaits(step.waitBefore, profile) } : {}),
+      };
+    case "screenshot":
+      return {
+        ...step,
+        ...(step.target ? { target: resolveFingerprint(step.target, profile) } : {}),
+        ...(step.waitBefore ? { waitBefore: resolveWaits(step.waitBefore, profile) } : {}),
+      };
+    default:
+      return step;
+  }
+}
+
 /** Resolve every token in a definition against a profile (transient, worker-only). */
 export function resolveDefinition(
   definition: TestDefinition,
   profile: EnvironmentProfile,
 ): TestDefinition {
-  const steps = definition.steps.map((step) => {
-    if (step.type === "navigate") {
-      return { ...step, url: resolveString(step.url, profile) };
-    }
-    if (step.type === "type") {
-      return { ...step, value: resolveString(step.value, profile) };
-    }
-    return step;
-  });
-  return { ...definition, steps };
+  return { ...definition, steps: definition.steps.map((step) => resolveStep(step, profile)) };
 }

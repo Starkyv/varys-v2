@@ -261,6 +261,80 @@
   overflow-x: auto;
 }
 
+.stepList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  counter-reset: none;
+}
+
+.step {
+  display: grid;
+  grid-template-columns: 20px 24px 1fr;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+.step + .step {
+  margin-top: 2px;
+}
+
+.step_ran {
+  color: #57606a;
+}
+
+.step_failed {
+  background: #ffebe9;
+  color: #b00020;
+  font-weight: 600;
+}
+
+.step_notrun {
+  color: #aab1b8;
+}
+
+.stepMark {
+  text-align: center;
+  font-weight: 700;
+}
+
+.step_ran .stepMark {
+  color: #1a7f37;
+}
+
+.stepNum {
+  text-align: right;
+  color: #8b949e;
+  font-variant-numeric: tabular-nums;
+}
+
+.stepLabel {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  word-break: break-word;
+}
+
+.stepNote {
+  font-style: italic;
+  font-size: 0.8rem;
+}
+
+.stepError {
+  grid-column: 3 / -1;
+  margin: 6px 0 0;
+  padding: 10px 12px;
+  background: #2b2b2b;
+  color: #f5f5f5;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+  font-weight: 400;
+}
+
 .error {
   color: #b00020;
 }

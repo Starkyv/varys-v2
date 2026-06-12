@@ -1,0 +1,209 @@
+.list {
+  font-family: system-ui, Arial, sans-serif;
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.list h1 {
+  font-size: 1.25rem;
+}
+
+.newRow {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.card {
+  border: 1px solid #d0d7de;
+  border-radius: 10px;
+  padding: 16px;
+  margin: 12px 0;
+  background: #fff;
+}
+
+.cardHead {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.cardActions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.nameInput {
+  font: inherit;
+  font-weight: 600;
+  font-size: 1rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 6px 8px;
+  flex: 1;
+}
+
+.nameInput:hover,
+.nameInput:focus {
+  border-color: #d0d7de;
+  outline: none;
+}
+
+.section {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #555;
+  margin: 16px 0 6px;
+}
+
+.hint {
+  font-size: 0.8rem;
+  color: #888;
+  margin: 0 0 8px;
+}
+
+.kv {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.kvRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.input {
+  font: inherit;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  padding: 6px 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.iconBtn {
+  border: 1px solid #d0d7de;
+  background: #f6f8fa;
+  border-radius: 6px;
+  width: 28px;
+  height: 28px;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  flex: none;
+}
+
+.addBtn {
+  align-self: flex-start;
+  border: 1px dashed #d0d7de;
+  background: #fff;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.addBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.secrets {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.secretRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 8px;
+  background: #f6f8fa;
+  border-radius: 6px;
+}
+
+.secretEmpty {
+  color: #888;
+  font-size: 0.85rem;
+}
+
+.lock {
+  font-weight: 600;
+}
+
+.clearLabel {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.85rem;
+  color: #b00020;
+  margin-left: auto;
+  cursor: pointer;
+}
+
+.pendingTag {
+  font-size: 0.8rem;
+  color: #1a7f37;
+  margin-left: auto;
+}
+
+.primary {
+  border: 1px solid #1f6feb;
+  background: #1f6feb;
+  color: #fff;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.primary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.danger {
+  border: 1px solid #b00020;
+  background: #fff;
+  color: #b00020;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.danger:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.notice {
+  color: #1a7f37;
+  padding: 8px 16px;
+}
+
+.error {
+  color: #b00020;
+  padding: 8px 16px;
+}
+
+.empty {
+  color: #555;
+  padding: 16px;
+}
