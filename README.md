@@ -71,15 +71,12 @@ The schema is applied automatically on API startup. The web dev server proxies A
      whenever you want, as many times as you want, in between normal interactions (Esc cancels).
    - **Save test** — posts the recorded definition to the API; the panel shows the new test id.
 
-3. **Trigger a run** (there's no "run" button in the UI yet — use the API; `<id>` is returned by Save):
+3. **Run it:** open http://localhost:5200 → **Tests** tab → your recording is listed → click
+   **Run**. (Saving only stores the recording; a run is what produces something to review.)
 
-   ```bash
-   curl -X POST http://localhost:4000/runs -H 'content-type: application/json' -d '{"testId":"<id>"}'
-   ```
-
-4. **Review:** refresh http://localhost:5200 → the checkpoint appears in the queue → open it →
-   compare baseline / actual / diff → **Approve** (first approval, or replace the baseline — behind
-   an irreversible-confirm) or **Reject**.
+4. **Review:** the checkpoint appears under **Needs review** (the queue auto-refreshes as the run
+   finishes) → open it → compare baseline / actual / diff → **Approve** (first approval, or replace
+   the baseline — behind an irreversible-confirm) or **Reject**.
 
 ## Run the tests
 
@@ -113,7 +110,7 @@ pnpm --filter @varys/recorder         test   # interactions → step definition
 apps/
   api/         NestJS API — tests, runs, environments, artifacts, approve/reject, needs-review
   worker/      Playwright replay worker (consumes the pg-boss queue)
-  web/         React SPA — diff viewer (side-by-side / overlay), approve/reject, needs-review list
+  web/         React SPA — tests list + run, diff viewer (side-by-side / overlay), approve/reject, needs-review list
   extension/   WXT MV3 recorder extension
 packages/
   review-contract/   shared typed read-model the API and web SPA agree on (pure types)
@@ -131,7 +128,7 @@ packages/
 
 ## Known gaps
 
-- No "run now" / scheduling button in the UI yet — trigger runs via the API (above).
+- Runs are triggered manually (the **Run** button); no scheduling/CI trigger yet.
 - Single trusted operator; auth/RBAC is a later slice.
 - Secret values are plaintext in the DB for local/single-tenant use — never returned by the API,
   resolved only transiently in the worker. At-rest encryption is deferred to the hosted reality.

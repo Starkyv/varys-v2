@@ -3,6 +3,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { DiffViewer } from "./DiffViewer";
 import { NeedsReviewList } from "./NeedsReviewList";
+import { TestsList } from "./TestsList";
 
 const queryClient = new QueryClient();
 
@@ -19,9 +20,46 @@ export function runIdFromLocation(loc: Location = window.location): string | nul
   return m ? m[1] : null;
 }
 
+function Nav({ active }: { active: "review" | "tests" }) {
+  const link = (on: boolean) => ({
+    textDecoration: "none",
+    fontWeight: on ? 700 : 400,
+    color: on ? "#111" : "#1f6feb",
+  });
+  return (
+    <nav
+      style={{
+        fontFamily: "system-ui, Arial, sans-serif",
+        display: "flex",
+        gap: 16,
+        padding: "12px 16px",
+        borderBottom: "1px solid #eee",
+        maxWidth: 900,
+        margin: "0 auto",
+      }}
+    >
+      <a href="/" style={link(active === "review")}>
+        Needs review
+      </a>
+      <a href="?view=tests" style={link(active === "tests")}>
+        Tests
+      </a>
+    </nav>
+  );
+}
+
 function App() {
   const runId = runIdFromLocation();
-  return runId ? <DiffViewer runId={runId} /> : <NeedsReviewList />;
+  if (runId) return <DiffViewer runId={runId} />;
+
+  const tab =
+    new URLSearchParams(window.location.search).get("view") === "tests" ? "tests" : "review";
+  return (
+    <>
+      <Nav active={tab} />
+      {tab === "tests" ? <TestsList /> : <NeedsReviewList />}
+    </>
+  );
 }
 
 const root = document.getElementById("root");

@@ -1,4 +1,5 @@
 import { Inject, Injectable, NotFoundException } from "@nestjs/common";
+import type { TestSummary } from "@varys/review-contract";
 import { parseTestDefinition, type TestDefinition } from "@varys/step-schema";
 import { desc, eq } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
@@ -30,6 +31,19 @@ export class TestsService {
       .insert(testVersions)
       .values({ testId: created.id, version: 1, definition });
     return { id: created.id, version: 1 };
+  }
+
+  /** All saved tests (recordings), newest first. */
+  async list(): Promise<TestSummary[]> {
+    const rows = await this.db
+      .select({ id: tests.id, name: tests.name, createdAt: tests.createdAt })
+      .from(tests)
+      .orderBy(desc(tests.createdAt));
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      createdAt: r.createdAt.toISOString(),
+    }));
   }
 
   async getById(id: string): Promise<TestView> {

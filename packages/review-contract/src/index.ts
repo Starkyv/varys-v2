@@ -14,6 +14,13 @@ export type ReviewState = "pending-baseline" | "diff" | "passed";
 /** The audited decision a reviewer can take on a checkpoint. */
 export type Resolution = "approved" | "rejected";
 
+/** A saved test (recording), as listed in the Tests view. */
+export interface TestSummary {
+  id: string;
+  name: string;
+  createdAt: string;
+}
+
 /** One checkpoint within a run, as the reviewer sees it. */
 export interface CheckpointView {
   /** Checkpoint (screenshot) name within the test. */

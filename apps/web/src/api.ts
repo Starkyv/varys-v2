@@ -1,4 +1,4 @@
-import type { NeedsReviewItem, RunView } from "@varys/review-contract";
+import type { NeedsReviewItem, RunView, TestSummary } from "@varys/review-contract";
 
 /**
  * Base URL of the NestJS API. Same-origin ("") by default: the SPA and API are
@@ -25,6 +25,28 @@ export async function fetchNeedsReview(): Promise<NeedsReviewItem[]> {
     throw new Error(`Failed to load the review queue (${res.status})`);
   }
   return (await res.json()) as NeedsReviewItem[];
+}
+
+/** Fetch the saved tests (recordings). Throws on a non-2xx response. */
+export async function fetchTests(): Promise<TestSummary[]> {
+  const res = await fetch(`${API_BASE}/tests`);
+  if (!res.ok) {
+    throw new Error(`Failed to load tests (${res.status})`);
+  }
+  return (await res.json()) as TestSummary[];
+}
+
+/** Trigger a run of a saved test. Returns the new run id. */
+export async function runTest(testId: string): Promise<{ runId: string }> {
+  const res = await fetch(`${API_BASE}/runs`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ testId }),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to start run (${res.status})`);
+  }
+  return (await res.json()) as { runId: string };
 }
 
 export type DecisionAction = "approve" | "reject";

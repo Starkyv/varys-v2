@@ -52,4 +52,29 @@ describe("Tests API", () => {
     expect(fetched.body.version).toBe(1);
     expect(fetched.body.definition).toEqual(definition);
   });
+
+  // The Tests view lists saved recordings so they can be found and run.
+  it("lists saved tests, newest first", async () => {
+    const mk = (name: string) => ({
+      name,
+      viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+      steps: [
+        { type: "navigate", url: "http://fixture.local/" },
+        { type: "screenshot", name: "hero", target: { tag: "div", attributes: { id: "hero" }, text: "Hero" } },
+      ],
+    });
+
+    const a = await request(app.getHttpServer()).post("/tests").send(mk("list-a")).expect(201);
+    const b = await request(app.getHttpServer()).post("/tests").send(mk("list-b")).expect(201);
+
+    const listed = await request(app.getHttpServer()).get("/tests").expect(200);
+    const items = listed.body as { id: string; name: string; createdAt: string }[];
+
+    const mine = items.filter((i) => i.id === a.body.id || i.id === b.body.id);
+    expect(mine).toHaveLength(2);
+    for (const it of mine) {
+      expect(it.name).toEqual(expect.any(String));
+      expect(Number.isNaN(Date.parse(it.createdAt))).toBe(false);
+    }
+  });
 });

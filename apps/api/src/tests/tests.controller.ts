@@ -11,6 +11,11 @@ export class TestsController {
     return this.tests.create(body);
   }
 
+  @Get()
+  list() {
+    return this.tests.list();
+  }
+
   @Get(":id")
   get(@Param("id") id: string) {
     return this.tests.getById(id);
