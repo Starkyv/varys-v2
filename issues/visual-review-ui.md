@@ -11,7 +11,7 @@
 > | Issue | Status |
 > |---|---|
 > | 1 — Walking skeleton: deep-linked diff viewer | ✅ Done |
-> | 2 — Two view modes (side-by-side ↔ overlay) | ⬜ Not started |
+> | 2 — Two view modes (side-by-side ↔ overlay) | ✅ Done |
 > | 3 — Approve / Reject + irreversible-confirm gate | ⬜ Not started |
 > | 4 — "Needs review" list | ⬜ Not started |
 >
@@ -62,7 +62,7 @@ approval" affordance rather than a broken diff.
 
 # Issue 2 — Two view modes: side-by-side ↔ diff-highlight overlay
 
-**Type:** AFK
+**Type:** AFK · **Status: ✅ Done**
 
 ## What to build
 
@@ -77,11 +77,11 @@ is the one the slice-1 `diff-engine` already produced.
 
 ## Acceptance criteria
 
-- [ ] The viewer offers side-by-side and diff-highlight overlay modes, switchable with one control, without re-fetching or leaving the checkpoint.
-- [ ] The diff-highlight overlay emphasizes the changed pixels using the precomputed diff image.
-- [ ] Diff score, the threshold the checkpoint was judged against, and the healed flag are shown.
-- [ ] A `pending-baseline` checkpoint (no diff) sensibly disables/hides the overlay mode rather than showing a broken view.
-- [ ] MSW component tests assert each mode renders the correct image(s) and the switch toggles between them.
+- [x] The viewer offers side-by-side and diff-highlight overlay modes, switchable with one control, without re-fetching or leaving the checkpoint. *(local `useState` mode toggle; the run query is not re-fetched)*
+- [x] The diff-highlight overlay emphasizes the changed pixels using the precomputed diff image.
+- [x] Diff score, the threshold the checkpoint was judged against, and the healed flag are shown.
+- [x] A `pending-baseline` checkpoint (no diff) sensibly disables/hides the overlay mode rather than showing a broken view. *(overlay control is not rendered for a first seed)*
+- [x] MSW component tests assert each mode renders the correct image(s) and the switch toggles between them. *(plus the browser E2E drives the toggle over the real stack)*
 
 ## Blocked by
 

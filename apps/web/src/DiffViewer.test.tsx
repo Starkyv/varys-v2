@@ -1,5 +1,6 @@
 import type { RunView } from "@varys/review-contract";
 import { screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -53,21 +54,43 @@ const seedRun: RunView = {
 };
 
 describe("DiffViewer", () => {
-  it("renders baseline, actual, and diff images for a diffed checkpoint", async () => {
+  it("toggles between side-by-side (baseline|actual) and the diff-highlight overlay", async () => {
     server.use(http.get(`${API_BASE}/runs/run-1`, () => HttpResponse.json(diffRun)));
 
     renderWithClient(<DiffViewer runId="run-1" />);
-
     const cp = diffRun.checkpoints[0];
+
+    // Default: side-by-side shows baseline + actual, not the diff overlay.
     expect(await screen.findByRole("img", { name: "baseline" })).toHaveAttribute(
       "src",
       cp.baselineUrl,
     );
     expect(screen.getByRole("img", { name: "actual" })).toHaveAttribute("src", cp.actualUrl);
+    expect(screen.queryByRole("img", { name: "diff highlight" })).toBeNull();
+
+    // Switch to the overlay: the precomputed diff is shown, baseline/actual are not.
+    await userEvent.click(screen.getByRole("button", { name: /diff highlight/i }));
     expect(screen.getByRole("img", { name: "diff highlight" })).toHaveAttribute(
       "src",
       cp.diffUrl,
     );
+    expect(screen.queryByRole("img", { name: "baseline" })).toBeNull();
+
+    // ...and back, without re-fetching (same checkpoint).
+    await userEvent.click(screen.getByRole("button", { name: /side by side/i }));
+    expect(screen.getByRole("img", { name: "baseline" })).toBeInTheDocument();
+  });
+
+  it("shows the server-computed verdict metadata (diff score, threshold, healed)", async () => {
+    server.use(http.get(`${API_BASE}/runs/run-1`, () => HttpResponse.json(diffRun)));
+
+    renderWithClient(<DiffViewer runId="run-1" />);
+    await screen.findByRole("img", { name: "baseline" });
+
+    expect(screen.getByText(/diff score/i)).toBeInTheDocument();
+    expect(screen.getByText(/0\.12/)).toBeInTheDocument(); // diffScore
+    expect(screen.getByText(/threshold/i)).toBeInTheDocument();
+    expect(screen.getByText(/healed/i)).toBeInTheDocument();
   });
 
   it("shows a loading state before the run resolves", () => {
@@ -102,5 +125,7 @@ describe("DiffViewer", () => {
     expect(screen.getByRole("status")).toHaveTextContent(/first approval/i);
     expect(screen.queryByRole("img", { name: "baseline" })).toBeNull();
     expect(screen.queryByRole("img", { name: "diff highlight" })).toBeNull();
+    // No overlay control — there is no diff to switch to.
+    expect(screen.queryByRole("button", { name: /diff highlight/i })).toBeNull();
   });
 });

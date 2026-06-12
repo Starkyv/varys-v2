@@ -154,7 +154,7 @@ describe("Visual review UI (browser E2E)", () => {
     return res.body.id as string;
   }
 
-  it("renders baseline, actual, and diff for a diffed run", async () => {
+  it("renders baseline/actual side-by-side and the diff overlay on toggle", async () => {
     // Seed a baseline, then produce a diff against it.
     fixture.setVariant("default");
     const testId = await createTest();
@@ -174,14 +174,22 @@ describe("Visual review UI (browser E2E)", () => {
     const page = await browser.newPage();
     await page.goto(`${webBase}/?run=${diffRun.runId}`);
 
-    for (const name of ["baseline", "actual", "diff highlight"]) {
-      const img = page.getByRole("img", { name });
-      await img.waitFor({ state: "visible", timeout: 10_000 });
-      const naturalWidth = await img.evaluate(
-        (el) => (el as unknown as { naturalWidth: number }).naturalWidth,
-      );
-      expect(naturalWidth, `${name} image should have loaded`).toBeGreaterThan(0);
+    const loaded = (name: string) =>
+      page
+        .getByRole("img", { name })
+        .evaluate((el) => (el as unknown as { naturalWidth: number }).naturalWidth);
+
+    // Default side-by-side mode: baseline + actual render and actually load.
+    for (const name of ["baseline", "actual"]) {
+      await page.getByRole("img", { name }).waitFor({ state: "visible", timeout: 10_000 });
+      expect(await loaded(name), `${name} image should have loaded`).toBeGreaterThan(0);
     }
+
+    // Toggle to the diff-highlight overlay: the precomputed diff renders and loads.
+    await page.getByRole("button", { name: /diff highlight/i }).click();
+    const diff = page.getByRole("img", { name: "diff highlight" });
+    await diff.waitFor({ state: "visible", timeout: 10_000 });
+    expect(await loaded("diff highlight"), "diff image should have loaded").toBeGreaterThan(0);
 
     await page.close();
   }, 120_000);
