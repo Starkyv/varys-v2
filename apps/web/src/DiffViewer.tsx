@@ -1,7 +1,18 @@
-import type { CaptureMode, CheckpointView } from "@varys/review-contract";
-import { useState } from "react";
-import { useDecision, useRunView } from "./queries";
+import type { CaptureMode, CheckpointView, Rect } from "@varys/review-contract";
+import { useRef, useState } from "react";
+import {
+  useApproveAll,
+  useDecision,
+  usePersistMasks,
+  useReEvaluate,
+  useRunView,
+} from "./queries";
 import styles from "./DiffViewer.module.css";
+
+/** A checkpoint still awaiting a decision (drives the run-level "Approve all"). */
+function needsReview(cp: CheckpointView): boolean {
+  return (cp.reviewState === "pending-baseline" || cp.reviewState === "diff") && !cp.resolution;
+}
 
 /** Exactly two ways to look this slice (swipe + onion-skin are deferred). */
 type ViewMode = "side-by-side" | "overlay";
@@ -50,10 +61,104 @@ export function DiffViewer({ runId }: { runId: string }) {
           {data.environment} · {new Date(data.runTimestamp).toLocaleString()} · {data.status}
         </p>
       </header>
-      {data.checkpoints.map((cp) => (
-        <CheckpointPanel key={cp.name} checkpoint={cp} runId={data.runId} />
-      ))}
+      {data.status === "failed" ? (
+        <RunFailure error={data.error} />
+      ) : data.checkpoints.length === 0 ? (
+        <p role="status" className={styles.notice}>
+          {data.status === "queued" || data.status === "running"
+            ? "This run is still in progress — checkpoints will appear once it finishes."
+            : "This run produced no checkpoints."}
+        </p>
+      ) : (
+        <>
+          {data.checkpoints.filter(needsReview).length > 0 && (
+            <RunApproveAll
+              runId={data.runId}
+              count={data.checkpoints.filter(needsReview).length}
+            />
+          )}
+          {data.checkpoints.map((cp) => (
+            <CheckpointPanel key={cp.name} checkpoint={cp} runId={data.runId} />
+          ))}
+        </>
+      )}
     </main>
+  );
+}
+
+/**
+ * Run-level bulk approval: resolve every checkpoint that still needs review in
+ * one action. Gated behind the same irreversible hard-confirm as a single
+ * approve, worded to name that it sets/replaces *multiple* baselines at once.
+ */
+function RunApproveAll({ runId, count }: { runId: string; count: number }) {
+  const [confirming, setConfirming] = useState(false);
+  const approveAll = useApproveAll(runId);
+
+  return (
+    <section className={styles.bulk} aria-label="Approve all in run">
+      <button
+        type="button"
+        className={styles.approve}
+        disabled={approveAll.isPending}
+        onClick={() => setConfirming(true)}
+      >
+        Approve all ({count})
+      </button>
+
+      {approveAll.isError && (
+        <p role="alert" className={styles.error}>
+          Couldn’t approve all: {(approveAll.error as Error).message}
+        </p>
+      )}
+
+      {confirming && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Confirm approve all"
+          className={styles.dialog}
+        >
+          <p>
+            Approving all permanently sets or replaces the baseline for every one of the {count}{" "}
+            checkpoints that need review in this run — there is no undo.
+          </p>
+          <div className={styles.actions}>
+            <button
+              type="button"
+              className={styles.approve}
+              onClick={() => {
+                setConfirming(false);
+                approveAll.mutate();
+              }}
+            >
+              Confirm approve all
+            </button>
+            <button type="button" onClick={() => setConfirming(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+/**
+ * A failed run errored during replay before it could capture or diff anything —
+ * so there is no diff to show. Surface *why* it failed (the persisted replay
+ * error) rather than rendering blank.
+ */
+function RunFailure({ error }: { error: string | null }) {
+  return (
+    <section className={styles.failure} aria-label="Run failed">
+      <h2>This run failed before any checkpoint was captured</h2>
+      <p>
+        The replay errored out, so there are no screenshots to compare and no diff to review. The
+        recorded error was:
+      </p>
+      <pre className={styles.failureMessage}>{error ?? "No error message was recorded."}</pre>
+    </section>
   );
 }
 
@@ -65,6 +170,7 @@ function CheckpointPanel({
   runId: string;
 }) {
   const [mode, setMode] = useState<ViewMode>("side-by-side");
+  const [tuning, setTuning] = useState(false);
   const isFirstSeed = cp.reviewState === "pending-baseline";
   const hasDiff = cp.diffUrl != null && cp.baselineUrl != null;
 
@@ -131,11 +237,229 @@ function CheckpointPanel({
               )}
             </div>
           )}
+
+          {hasDiff && (
+            <div className={styles.tuneToggleRow}>
+              <button
+                type="button"
+                className={styles.modeButton}
+                aria-pressed={tuning}
+                onClick={() => setTuning((t) => !t)}
+              >
+                {tuning ? "Hide editor" : "Tune masks & threshold"}
+              </button>
+            </div>
+          )}
+          {hasDiff && tuning && <TuningEditor checkpoint={cp} runId={runId} />}
         </>
       )}
 
       <Decision checkpoint={cp} runId={runId} />
     </section>
+  );
+}
+
+/** Normalize two corner points into a positive-area rectangle. */
+function rectFrom(a: { x: number; y: number }, b: { x: number; y: number }): Rect {
+  return {
+    x: Math.round(Math.min(a.x, b.x)),
+    y: Math.round(Math.min(a.y, b.y)),
+    width: Math.round(Math.abs(a.x - b.x)),
+    height: Math.round(Math.abs(a.y - b.y)),
+  };
+}
+
+/**
+ * The in-viewer tuning editor (the slice's novel HITL surface). The reviewer draws
+ * mask rectangles over the captured image to suppress volatile regions AND nudges
+ * the per-checkpoint threshold; each change re-evaluates the diff against the
+ * STORED baseline+actual server-side (no re-run) and shows the new verdict live.
+ * "Save" persists masks + threshold as a new test version and re-judges this
+ * checkpoint, so a now-clean checkpoint flips to passed.
+ *
+ * Masks are stored in screenshot-pixel (natural image) space; we draw in displayed
+ * space and convert via the image's natural/displayed ratio, then position the
+ * overlays with percentages so they track the responsively-scaled image.
+ */
+function TuningEditor({ checkpoint: cp, runId }: { checkpoint: CheckpointView; runId: string }) {
+  const [masks, setMasks] = useState<Rect[]>(cp.masks);
+  const [threshold, setThreshold] = useState<number>(cp.threshold);
+  const [draft, setDraft] = useState<Rect | null>(null);
+  const [nat, setNat] = useState<{ w: number; h: number } | null>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
+  const dragStart = useRef<{ x: number; y: number } | null>(null);
+  const reEval = useReEvaluate(runId, cp.name);
+  const persist = usePersistMasks(runId, cp.name);
+
+  // Drawing image: the actual capture (what diverged). Masks apply to both sides.
+  const drawSrc = cp.actualUrl;
+
+  /** Pointer (client) coords → natural image pixels, clamped to the image. */
+  const toNatural = (clientX: number, clientY: number) => {
+    const img = imgRef.current;
+    if (!img) return { x: 0, y: 0 };
+    const box = img.getBoundingClientRect();
+    const sx = img.naturalWidth / box.width;
+    const sy = img.naturalHeight / box.height;
+    return {
+      x: Math.max(0, Math.min(img.naturalWidth, (clientX - box.left) * sx)),
+      y: Math.max(0, Math.min(img.naturalHeight, (clientY - box.top) * sy)),
+    };
+  };
+
+  // Any change to masks or threshold previews the same way: re-diff the stored
+  // artifacts with the candidate masks + threshold (no re-run).
+  const reevaluate = (m: Rect[], t: number) => reEval.mutate({ masks: m, threshold: t });
+  const applyMasks = (next: Rect[]) => {
+    setMasks(next);
+    reevaluate(next, threshold);
+  };
+  const changeThreshold = (t: number) => {
+    setThreshold(t);
+    reevaluate(masks, t);
+  };
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    dragStart.current = toNatural(e.clientX, e.clientY);
+    setDraft({ ...dragStart.current, width: 0, height: 0 });
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (!dragStart.current) return;
+    setDraft(rectFrom(dragStart.current, toNatural(e.clientX, e.clientY)));
+  };
+  const onPointerUp = () => {
+    const d = draft;
+    dragStart.current = null;
+    setDraft(null);
+    if (d && d.width >= 4 && d.height >= 4) applyMasks([...masks, d]);
+  };
+
+  /** Natural-pixel rect → percentage box over the (scaled) image. */
+  const pct = (r: Rect): React.CSSProperties =>
+    nat
+      ? {
+          left: `${(r.x / nat.w) * 100}%`,
+          top: `${(r.y / nat.h) * 100}%`,
+          width: `${(r.width / nat.w) * 100}%`,
+          height: `${(r.height / nat.h) * 100}%`,
+        }
+      : { display: "none" };
+
+  const result = reEval.data;
+
+  return (
+    <div className={styles.maskEditor}>
+      <p className={styles.maskHelp}>
+        Drag on the image to mask a volatile region, and adjust the threshold for sensitivity.
+        Masked areas are ignored by the diff. Changes preview instantly; <strong>Save</strong>{" "}
+        persists the masks and threshold for future runs.
+      </p>
+
+      {/** biome-ignore lint/a11y/noStaticElementInteractions: drawing surface */}
+      <div className={styles.maskStage} style={{ position: "relative", display: "inline-block" }}>
+        {drawSrc && (
+          <img
+            ref={imgRef}
+            className={styles.image}
+            src={drawSrc}
+            alt="capture to mask"
+            onLoad={(e) =>
+              setNat({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })
+            }
+          />
+        )}
+        <div
+          className={styles.maskLayer}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerLeave={onPointerUp}
+        >
+          {masks.map((m, i) => (
+            <div key={`${m.x},${m.y},${m.width},${m.height},${i}`} className={styles.maskRect} style={pct(m)}>
+              <button
+                type="button"
+                className={styles.maskRemove}
+                title="Remove mask"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => applyMasks(masks.filter((_, j) => j !== i))}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          {draft && <div className={styles.maskDraft} style={pct(draft)} />}
+        </div>
+      </div>
+
+      <div className={styles.maskTools}>
+        <span className={styles.maskCount}>
+          {masks.length} mask{masks.length === 1 ? "" : "s"}
+        </span>
+        {masks.length > 0 && (
+          <button type="button" className={styles.maskClear} onClick={() => applyMasks([])}>
+            Clear all
+          </button>
+        )}
+      </div>
+
+      <div className={styles.thresholdRow}>
+        <label htmlFor={`thr-${cp.name}`}>Threshold</label>
+        <input
+          id={`thr-${cp.name}`}
+          type="range"
+          min={0}
+          max={1}
+          step={0.005}
+          value={threshold}
+          onChange={(e) => changeThreshold(Number(e.target.value))}
+        />
+        <span className={styles.thresholdVal}>{threshold.toFixed(3)}</span>
+      </div>
+
+      <div className={styles.maskPreview}>
+        {reEval.isPending ? (
+          <p className={styles.notice}>Re-evaluating…</p>
+        ) : result ? (
+          <>
+            <p className={result.verdict === "match" ? styles.previewMatch : styles.previewDiff}>
+              Preview: <strong>{result.verdict === "match" ? "within threshold" : "still differs"}</strong>{" "}
+              — score {result.diffScore.toFixed(4)} / threshold {result.threshold}
+            </p>
+            {result.diffImage && (
+              <figure className={styles.figure}>
+                <figcaption>Preview diff (masked)</figcaption>
+                <img className={styles.image} src={result.diffImage} alt="masked diff preview" />
+              </figure>
+            )}
+          </>
+        ) : (
+          <p className={styles.notice}>Draw a mask to preview the re-evaluated diff.</p>
+        )}
+        {reEval.isError && (
+          <p role="alert" className={styles.error}>
+            {(reEval.error as Error).message}
+          </p>
+        )}
+      </div>
+
+      <div className={styles.actions}>
+        <button
+          type="button"
+          className={styles.approve}
+          disabled={persist.isPending}
+          onClick={() => persist.mutate({ masks, threshold })}
+        >
+          Save masks &amp; threshold
+        </button>
+      </div>
+      {persist.isError && (
+        <p role="alert" className={styles.error}>
+          {(persist.error as Error).message}
+        </p>
+      )}
+    </div>
   );
 }
 

@@ -17,6 +17,45 @@ export type CaptureMode = "element" | "fullpage" | "region";
 /** The audited decision a reviewer can take on a checkpoint. */
 export type Resolution = "approved" | "rejected";
 
+/** A rectangle in screenshot-pixel space (mask region; matches the step schema). */
+export interface Rect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** Candidate masks/threshold a reviewer is trying out (re-evaluate) or committing
+ *  (persist). Both fields optional so the same shape serves masks (Issue 4) and
+ *  threshold tuning (Issue 5). */
+export interface TuningInput {
+  masks?: Rect[];
+  threshold?: number;
+}
+
+/** Result of a re-evaluate (preview) — the diff recomputed against the stored
+ *  baseline+actual with candidate masks/threshold, with no new capture (no re-run). */
+export interface ReEvaluation {
+  verdict: "match" | "diff";
+  /** Mismatched-pixel ratio in [0,1]. */
+  diffScore: number;
+  /** The threshold the verdict was judged against. */
+  threshold: number;
+  /** Transient diff image as a data URL (`data:image/png;base64,…`); not persisted. */
+  diffImage: string | null;
+}
+
+/** Result of persisting masks/threshold: the named checkpoint's run_result was
+ *  re-judged against the stored artifacts, and a new test_version was written. */
+export interface PersistResult {
+  /** The checkpoint's new review state (`passed` once within threshold). */
+  reviewState: ReviewState;
+  diffScore: number;
+  threshold: number;
+  /** The version number of the newly written test_version. */
+  version: number;
+}
+
 /** A saved test (recording), as listed in the Tests view. */
 export interface TestSummary {
   id: string;
@@ -39,6 +78,9 @@ export interface CheckpointView {
   threshold: number;
   /** Whether the locator fell back to a lower-priority signal during the run. */
   healed: boolean;
+  /** The checkpoint's current masks (from the latest test version) — the regions
+   *  the diff ignores; what the in-viewer mask editor renders and edits. */
+  masks: Rect[];
   /** Authenticated artifact-route URLs. baseline/diff are null on a first seed. */
   actualUrl: string | null;
   baselineUrl: string | null;
@@ -71,5 +113,8 @@ export interface RunView {
   environment: string;
   /** When the run was created, ISO 8601. */
   runTimestamp: string;
+  /** Why a `failed` run failed (the replay error); null otherwise. A failed run
+   *  captures no checkpoints, so this is what the viewer shows instead. */
+  error: string | null;
   checkpoints: CheckpointView[];
 }

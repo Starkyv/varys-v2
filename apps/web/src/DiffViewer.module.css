@@ -111,6 +111,156 @@
   color: #555;
 }
 
+.bulk {
+  margin-top: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #eee;
+}
+
+.tuneToggleRow {
+  margin: 12px 0 4px;
+}
+
+.maskEditor {
+  margin-top: 12px;
+  padding: 16px;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  background: #fafbfc;
+}
+
+.maskHelp {
+  margin: 0 0 12px;
+  font-size: 0.85rem;
+  color: #555;
+}
+
+.maskStage {
+  max-width: 100%;
+  line-height: 0;
+}
+
+.maskLayer {
+  position: absolute;
+  inset: 0;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.maskRect {
+  position: absolute;
+  background: rgba(31, 111, 235, 0.28);
+  border: 1px solid #1f6feb;
+  box-sizing: border-box;
+}
+
+.maskRemove {
+  position: absolute;
+  top: -10px;
+  right: -10px;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 50%;
+  background: #b00020;
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.maskDraft {
+  position: absolute;
+  background: rgba(31, 111, 235, 0.18);
+  border: 1px dashed #1f6feb;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.maskTools {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 10px 0;
+  font-size: 0.8rem;
+  color: #666;
+}
+
+.maskClear {
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: #fff;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.thresholdRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 12px;
+  font-size: 0.8rem;
+  color: #444;
+}
+
+.thresholdRow input[type="range"] {
+  flex: 1;
+  max-width: 280px;
+}
+
+.thresholdVal {
+  font-variant-numeric: tabular-nums;
+  min-width: 3.5em;
+}
+
+.maskPreview {
+  margin: 8px 0 12px;
+}
+
+.previewMatch {
+  color: #1a7f37;
+  margin: 0 0 8px;
+}
+
+.previewDiff {
+  color: #b00020;
+  margin: 0 0 8px;
+}
+
+.failure {
+  margin-top: 24px;
+  border: 1px solid #f0b0b0;
+  border-radius: 8px;
+  background: #fff6f6;
+  padding: 16px 20px;
+}
+
+.failure h2 {
+  margin: 0 0 8px;
+  font-size: 1.05rem;
+  color: #b00020;
+}
+
+.failure p {
+  margin: 0 0 12px;
+  color: #555;
+  font-size: 0.9rem;
+}
+
+.failureMessage {
+  margin: 0;
+  padding: 12px;
+  background: #2b2b2b;
+  color: #f5f5f5;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+
 .error {
   color: #b00020;
 }

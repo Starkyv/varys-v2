@@ -1,10 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { TuningInput } from "@varys/review-contract";
 import {
+  approveAllInRun,
   type DecisionAction,
   fetchNeedsReview,
   fetchRunView,
   fetchTests,
+  persistCheckpointMasks,
   postDecision,
+  reEvaluateCheckpoint,
   runTest,
 } from "./api";
 
@@ -50,6 +54,40 @@ export function useRunTest() {
   return useMutation({
     mutationFn: (testId: string) => runTest(testId),
     onSuccess: () => {
+      qc.invalidateQueries({ queryKey: needsReviewQueryKey() });
+    },
+  });
+}
+
+/** Bulk-approve every needs-review checkpoint in a run. Invalidates the run and
+ *  the needs-review list so the resolved checkpoints reflect their new state. */
+export function useApproveAll(runId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => approveAllInRun(runId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: runQueryKey(runId) });
+      qc.invalidateQueries({ queryKey: needsReviewQueryKey() });
+    },
+  });
+}
+
+/** Preview a checkpoint's diff with candidate masks/threshold (no mutation). The
+ *  last result lives on the mutation's `data` for live display. */
+export function useReEvaluate(runId: string, checkpointName: string) {
+  return useMutation({
+    mutationFn: (input: TuningInput) => reEvaluateCheckpoint(runId, checkpointName, input),
+  });
+}
+
+/** Persist masks/threshold for a checkpoint. On success the run + needs-review
+ *  list are invalidated so a now-passing checkpoint leaves the queue. */
+export function usePersistMasks(runId: string, checkpointName: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: TuningInput) => persistCheckpointMasks(runId, checkpointName, input),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: runQueryKey(runId) });
       qc.invalidateQueries({ queryKey: needsReviewQueryKey() });
     },
   });

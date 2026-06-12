@@ -8,9 +8,38 @@ import { createServer } from "node:http";
  * `setVariant` lets a test change what the same URL renders, so one test can
  * seed a baseline and then produce a visual diff on a later run.
  */
-export type Variant = "default" | "changed" | "login" | "deferred";
+export type Variant = "default" | "changed" | "login" | "deferred" | "stampA" | "stampB";
 
 function html(variant: Variant): string {
+  // A stable hero with one volatile sub-region (#stamp, top-left) — stampA/stampB
+  // differ ONLY in the stamp's colour, so a mask over that region removes the diff
+  // while the rest of the element stays identical.
+  if (variant === "stampA" || variant === "stampB") {
+    const stamp = variant === "stampA" ? "#22aa22" : "#ee8800";
+    return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Varys Fixture — Stamp</title>
+<style>
+  * { margin: 0; }
+  body { background: #ffffff; font-family: Arial, sans-serif; }
+  #hero {
+    position: relative;
+    width: 240px; height: 120px; margin: 24px;
+    background: #3366cc; color: #ffffff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px;
+  }
+  #stamp { position: absolute; top: 0; left: 0; width: 80px; height: 30px; background: ${stamp}; }
+</style>
+</head>
+<body>
+  <div id="hero"><span id="stamp"></span>Hero</div>
+</body>
+</html>`;
+  }
+
   if (variant === "login") {
     return `<!doctype html>
 <html lang="en">

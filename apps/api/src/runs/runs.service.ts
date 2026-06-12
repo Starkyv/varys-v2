@@ -6,14 +6,19 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { baselines, environments, runResults, runs, testVersions, tests } from "@varys/db";
+import { diffPng } from "@varys/diff-engine";
 import { type Boss, enqueueRun } from "@varys/queue";
 import type {
   CaptureMode,
   CheckpointView,
   NeedsReviewItem,
+  PersistResult,
+  ReEvaluation,
+  Rect,
   Resolution,
   ReviewState,
   RunView,
+  TuningInput,
 } from "@varys/review-contract";
 import type { TestDefinition } from "@varys/step-schema";
 import type { StorageAdapter } from "@varys/storage-adapter";
@@ -71,6 +76,8 @@ export class RunsService {
         status: runs.status,
         createdAt: runs.createdAt,
         environmentId: runs.environmentId,
+        error: runs.error,
+        testId: testVersions.testId,
         testName: tests.name,
         definition: testVersions.definition,
       })
@@ -86,6 +93,14 @@ export class RunsService {
     const captureModes = new Map<string, CaptureMode>();
     for (const s of (row.definition as TestDefinition).steps) {
       if (s.type === "screenshot") captureModes.set(s.name, s.captureMode ?? "element");
+    }
+
+    // Masks are the *current* ones a reviewer would edit — from the latest version,
+    // which after a persist holds the just-saved masks (the run's own version may be older).
+    const masksByName = new Map<string, Rect[]>();
+    const latestDef = await this.latestDefinition(row.testId);
+    for (const s of latestDef.steps) {
+      if (s.type === "screenshot") masksByName.set(s.name, (s.masks ?? []) as Rect[]);
     }
 
     // Environment name for the reviewer's context; "default" when none was chosen.
@@ -122,6 +137,7 @@ export class RunsService {
       testName: row.testName,
       environment,
       runTimestamp: row.createdAt.toISOString(),
+      error: row.error,
       checkpoints: results.map(
         (r): CheckpointView => ({
           name: r.name,
@@ -131,12 +147,25 @@ export class RunsService {
           diffScore: r.diffScore,
           threshold: r.threshold,
           healed: r.healed,
+          masks: masksByName.get(r.name) ?? [],
           actualUrl: url(r.actualArtifactKey),
           baselineUrl: url(r.baselineArtifactKey),
           diffUrl: url(r.diffArtifactKey),
         }),
       ),
     };
+  }
+
+  /** The latest version's definition for a test (the source of "current" masks/threshold). */
+  private async latestDefinition(testId: string): Promise<TestDefinition> {
+    const [row] = await this.db
+      .select({ definition: testVersions.definition })
+      .from(testVersions)
+      .where(eq(testVersions.testId, testId))
+      .orderBy(desc(testVersions.version))
+      .limit(1);
+    if (!row) throw new NotFoundException(`No versions for test ${testId}`);
+    return row.definition as TestDefinition;
   }
 
   /** The flat "needs review" list: checkpoints awaiting a decision
@@ -275,6 +304,30 @@ export class RunsService {
     return { ok: true };
   }
 
+  /**
+   * Bulk-approve every checkpoint in a run that still needs review
+   * (`pending-baseline` | `diff`, undecided), in one audited operation. Each is
+   * approved via the single-checkpoint path, so it seeds/replaces and audits its
+   * baseline identically. Passing and already-decided checkpoints are left
+   * untouched. Bulk reject is intentionally out of scope.
+   */
+  async approveAll(runId: string): Promise<{ approved: number }> {
+    const candidates = await this.db
+      .select({ name: runResults.checkpointName })
+      .from(runResults)
+      .where(
+        and(
+          eq(runResults.runId, runId),
+          inArray(runResults.reviewState, ["pending-baseline", "diff"]),
+          isNull(runResults.resolution),
+        ),
+      );
+    for (const c of candidates) {
+      await this.approve(runId, c.name);
+    }
+    return { approved: candidates.length };
+  }
+
   /** Reject a checkpoint: record a regression; the baseline is left untouched. */
   async reject(runId: string, checkpointName: string): Promise<{ ok: true }> {
     const [result] = await this.db
@@ -295,5 +348,137 @@ export class RunsService {
       .set({ resolution: "rejected" })
       .where(eq(runResults.id, result.id));
     return { ok: true };
+  }
+
+  /**
+   * Re-evaluate (preview): re-diff a checkpoint's STORED baseline+actual with
+   * candidate masks/threshold — no browser, no new capture, no mutation. Returns
+   * the new verdict/score and a transient diff image (data URL) for live display.
+   */
+  async reEvaluate(
+    runId: string,
+    checkpointName: string,
+    input: TuningInput,
+  ): Promise<ReEvaluation> {
+    const [r] = await this.db
+      .select({
+        baselineArtifactKey: runResults.baselineArtifactKey,
+        actualArtifactKey: runResults.actualArtifactKey,
+        threshold: runResults.threshold,
+      })
+      .from(runResults)
+      .where(and(eq(runResults.runId, runId), eq(runResults.checkpointName, checkpointName)))
+      .limit(1);
+    if (!r) {
+      throw new NotFoundException(`Checkpoint ${checkpointName} not found for run ${runId}`);
+    }
+    const { baseline, actual } = await this.loadDiffInputs(
+      r.baselineArtifactKey,
+      r.actualArtifactKey,
+    );
+    const threshold = input.threshold ?? r.threshold;
+    const { verdict, score, diffImage } = diffPng(baseline, actual, threshold, input.masks ?? []);
+    return {
+      verdict,
+      diffScore: score,
+      threshold,
+      diffImage: `data:image/png;base64,${diffImage.toString("base64")}`,
+    };
+  }
+
+  /**
+   * Persist masks/threshold: write a NEW test_version (latest+1) with the named
+   * screenshot step's masks/threshold updated (audited), then re-judge ONLY this
+   * checkpoint's run_result against the stored artifacts. A now-within-threshold
+   * checkpoint flips to `passed` and leaves the needs-review list. Future runs use
+   * the new version; no other historical run is touched.
+   */
+  async persistMasks(
+    runId: string,
+    checkpointName: string,
+    input: TuningInput,
+  ): Promise<PersistResult> {
+    const [ctx] = await this.db
+      .select({
+        testId: testVersions.testId,
+        runResultId: runResults.id,
+        baselineArtifactKey: runResults.baselineArtifactKey,
+        actualArtifactKey: runResults.actualArtifactKey,
+        threshold: runResults.threshold,
+      })
+      .from(runResults)
+      .innerJoin(runs, eq(runs.id, runResults.runId))
+      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
+      .where(and(eq(runResults.runId, runId), eq(runResults.checkpointName, checkpointName)))
+      .limit(1);
+    if (!ctx) {
+      throw new NotFoundException(`Checkpoint ${checkpointName} not found for run ${runId}`);
+    }
+    const { baseline, actual } = await this.loadDiffInputs(
+      ctx.baselineArtifactKey,
+      ctx.actualArtifactKey,
+    );
+
+    // 1. New audited test_version with the updated masks/threshold on this step.
+    const def = await this.latestDefinition(ctx.testId);
+    const [latest] = await this.db
+      .select({ version: testVersions.version })
+      .from(testVersions)
+      .where(eq(testVersions.testId, ctx.testId))
+      .orderBy(desc(testVersions.version))
+      .limit(1);
+    const masks = (input.masks ?? []) as Rect[];
+    const nextDefinition: TestDefinition = {
+      ...def,
+      steps: def.steps.map((s) =>
+        s.type === "screenshot" && s.name === checkpointName
+          ? { ...s, masks, ...(input.threshold != null ? { threshold: input.threshold } : {}) }
+          : s,
+      ),
+    };
+    const nextVersion = (latest?.version ?? 1) + 1;
+    await this.db.insert(testVersions).values({
+      testId: ctx.testId,
+      version: nextVersion,
+      definition: nextDefinition,
+      createdBy: "system",
+    });
+
+    // 2. Re-judge ONLY this run_result against the stored artifacts.
+    const threshold = input.threshold ?? ctx.threshold;
+    const { verdict, score, diffImage } = diffPng(baseline, actual, threshold, masks);
+    if (verdict === "match") {
+      await this.db
+        .update(runResults)
+        .set({ reviewState: "passed", diffScore: score, threshold, diffArtifactKey: null })
+        .where(eq(runResults.id, ctx.runResultId));
+    } else {
+      const diffKey = `runs/${runId}/${checkpointName}.diff.png`;
+      await this.storage.put(diffKey, diffImage);
+      await this.db
+        .update(runResults)
+        .set({ reviewState: "diff", diffScore: score, threshold, diffArtifactKey: diffKey })
+        .where(eq(runResults.id, ctx.runResultId));
+    }
+    return {
+      reviewState: verdict === "match" ? "passed" : "diff",
+      diffScore: score,
+      threshold,
+      version: nextVersion,
+    };
+  }
+
+  /** Load a checkpoint's stored baseline+actual bytes for an in-place re-diff. */
+  private async loadDiffInputs(
+    baselineKey: string | null,
+    actualKey: string | null,
+  ): Promise<{ baseline: Buffer; actual: Buffer }> {
+    if (!baselineKey || !actualKey) {
+      throw new BadRequestException("checkpoint has no baseline to re-evaluate against");
+    }
+    const baseline = await this.storage.get(baselineKey);
+    const actual = await this.storage.get(actualKey);
+    if (!baseline || !actual) throw new BadRequestException("stored artifacts are missing");
+    return { baseline, actual };
   }
 }

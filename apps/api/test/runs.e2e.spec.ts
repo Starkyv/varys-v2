@@ -4,11 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
-import { createDb, type DbHandle } from "@varys/db";
+import { baselines, createDb, type DbHandle } from "@varys/db";
 import { type FixtureServer, startFixtureServer } from "@varys/fixture-app";
 import { type Boss, createBoss, startBoss, workRuns } from "@varys/queue";
 import { processRun } from "@varys/runner";
 import { LocalFsAdapter } from "@varys/storage-adapter";
+import { eq } from "drizzle-orm";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
@@ -90,6 +91,345 @@ describe("Runs API", () => {
 
     // A first run with no baseline seeds a pending baseline → needs_review.
     expect(status).toBe("needs_review");
+  });
+
+  // A run whose replay errors is marked failed AND records why, so the viewer can
+  // show the reason instead of a blank screen (a failed run captures no checkpoints).
+  // Here {{baseUrl}} is never resolved (no environment), so the first navigate throws.
+  it("a run that errors during replay is failed with a recorded error and no checkpoints", async () => {
+    const definition = {
+      name: "unresolved-baseurl test",
+      viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+      steps: [
+        { type: "navigate", url: "{{baseUrl}}/" },
+        { type: "screenshot", name: "hero", target: { tag: "div", attributes: { id: "hero" } } },
+      ],
+    };
+    const test = await request(app.getHttpServer())
+      .post("/tests")
+      .send(definition)
+      .expect(201);
+
+    const created = await request(app.getHttpServer())
+      .post("/runs")
+      .send({ testId: test.body.id })
+      .expect(201);
+    const runId = created.body.runId as string;
+
+    let body: { status: string; error?: string | null; checkpoints: unknown[] } = {
+      status: "queued",
+      checkpoints: [],
+    };
+    for (let i = 0; i < 100; i++) {
+      const res = await request(app.getHttpServer()).get(`/runs/${runId}`).expect(200);
+      body = res.body;
+      if (["passed", "needs_review", "failed"].includes(body.status)) break;
+      await sleep(200);
+    }
+
+    expect(body.status).toBe("failed");
+    expect(typeof body.error).toBe("string");
+    expect((body.error ?? "").length).toBeGreaterThan(0);
+    expect(body.checkpoints).toHaveLength(0);
+  });
+
+  // Multi-checkpoint slice Issue 2 — one bulk approve resolves a whole run's
+  // needs-review checkpoints (audited per baseline), and leaves already-decided
+  // checkpoints untouched (not re-approved, not re-counted).
+  it("resolves a multi-checkpoint run with one bulk approve, leaving decided ones untouched", async () => {
+    const target = { tag: "div", attributes: { id: "hero" }, text: "Hero" };
+    const definition = {
+      name: "bulk approve test",
+      viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+      steps: [
+        { type: "navigate", url: fixture.url },
+        { type: "screenshot", name: "alpha", target },
+        { type: "screenshot", name: "beta", target },
+      ],
+    };
+    const test = await request(app.getHttpServer()).post("/tests").send(definition).expect(201);
+    const testId = test.body.id as string;
+
+    const created = await request(app.getHttpServer())
+      .post("/runs")
+      .send({ testId })
+      .expect(201);
+    const runId = created.body.runId as string;
+
+    let body: { status: string; checkpoints: { name: string; resolution: string | null }[] } = {
+      status: "queued",
+      checkpoints: [],
+    };
+    for (let i = 0; i < 100; i++) {
+      const res = await request(app.getHttpServer()).get(`/runs/${runId}`).expect(200);
+      body = res.body;
+      if (["passed", "needs_review", "failed"].includes(body.status)) break;
+      await sleep(200);
+    }
+    expect(body.status).toBe("needs_review");
+    expect(body.checkpoints).toHaveLength(2);
+
+    // Decide one individually first; bulk approve must skip it.
+    await request(app.getHttpServer())
+      .post(`/runs/${runId}/checkpoints/alpha/approve`)
+      .expect(201);
+
+    const bulk = await request(app.getHttpServer()).post(`/runs/${runId}/approve-all`).expect(201);
+    expect(bulk.body.approved).toBe(1); // only beta still needed review
+
+    // Both checkpoints are now approved.
+    const after = await request(app.getHttpServer()).get(`/runs/${runId}`).expect(200);
+    const byName = Object.fromEntries(
+      (after.body.checkpoints as { name: string; resolution: string | null }[]).map((c) => [
+        c.name,
+        c.resolution,
+      ]),
+    );
+    expect(byName.alpha).toBe("approved");
+    expect(byName.beta).toBe("approved");
+
+    // The run leaves the needs-review list.
+    const list = await request(app.getHttpServer()).get("/runs/needs-review").expect(200);
+    expect((list.body as { runId: string }[]).some((i) => i.runId === runId)).toBe(false);
+
+    // Each baseline is audited with approver + timestamp.
+    const seeded = await consumerDb.db
+      .select()
+      .from(baselines)
+      .where(eq(baselines.testId, testId));
+    expect(seeded).toHaveLength(2);
+    for (const b of seeded) {
+      expect(b.approvedBy).toBe("system");
+      expect(b.approvedAt).not.toBeNull();
+    }
+  });
+
+  // Multi-checkpoint slice Issue 4 — in-viewer mask persist. A drawn mask is
+  // re-evaluated against the STORED baseline+actual (no re-run); persisting writes
+  // a new test_version and re-judges only this checkpoint; later runs honor the
+  // masks; other historical runs are untouched.
+  it("persisted masks re-judge the checkpoint, are honored by later runs, and leave other runs untouched", async () => {
+    type Cp = { name: string; reviewState: string; resolution: string | null; masks: unknown[] };
+    type Body = { status: string; checkpoints: Cp[] };
+    const hero = (b: Body) => b.checkpoints.find((c) => c.name === "hero") as Cp;
+    const poll = async (runId: string): Promise<Body> => {
+      for (let i = 0; i < 100; i++) {
+        const res = await request(app.getHttpServer()).get(`/runs/${runId}`).expect(200);
+        if (["passed", "needs_review", "failed"].includes(res.body.status)) return res.body as Body;
+        await sleep(200);
+      }
+      throw new Error("run did not reach a terminal status");
+    };
+
+    fixture.setVariant("default");
+    const definition = {
+      name: "mask persist test",
+      viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+      steps: [
+        { type: "navigate", url: fixture.url },
+        {
+          type: "screenshot",
+          name: "hero",
+          target: { tag: "div", attributes: { id: "hero" }, text: "Hero" },
+        },
+      ],
+    };
+    const test = await request(app.getHttpServer()).post("/tests").send(definition).expect(201);
+    const testId = test.body.id as string;
+
+    // Run 1 — seed the baseline (blue) and approve it.
+    const r1 = await request(app.getHttpServer()).post("/runs").send({ testId }).expect(201);
+    const run1 = r1.body.runId as string;
+    await poll(run1);
+    await request(app.getHttpServer())
+      .post(`/runs/${run1}/checkpoints/hero/approve`)
+      .expect(201);
+
+    // Run 2 — the element changes colour → a real diff.
+    fixture.setVariant("changed");
+    const r2 = await request(app.getHttpServer()).post("/runs").send({ testId }).expect(201);
+    const run2 = r2.body.runId as string;
+    const before = await poll(run2);
+    expect(hero(before).reviewState).toBe("diff");
+    expect(hero(before).masks).toHaveLength(0);
+
+    // The fixture changes the whole element, so a full-cover mask neutralises it.
+    // Oversized rect is fine — the diff-engine clamps masks to the image bounds.
+    const masks = [{ x: 0, y: 0, width: 300, height: 200 }];
+
+    // Re-evaluate (preview): matches now, but mutates nothing.
+    const preview = await request(app.getHttpServer())
+      .post(`/runs/${run2}/checkpoints/hero/re-evaluate`)
+      .send({ masks })
+      .expect(201);
+    expect(preview.body.verdict).toBe("match");
+    expect(typeof preview.body.diffImage).toBe("string");
+    const unchanged = await request(app.getHttpServer()).get(`/runs/${run2}`).expect(200);
+    expect(hero(unchanged.body as Body).reviewState).toBe("diff"); // preview did not persist
+
+    // Persist: re-judges this checkpoint to passed and writes a new version.
+    const persisted = await request(app.getHttpServer())
+      .post(`/runs/${run2}/checkpoints/hero/persist`)
+      .send({ masks })
+      .expect(201);
+    expect(persisted.body.reviewState).toBe("passed");
+    expect(persisted.body.version).toBe(2);
+
+    // run2 is now passed, exposes the persisted mask, and left the needs-review list.
+    const after = await request(app.getHttpServer()).get(`/runs/${run2}`).expect(200);
+    expect(hero(after.body as Body).reviewState).toBe("passed");
+    expect(hero(after.body as Body).masks).toHaveLength(1);
+    const list = await request(app.getHttpServer()).get("/runs/needs-review").expect(200);
+    expect(
+      (list.body as { runId: string; checkpointName: string }[]).some(
+        (i) => i.runId === run2 && i.checkpointName === "hero",
+      ),
+    ).toBe(false);
+
+    // Run 3 — still the changed colour, but the persisted mask is honored → passes.
+    const r3 = await request(app.getHttpServer()).post("/runs").send({ testId }).expect(201);
+    const run3 = r3.body.runId as string;
+    const third = await poll(run3);
+    expect(third.status).toBe("passed");
+    expect(hero(third).reviewState).toBe("passed");
+
+    // Run 1's verdict is untouched by the persist.
+    const firstAgain = await request(app.getHttpServer()).get(`/runs/${run1}`).expect(200);
+    expect(hero(firstAgain.body as Body).resolution).toBe("approved");
+
+    fixture.setVariant("default");
+  });
+
+  // Multi-checkpoint slice Issue 5 — in-viewer threshold tuning. Persisting a
+  // threshold (no masks) re-judges this checkpoint and is honored by later runs:
+  // a diff that the default threshold rejects passes under the persisted one.
+  it("persists a threshold that re-judges the checkpoint and is honored by a later run", async () => {
+    type Cp = { name: string; reviewState: string };
+    type Body = { status: string; checkpoints: Cp[] };
+    const hero = (b: Body) => b.checkpoints.find((c) => c.name === "hero") as Cp;
+    const poll = async (runId: string): Promise<Body> => {
+      for (let i = 0; i < 100; i++) {
+        const res = await request(app.getHttpServer()).get(`/runs/${runId}`).expect(200);
+        if (["passed", "needs_review", "failed"].includes(res.body.status)) return res.body as Body;
+        await sleep(200);
+      }
+      throw new Error("run did not reach a terminal status");
+    };
+
+    fixture.setVariant("default");
+    const definition = {
+      name: "threshold tuning test",
+      viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+      steps: [
+        { type: "navigate", url: fixture.url },
+        {
+          type: "screenshot",
+          name: "hero",
+          target: { tag: "div", attributes: { id: "hero" }, text: "Hero" },
+        },
+      ],
+    };
+    const test = await request(app.getHttpServer()).post("/tests").send(definition).expect(201);
+    const testId = test.body.id as string;
+
+    // Seed (blue) + approve.
+    const r1 = await request(app.getHttpServer()).post("/runs").send({ testId }).expect(201);
+    await poll(r1.body.runId as string);
+    await request(app.getHttpServer())
+      .post(`/runs/${r1.body.runId}/checkpoints/hero/approve`)
+      .expect(201);
+
+    // Recolour → diff under the default threshold.
+    fixture.setVariant("changed");
+    const r2 = await request(app.getHttpServer()).post("/runs").send({ testId }).expect(201);
+    const run2 = r2.body.runId as string;
+    expect(hero(await poll(run2)).reviewState).toBe("diff");
+
+    // Persist a permissive threshold (admits any diff) — re-judges this checkpoint to passed.
+    const persisted = await request(app.getHttpServer())
+      .post(`/runs/${run2}/checkpoints/hero/persist`)
+      .send({ threshold: 1 })
+      .expect(201);
+    expect(persisted.body.reviewState).toBe("passed");
+
+    // A later run honors the persisted threshold: the same colour change now passes
+    // (it would be needs_review under the default threshold).
+    const r3 = await request(app.getHttpServer()).post("/runs").send({ testId }).expect(201);
+    const third = await poll(r3.body.runId as string);
+    expect(third.status).toBe("passed");
+    expect(hero(third).reviewState).toBe("passed");
+
+    fixture.setVariant("default");
+  });
+
+  // Multi-checkpoint slice Issue 3 — recorder masking. A mask recorded onto the
+  // screenshot step (in screenshot-pixel space) suppresses a volatile sub-region:
+  // the same change that makes an unmasked checkpoint diff leaves a masked one clean.
+  it("honors recorded masks: a masked volatile sub-region does not diff (unmasked does)", async () => {
+    type Body = { status: string };
+    const poll = async (runId: string): Promise<Body> => {
+      for (let i = 0; i < 100; i++) {
+        const res = await request(app.getHttpServer()).get(`/runs/${runId}`).expect(200);
+        if (["passed", "needs_review", "failed"].includes(res.body.status)) return res.body as Body;
+        await sleep(200);
+      }
+      throw new Error("run did not reach a terminal status");
+    };
+    const target = { tag: "div", attributes: { id: "hero" }, text: "Hero" };
+    // The volatile sub-region (#stamp) sits at the element's top-left, 80×30 (DPR 1).
+    const stampMask = { x: 0, y: 0, width: 80, height: 30 };
+
+    const seedRunApprove = async (testId: string) => {
+      const r = await request(app.getHttpServer()).post("/runs").send({ testId }).expect(201);
+      await poll(r.body.runId as string);
+      await request(app.getHttpServer())
+        .post(`/runs/${r.body.runId}/checkpoints/hero/approve`)
+        .expect(201);
+    };
+
+    // Masked checkpoint and an unmasked control, both seeded on stampA (green stamp).
+    fixture.setVariant("stampA");
+    const masked = await request(app.getHttpServer())
+      .post("/tests")
+      .send({
+        name: "masked stamp",
+        viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+        steps: [
+          { type: "navigate", url: fixture.url },
+          { type: "screenshot", name: "hero", target, masks: [stampMask] },
+        ],
+      })
+      .expect(201);
+    const control = await request(app.getHttpServer())
+      .post("/tests")
+      .send({
+        name: "unmasked stamp",
+        viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+        steps: [
+          { type: "navigate", url: fixture.url },
+          { type: "screenshot", name: "hero", target },
+        ],
+      })
+      .expect(201);
+    await seedRunApprove(masked.body.id as string);
+    await seedRunApprove(control.body.id as string);
+
+    // stampB recolours ONLY the stamp sub-region.
+    fixture.setVariant("stampB");
+    const maskedRun = await request(app.getHttpServer())
+      .post("/runs")
+      .send({ testId: masked.body.id })
+      .expect(201);
+    const controlRun = await request(app.getHttpServer())
+      .post("/runs")
+      .send({ testId: control.body.id })
+      .expect(201);
+
+    // The mask hides the changed region → passes; the control sees it → needs review.
+    expect((await poll(maskedRun.body.runId as string)).status).toBe("passed");
+    expect((await poll(controlRun.body.runId as string)).status).toBe("needs_review");
+
+    fixture.setVariant("default");
   });
 
   // Visual-review-ui Issue 1 TB1 — the read-model carries the reviewer's identifying context.

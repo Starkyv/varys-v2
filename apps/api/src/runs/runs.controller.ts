@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Inject, Param, Post } from "@nestjs/common";
+import type { TuningInput } from "@varys/review-contract";
 import { RunsService } from "./runs.service";
 
 @Controller("runs")
@@ -23,6 +24,11 @@ export class RunsController {
     return this.runs.getById(id);
   }
 
+  @Post(":id/approve-all")
+  approveAll(@Param("id") id: string) {
+    return this.runs.approveAll(id);
+  }
+
   @Post(":id/checkpoints/:name/approve")
   approve(@Param("id") id: string, @Param("name") name: string) {
     return this.runs.approve(id, name);
@@ -31,5 +37,27 @@ export class RunsController {
   @Post(":id/checkpoints/:name/reject")
   reject(@Param("id") id: string, @Param("name") name: string) {
     return this.runs.reject(id, name);
+  }
+
+  // Preview: re-diff the stored baseline+actual with candidate masks/threshold.
+  // No mutation, no re-run.
+  @Post(":id/checkpoints/:name/re-evaluate")
+  reEvaluate(
+    @Param("id") id: string,
+    @Param("name") name: string,
+    @Body() body: TuningInput,
+  ) {
+    return this.runs.reEvaluate(id, name, body ?? {});
+  }
+
+  // Commit: write a new test_version with the masks/threshold and re-judge this
+  // checkpoint's run_result.
+  @Post(":id/checkpoints/:name/persist")
+  persist(
+    @Param("id") id: string,
+    @Param("name") name: string,
+    @Body() body: TuningInput,
+  ) {
+    return this.runs.persistMasks(id, name, body ?? {});
   }
 }

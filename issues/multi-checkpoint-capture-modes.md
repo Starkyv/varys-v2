@@ -15,15 +15,15 @@
 >
 > **Dependency shape:** `{1, 2}` can start immediately; `1 → {3, 4}`; `4 → 5`.
 >
-> **Status: 🟡 In progress.**
+> **Status: 🟡 Wrapping up — all issues implemented; Issue 4's HITL UX review is the last gate.**
 >
 > | Issue | Status |
 > |---|---|
 > | 1 — Capture modes (full-page & region) | ✅ Done |
-> | 2 — Bulk "approve all in run" | ⬜ Not started |
-> | 3 — Recorder masking | ⬜ Not started |
-> | 4 — In-viewer masking + re-evaluation + persist | ⬜ Not started |
-> | 5 — In-viewer threshold tuning | ⬜ Not started |
+> | 2 — Bulk "approve all in run" | ✅ Done |
+> | 3 — Recorder masking | ✅ Done |
+> | 4 — In-viewer masking + re-evaluation + persist | 🟡 Implemented — HITL UX review pending |
+> | 5 — In-viewer threshold tuning | ✅ Done |
 
 ---
 
@@ -63,7 +63,7 @@ None - can start immediately.
 
 # Issue 2 — Bulk "approve all in run"
 
-**Type:** AFK
+**Type:** AFK · **Status: ✅ Done**
 
 ## What to build
 
@@ -78,12 +78,12 @@ is unchanged; bulk reject is out of scope.
 
 ## Acceptance criteria
 
-- [ ] An approve-all-in-run action approves every `pending-baseline`/`diff` checkpoint in a run in one operation.
-- [ ] Passing and already-decided checkpoints are untouched by bulk approve.
-- [ ] Each baseline seeded/replaced by a bulk approve records approver + timestamp (audited like a single approve).
-- [ ] The viewer's "Approve all" is reachable only after clearing the irreversible hard-confirm, worded for replacing multiple baselines.
-- [ ] After bulk approve, every approved checkpoint leaves the needs-review list and the run reflects its new state.
-- [ ] MSW component test: "Approve all" is gated by the confirm and fires the bulk request; API full-thread E2E: a multi-checkpoint run is fully resolved by one bulk approve, with per-baseline audit.
+- [x] An approve-all-in-run action approves every `pending-baseline`/`diff` checkpoint in a run in one operation. *(`POST /runs/:id/approve-all` → `RunsService.approveAll`, reusing the single-approve path per checkpoint.)*
+- [x] Passing and already-decided checkpoints are untouched by bulk approve. *(candidate filter: `reviewState ∈ {pending-baseline,diff}` AND `resolution IS NULL`.)*
+- [x] Each baseline seeded/replaced by a bulk approve records approver + timestamp (audited like a single approve). *(inherits single-approve audit.)*
+- [x] The viewer's "Approve all" is reachable only after clearing the irreversible hard-confirm, worded for replacing multiple baselines. *(run-level `RunApproveAll` control + confirm dialog.)*
+- [x] After bulk approve, every approved checkpoint leaves the needs-review list and the run reflects its new state. *(mutation invalidates run + needs-review queries.)*
+- [x] API full-thread E2E: a multi-checkpoint run is fully resolved by one bulk approve, with per-baseline audit and already-decided checkpoints untouched. *(MSW component test intentionally skipped per direction — UI-level tests are out of scope for this slice.)*
 
 ## Blocked by
 
@@ -93,7 +93,7 @@ None - can start immediately *(operates on the existing multi-checkpoint plumbin
 
 # Issue 3 — Recorder masking: draw masks while designating a checkpoint
 
-**Type:** AFK
+**Type:** AFK · **Status: ✅ Done** *(extension drawing UX is manual-verified — no MV3 E2E harness.)*
 
 ## What to build
 
@@ -105,10 +105,16 @@ changes every run produces no diff from the very first run. Each checkpoint keep
 
 ## Acceptance criteria
 
-- [ ] The recorder/extension lets the author draw mask rectangles in the same gesture as designating a checkpoint.
-- [ ] The emitted screenshot step carries the drawn masks as rectangles; each checkpoint has its own masks.
-- [ ] A recorded checkpoint with a mask over a region that changes every run does not produce a diff.
-- [ ] Recorder unit tests assert masks appear on the emitted definition; an API full-thread E2E proves a masked dynamic region (via fixture-app variants) does not diff.
+- [x] The recorder/extension lets the author draw mask rectangles in the same gesture as designating a checkpoint. *(after picking element/region/full-page, a mask-drawing phase: drag rects within the capture bounds → Done; Esc skips.)*
+- [x] The emitted screenshot step carries the drawn masks as rectangles; each checkpoint has its own masks. *(`CheckpointSpec.masks` → forwarded onto the step; omitted when empty.)*
+- [x] A recorded checkpoint with a mask over a region that changes every run does not produce a diff. *(runner already honors `step.masks` via the diff-engine.)*
+- [x] Recorder unit test asserts masks appear on the emitted definition; API full-thread E2E proves a masked dynamic sub-region (fixture `stampA`/`stampB`) does not diff while an unmasked control does.
+
+## Implementation notes
+
+- **Recorder package:** `CheckpointSpec` gains an optional `masks?: Rect[]` per variant; `checkpoint()` forwards them onto the screenshot step. The content script computes mask rectangles in **screenshot-pixel space**: it draws in displayed CSS pixels within the capture bounds, then converts by `× devicePixelRatio` (and, for full-page only, adds the scroll offset since that capture starts at page 0,0).
+- **Extension UX (manual-verified):** picking a target enters a mask-drawing phase with a floating Done / Clear / Cancel banner; this is the same family of surface as the recorder overlay and is worth a glance alongside Issue 4's HITL review.
+- **Fixture:** added `stampA`/`stampB` variants — a stable hero with one volatile sub-region (`#stamp`), so a mask over that region isolates the masking behavior in the E2E.
 
 ## Blocked by
 
@@ -137,14 +143,20 @@ other historical runs.
 
 ## Acceptance criteria
 
-- [ ] `CheckpointView` exposes the checkpoint's current masks; the viewer renders them and lets the reviewer add/remove mask rectangles.
-- [ ] Changing masks triggers a re-evaluate that re-diffs the stored baseline+actual and shows the new score/verdict/diff image — with no new actual captured (no re-run).
-- [ ] Persisting masks writes a new `test_version` with the updated masks, audited with approver + timestamp.
-- [ ] Persisting re-evaluates the current checkpoint; one now within threshold flips to `passed` and leaves the needs-review list.
-- [ ] A subsequent run of the test honors the persisted masks (a region that diffed no longer diffs).
-- [ ] No other historical run's verdict is changed by a persist.
-- [ ] MSW component test: drawing a mask fires a re-eval request and renders the previewed verdict; persist fires the commit request. Browser E2E over the real stack: draw a mask on a diffing checkpoint → it re-evaluates within threshold → persist → the next run honors it.
-- [ ] The mask-drawing interaction passes human UX review (HITL gate) before merge.
+- [x] `CheckpointView` exposes the checkpoint's current masks; the viewer renders them and lets the reviewer add/remove mask rectangles. *(masks sourced from the latest test version; `MaskEditor` draws/lists/removes rects.)*
+- [x] Changing masks triggers a re-evaluate that re-diffs the stored baseline+actual and shows the new score/verdict/diff image — with no new actual captured (no re-run). *(`POST …/re-evaluate` → diff-engine on stored bytes; transient diff as a data URL.)*
+- [x] Persisting masks writes a new `test_version` with the updated masks, audited with approver + timestamp. *(`POST …/persist`; `test_versions.created_by` + `created_at`.)*
+- [x] Persisting re-evaluates the current checkpoint; one now within threshold flips to `passed` and leaves the needs-review list.
+- [x] A subsequent run of the test honors the persisted masks (a region that diffed no longer diffs). *(runs use the latest version's masks.)*
+- [x] No other historical run's verdict is changed by a persist. *(only this run_result is updated.)*
+- [x] API full-thread E2E: draw a mask on a diffing checkpoint → re-evaluate within threshold → persist → the next run honors it; other runs untouched. *(MSW component + browser E2E skipped per direction — UI-level tests out of scope.)*
+- [ ] **The mask-drawing interaction passes human UX review (HITL gate) before merge.** ← open
+
+## Implementation notes
+
+- **Decisions:** two endpoints (`re-evaluate` preview = no mutation; `persist` = commit). `CheckpointView.masks` comes from the **latest** test version (so the editor shows the *current* masks, reflecting a prior persist). Persist branches from the latest version and audits via new `test_versions.created_by`. Both endpoints accept an optional `threshold` so **Issue 5 reuses the same surface**.
+- **Masks are in screenshot-pixel (natural image) space.** The editor draws in displayed space and converts via the image's natural/displayed ratio, positioning overlays with percentages so they track the responsively-scaled image.
+- **Fixture limitation in the E2E:** the `changed` variant recolors the whole `#hero` element, so the test masks the full element to force a match. A sub-region mask scenario needs a fixture variant that changes only part of an element.
 
 ## Blocked by
 
@@ -154,7 +166,7 @@ other historical runs.
 
 # Issue 5 — In-viewer threshold tuning
 
-**Type:** AFK
+**Type:** AFK · **Status: ✅ Done**
 
 ## What to build
 
@@ -166,11 +178,15 @@ current checkpoint, exactly as masking does. No re-run.
 
 ## Acceptance criteria
 
-- [ ] The viewer offers a per-checkpoint threshold control.
-- [ ] Changing the threshold triggers an instant re-evaluation of the stored artifacts (no re-run) and shows the new score/verdict.
-- [ ] Persisting writes the threshold into a new `test_version` and re-evaluates the current checkpoint.
-- [ ] A subsequent run uses the persisted threshold.
-- [ ] MSW component test: the threshold control fires a re-eval request and renders the previewed verdict; persist includes the threshold.
+- [x] The viewer offers a per-checkpoint threshold control. *(slider in `TuningEditor`, initialised to the checkpoint's current threshold.)*
+- [x] Changing the threshold triggers an instant re-evaluation of the stored artifacts (no re-run) and shows the new score/verdict. *(reuses Issue 4's `re-evaluate` with `{ masks, threshold }`.)*
+- [x] Persisting writes the threshold into a new `test_version` and re-evaluates the current checkpoint. *(reuses Issue 4's `persist`; the runner already reads `step.threshold`.)*
+- [x] A subsequent run uses the persisted threshold. *(covered by API E2E.)*
+- [x] API full-thread E2E: a persisted threshold re-judges the checkpoint and is honored by a later run. *(MSW component test skipped per direction — UI-level tests out of scope.)*
+
+## Implementation note
+
+Issue 5 is almost entirely additive UI: the re-evaluate/persist API surface (and `TuningInput.threshold`) was built in Issue 4, and the runner already honored `step.threshold`. The slice adds a threshold slider to the editor (so it tunes masks + threshold together) and one E2E proving the persisted threshold is honored.
 
 ## Blocked by
 

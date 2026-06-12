@@ -22,6 +22,9 @@ export const testVersions = pgTable("test_versions", {
     .references(() => tests.id),
   version: integer("version").notNull(),
   definition: jsonb("definition").notNull(),
+  /** Who authored this version (e.g. "system" for an in-viewer mask/threshold
+   *  persist). Audit pair with createdAt. Null for the original recording. */
+  createdBy: text("created_by"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -39,6 +42,8 @@ export const runs = pgTable("runs", {
     .references(() => testVersions.id),
   environmentId: uuid("environment_id"),
   status: text("status").notNull().default("queued"),
+  /** Why a `failed` run failed (the replay error) — null otherwise. */
+  error: text("error"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -115,16 +120,22 @@ CREATE TABLE IF NOT EXISTS test_versions (
   test_id uuid NOT NULL REFERENCES tests(id),
   version integer NOT NULL,
   definition jsonb NOT NULL,
+  created_by text,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+-- Bring an existing test_versions table (created before created_by) up to date.
+ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS created_by text;
 CREATE TABLE IF NOT EXISTS runs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   test_version_id uuid NOT NULL REFERENCES test_versions(id),
   environment_id uuid,
   status text NOT NULL DEFAULT 'queued',
+  error text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+-- Bring an existing runs table (created before the error column) up to date.
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS error text;
 CREATE TABLE IF NOT EXISTS run_results (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   run_id uuid NOT NULL REFERENCES runs(id),

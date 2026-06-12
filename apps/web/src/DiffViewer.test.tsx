@@ -19,6 +19,7 @@ const diffRun: RunView = {
   testName: "Checkout page",
   environment: "default",
   runTimestamp: "2026-06-12T10:00:00.000Z",
+  error: null,
   checkpoints: [
     {
       name: "hero",
@@ -28,6 +29,7 @@ const diffRun: RunView = {
       diffScore: 0.12,
       threshold: 0.01,
       healed: false,
+      masks: [],
       actualUrl: "http://localhost:3000/artifacts/actual",
       baselineUrl: "http://localhost:3000/artifacts/baseline",
       diffUrl: "http://localhost:3000/artifacts/diff",
@@ -41,6 +43,7 @@ const seedRun: RunView = {
   testName: "Checkout page",
   environment: "default",
   runTimestamp: "2026-06-12T10:00:00.000Z",
+  error: null,
   checkpoints: [
     {
       name: "hero",
@@ -50,6 +53,7 @@ const seedRun: RunView = {
       diffScore: null,
       threshold: 0.01,
       healed: false,
+      masks: [],
       actualUrl: "http://localhost:3000/artifacts/actual",
       baselineUrl: null,
       diffUrl: null,

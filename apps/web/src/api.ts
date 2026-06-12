@@ -1,4 +1,11 @@
-import type { NeedsReviewItem, RunView, TestSummary } from "@varys/review-contract";
+import type {
+  NeedsReviewItem,
+  PersistResult,
+  ReEvaluation,
+  RunView,
+  TestSummary,
+  TuningInput,
+} from "@varys/review-contract";
 
 /**
  * Base URL of the NestJS API. Same-origin ("") by default: the SPA and API are
@@ -47,6 +54,59 @@ export async function runTest(testId: string): Promise<{ runId: string }> {
     throw new Error(`Failed to start run (${res.status})`);
   }
   return (await res.json()) as { runId: string };
+}
+
+/** Approve every checkpoint in a run that still needs review, in one audited
+ *  action. Returns how many were approved. Throws on a non-2xx response. */
+export async function approveAllInRun(runId: string): Promise<{ approved: number }> {
+  const res = await fetch(`${API_BASE}/runs/${runId}/approve-all`, { method: "POST" });
+  if (!res.ok) {
+    throw new Error(`Failed to approve all in run (${res.status})`);
+  }
+  return (await res.json()) as { approved: number };
+}
+
+/** Preview a checkpoint's diff with candidate masks/threshold — re-diffs the
+ *  stored artifacts server-side (no re-run) and returns the new verdict + a
+ *  transient diff image. Mutates nothing. */
+export async function reEvaluateCheckpoint(
+  runId: string,
+  checkpointName: string,
+  input: TuningInput,
+): Promise<ReEvaluation> {
+  const res = await fetch(
+    `${API_BASE}/runs/${runId}/checkpoints/${encodeURIComponent(checkpointName)}/re-evaluate`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(`Failed to re-evaluate “${checkpointName}” (${res.status})`);
+  }
+  return (await res.json()) as ReEvaluation;
+}
+
+/** Commit masks/threshold: writes a new test version and re-judges this
+ *  checkpoint. Throws on failure so the caller can surface it. */
+export async function persistCheckpointMasks(
+  runId: string,
+  checkpointName: string,
+  input: TuningInput,
+): Promise<PersistResult> {
+  const res = await fetch(
+    `${API_BASE}/runs/${runId}/checkpoints/${encodeURIComponent(checkpointName)}/persist`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(`Failed to save masks for “${checkpointName}” (${res.status})`);
+  }
+  return (await res.json()) as PersistResult;
 }
 
 export type DecisionAction = "approve" | "reject";

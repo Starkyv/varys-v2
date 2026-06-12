@@ -38,6 +38,9 @@ importers:
       '@varys/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@varys/diff-engine':
+        specifier: workspace:*
+        version: link:../../packages/diff-engine
       '@varys/queue':
         specifier: workspace:*
         version: link:../../packages/queue

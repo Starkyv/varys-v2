@@ -233,9 +233,12 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
       .set({ status, updatedAt: new Date() })
       .where(eq(runs.id, runId));
   } catch (err) {
+    // Persist why it failed so the viewer can show it (a failed run captures no
+    // checkpoints, so the error message is all the reviewer has to go on).
+    const message = (err instanceof Error ? err.message : String(err)).slice(0, 2000);
     await db
       .update(runs)
-      .set({ status: "failed", updatedAt: new Date() })
+      .set({ status: "failed", error: message, updatedAt: new Date() })
       .where(eq(runs.id, runId));
     throw err;
   } finally {
