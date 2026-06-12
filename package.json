@@ -1,0 +1,21 @@
+{
+  "name": "varys",
+  "private": true,
+  "packageManager": "pnpm@10.14.0",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "turbo run test",
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.1",
+    "tsx": "^4.19.2",
+    "turbo": "^2.4.2",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild", "@swc/core"]
+  }
+}

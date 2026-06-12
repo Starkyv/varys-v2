@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.turbo/
+coverage/
+*.log
+.env
+.env.*
+test-results/
+playwright-report/
+*.tsbuildinfo
+
+# Local Claude Code / skills tooling — not part of the project
+.agents/
+.claude/
+skills-lock.json

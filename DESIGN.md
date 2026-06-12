@@ -1,0 +1,341 @@
+# Varys v2 — Design Decision Record
+
+> Visual-regression test automation platform: **record → baseline → rerun → compare**, with
+> a trace-powered timeline, folder/tag/suite organization, environment-agnostic recordings,
+> pluggable storage, and a phase-2 Claude/MCP authoring layer.
+>
+> This document is the durable output of a full design interview. Every decision below was
+> deliberately chosen, with the rejected alternatives and rationale considered at the time.
+> Status: **design locked, pre-implementation.** Greenfield — no v1 to migrate from.
+
+---
+
+## 0. Product in one paragraph
+
+A user installs a **Chrome extension** and records a test by interacting with *any* web app
+(their own product first, but the tool must work on apps they don't control). The extension
+captures a portable, environment-agnostic **test definition** (ordered steps + element
+fingerprints + checkpoints). A hosted backend **replays** that test server-side with
+Playwright, screenshots designated elements, and **diffs** them against an approved baseline
+per environment. Results land in a **test × environment dashboard**; failures are
+investigated via a **Playwright-trace timeline** and resolved in a **diff viewer**
+(approve → new baseline, or reject → regression). Tests are organized with **folders + tags +
+suites** and run **manually or on a schedule**. Later, **Claude (via an MCP server)** can
+author tests by driving a live session that Varys records.
+
+**MVP slice:** `record → replay → diff one element`. No timeline polish, folders, multi-env,
+or Claude in the first cut — just the core loop proven end-to-end.
+
+---
+
+## 1. Foundation
+
+| Decision | Choice |
+|---|---|
+| Prior art | **Greenfield** — no v1 to reuse or migrate |
+| Deployment | **Hosted, multi-user service** |
+| Database | **PostgreSQL + JSONB** (binary artifacts go to object storage, never the DB) |
+| Recorder architecture | **Chrome extension (capture) + Playwright (replay)** |
+| First slice | **record → replay → diff one element** |
+
+**Why Postgres:** the core data is a relational entity graph (tests → steps, runs → results,
+folders + tags + environments + members). The one document-shaped thing — a recorded test as
+an ordered step list with flexible per-step config — is handled by **JSONB columns**, giving
+document flexibility inside a relational store. Rejected: MongoDB (relational queries
+dominate), SQLite (single-writer, wrong for hosted multi-user), time-series DBs (run history
+isn't high-frequency telemetry).
+
+---
+
+## 2. Recorder internals
+
+### Element location (the robustness core)
+- **Stance:** app-agnostic core, **extensible to any app**, tuned so the datagenie product
+  works flawlessly. Must work on apps whose source we don't control.
+- **Locator engine:** capture a **multi-signal fingerprint** per element at record time —
+  `tag, role, accessible name, text, key attributes, ancestor chain, DOM index, neighbor/label
+  text, CSS-module classes, bounding box`. Ship a **simple ranked matcher for the MVP**, evolve
+  to **confidence-scored matching later — without re-recording** (the signals are already
+  stored). Capturing only a single selector is the one unrecoverable mistake.
+- **`data-testid`:** optional *top-weighted* signal when the app is owned; **never required**.
+  (The app under test currently has none.)
+- **CSS-module classes** (`*.module.scss` → hashed): **weak corroborating signal only**
+  (version-fragile, opaque). Weight goes on role/text/structure/neighbors.
+- **Self-heal:** below-threshold match → complete but **flag "low-confidence — review"**
+  (record which signal won); **no candidate clears the floor → hard-fail + surface for repair.**
+  Load-bearing for black-box targets, which have an irreducible flakiness floor.
+
+### Environment-agnostic variables
+Governing principle: **structure is static, data is variable, ask only about the ambiguous
+middle (typed values).**
+
+| Tier | Examples | Behavior |
+|---|---|---|
+| Always variable (auto) | navigation origin → `{{baseUrl}}`; `type=password` → `{{secret}}` | system decides |
+| Always static | URL path segments, clicks/hovers/scrolls, waits, DOM-structural selector parts | system decides |
+| Ambiguous | typed input values; selectors keyed off visible text | **inline one-tap confirm** with heuristic default |
+
+Heuristic default: data-shaped value (entity/dataset name, GUID, date, long id, free-text) →
+suggest **Variable**; short/enumerable UI value → suggest **Static**. **Selector guard:** warn
+if the chosen locator depends on env-specific visible text; bind it to the variable or drop to
+a structural locator. Variable *values* live in per-environment profiles, not in the test.
+
+### Wait conditions
+Composable **per-step primitives**: `fixed delay (ms)` · `network-idle` ·
+`wait-for-request/response matching a URL glob/regex (+ optional status)` ·
+`wait-for-selector appear/disappear/settle`. **Smart default before every screenshot:**
+auto network-idle + brief visual-stability check, overridable per step.
+
+### Screenshot-target selection
+Devtools-style **inspect mode**: activate capture → hover highlights → click to pick. Modes:
+**element / full-page / manual region.** Stores fingerprint + bounding box. **Dynamic
+sub-regions are masked in the same gesture** (feeds diff masking).
+
+### App-under-test authentication
+- **Login recorded as steps**, run **fresh once per run** (session reused across that run's
+  steps to avoid lockout/rate-limits). **No MFA** in scope.
+- Credentials → **per-environment encrypted secret vault** (envelope encryption/KMS),
+  decrypted only inside the runner — never in the client, UI, or logs.
+- Because the tool screen-records + captures network, secrets are scrubbed everywhere:
+  password input regions **redacted in video**; `Authorization` headers, cookies, and
+  auth-endpoint bodies **scrubbed from network capture**; variables surface as `{{secret:…}}`.
+
+---
+
+## 3. Step schema (the record ↔ replay ↔ diff ↔ DB contract)
+
+A recorded test is a **versioned JSONB document** (`test_versions.definition`) — authored/edited
+atomically, with history. **Single viewport** captured at record time, **chromium-only** for MVP.
+
+```ts
+Test {
+  id; name; description
+  viewport: { width; height; deviceScaleFactor }   // captured at record time
+  browser: 'chromium'
+  variables: Variable[]                            // declared tokens; values live per-env
+  steps: Step[]                                    // ordered
+}
+Variable { name; kind: 'url' | 'data' | 'secret' }
+
+StepCommon { id; index; waitBefore?: Wait[]; note? }
+Navigate   = StepCommon & { type:'navigate'; url:string /* "{{baseUrl}}/dashboard" */ }
+Interact   = StepCommon & {
+  type:'click'|'hover'|'scroll'|'type'|'select'|'press'
+  target: Fingerprint
+  value?: string          // literal | "{{dataset}}" | "{{secret:password}}"
+}
+Screenshot = StepCommon & {
+  type:'screenshot'; name: string  // checkpoint name → part of the baseline key
+  captureMode:'element'|'fullpage'|'region'
+  target?: Fingerprint; rect?: Rect
+  masks?: (Fingerprint | Rect)[]; threshold?: number
+}
+
+type Wait =
+  | { kind:'delay'; ms:number }
+  | { kind:'networkIdle'; timeoutMs? }
+  | { kind:'request'|'response'; urlPattern:string; status?; timeoutMs? }
+  | { kind:'selector'; target:Fingerprint; state:'visible'|'hidden'|'stable'; timeoutMs? }
+
+Fingerprint {
+  testId?; role?; accessibleName?; text?; tag
+  attributes?; ancestors?: { tag; role? }[]
+  domIndex?; neighborText?: string[]; moduleClasses?: string[]; boundingBox?: Rect
+}
+```
+
+**Postgres tables** (artifacts → storage adapter, everything else relational + JSONB):
+
+| Table | Notes |
+|---|---|
+| `tests` → `test_versions(definition jsonb)` | versioned test document |
+| `environments` | dev / demo / lnrs / cfg / carvana |
+| `environment_profiles(values jsonb)` | per-env variable values; secrets encrypted/ref'd |
+| `runs` | (test_version, env, status, timing) |
+| `run_results` | per-checkpoint: status, diff_score, confidence, healed_selector?, artifact refs |
+| `baselines` | keyed `(test, checkpoint_name, env, viewport)` → artifact ref + approval; current only |
+| `artifacts` | blob refs only (video, baseline, actual, diff images, traces) |
+
+---
+
+## 4. Baseline lifecycle
+
+**Critical principle: recording ≠ baseline.** The extension captures in the *user's* browser
+(their fonts/DPR/AA); replay happens in *server-side Playwright* (headless Linux, bundled
+fonts). Those render differently, so **the baseline must be generated by the same engine that
+replays.** The recording's screenshot is a *target + preview + mask surface*, not the golden.
+
+```
+1. RECORD   (client/extension) → test definition: steps, fingerprints, targets, masks, waits, vars
+2. SEED     (server/Playwright) → first replay per environment captures the GOLDEN baselines
+3. APPROVE  → human eyeballs seeded baselines once → test goes active
+4. RUN      (server/Playwright) → compare actual vs approved baseline
+5. ON DIFF  → review → APPROVE (new baseline) or REJECT (regression/bug)
+```
+
+- **First baseline:** auto-seed → stays *pending* → **one-time human approval** → active.
+- **Approval authority:** any project member, **audited** (who + when + old→new).
+- **History:** **current only** — old baseline **deleted on replacement → no rollback.**
+  Approval is therefore irreversible; **the approve action gets a hard confirm** ("permanently
+  replaces the baseline — no undo"). *(Accepted risk #1.)*
+- **Determinism pinning** (asserted, non-negotiable): pinned runner image — same chromium
+  version, same fonts, fixed viewport/DPR, animations frozen (`prefers-reduced-motion` + CSS
+  freeze), dynamic regions masked.
+- **Per-env baselines** seed independently (data differs across environments).
+- The **diff viewer** does double duty: step-3 initial approval *and* step-5 diff resolution.
+
+---
+
+## 5. Organization model
+
+- **Tenancy:** single-org internal, **multi-tenant-ready** (`org_id` on the root so multi-tenant
+  is a later flip, not a migration). `Org → Projects → Members`; environments + tests scoped to
+  a Project.
+- **Grouping:** **folders** (one browsable home per test) + **tags** (many-to-many slicing:
+  `release:5.0`, `feature:dashboard`, custom) + **suites** (a saved selection = the run unit).
+  Folders = where it lives; tags = how you slice/run it.
+- **Two axes:** *what* to run (selection) × *where* to run (environment).
+  **customer = environment** (lnrs/cfg/carvana are deployments, not folders).
+  A run = `suite × env(s)`.
+
+---
+
+## 6. Playback infrastructure
+
+- **Shape:** API control plane → **Postgres-backed job queue** (pg-boss / `SKIP LOCKED`) →
+  horizontally-scalable pool of **pinned-chromium Playwright worker containers**. Each
+  **test-job = fresh browser context + fresh login + sequential steps**, with per-step/test
+  timeouts.
+- **Parallelism:** **test-level fan-out/fan-in** — a suite-run becomes one job per test across
+  the pool (concurrency capped by pool size), aggregated into a parent run report. Steps within
+  a test stay sequential.
+- **Triggers (MVP):** **manual + scheduled (cron).** API/CI webhook is a fast-follow (same rail,
+  extra doorway). A schedule = `(suite) × (env(s)) × (when)`.
+- **Retries:** **retry errors (default 1×, fresh attempt), never retry diffs** (a diff is a real
+  result, not a fluke). Statuses: `passed` / `passed-with-heal-flag` / `diff (needs review)` /
+  `error (retrying)` / `failed (errors exhausted)`.
+
+---
+
+## 7. Storage & artifact retention
+
+- **`StorageAdapter`** interface (`put / get / getUrl / delete`). **Local FS for MVP**;
+  **Azure Blob + S3** later, chosen by **env var**. `getUrl(key)` → signed blob URL (cloud) or
+  authenticated API route (local) — the UI doesn't care. Path-addressed keys:
+  `org/project/test/checkpoint/env/viewport/{baseline | run-<id>}/{kind}.png`.
+- **Retention: tiered by outcome** — failed/diff artifacts kept ~90d, passing ~7d, baselines
+  while current (configurable defaults).
+- **Old baseline on approval: deleted immediately → no rollback** (consistent with §4).
+- **Video: off by default; recorded only when toggled on per test.** *Checkpoints
+  (screenshots + action markers) are always captured regardless* — so the timeline always has
+  markers, scrubbable video only when toggled.
+
+---
+
+## 8. Diff / comparison viewer
+
+- **View modes:** all four — **side-by-side, diff-highlight overlay, swipe slider,
+  onion-skin/blink — with a switchable control.**
+- **Review actions:** per-checkpoint approve/reject **+ bulk "approve all in run"**; every action
+  audited; **irreversible-confirm** on approve.
+- **In-viewer tuning:** **draw masks + nudge per-checkpoint threshold live, re-evaluate
+  instantly**; the mask/threshold persists to the test for future runs. (Primary defense against
+  false-positive fatigue.)
+
+---
+
+## 9. Timeline UI
+
+- **Powered by Playwright traces** (per-step before/after screenshots, DOM snapshot, network,
+  console — timestamped + scrubbable), with **optional video** layered in when toggled on. A
+  trace is a richer "what went wrong" record than video.
+- **Trace retention:** retain-on-failure **+ every baseline-seed** (this honors the transcript's
+  "baseline auto-recorded" via the seed *trace*, not video).
+- **Embed Playwright's Trace Viewer** for the MVP; build a custom branded timeline later.
+
+---
+
+## 10. Run dashboard
+
+- **Hero view:** **test × environment status matrix** (cell = latest status → drill to run →
+  checkpoints → diff viewer), with a runs activity feed alongside.
+- **Alerts:** **Slack + in-app inbox** on diffs/failures (no email for MVP).
+- **History:** **per-checkpoint trend sparklines** so flaky/newly-broken checkpoints stand out.
+
+---
+
+## 11. Authentication & authorization
+
+- **Authorization:** **flat model** — every authenticated org member can do everything,
+  including create/edit environments + their login secrets. **No role gating for MVP.**
+  Hedges: keep a `role` column on membership (tighten later = config flip, not migration);
+  secrets remain encrypted-at-rest + scrubbed regardless. *(Accepted risk #2 — see below.)*
+- **Authentication:** **both** Google SSO (domain-restricted) **and** email/password,
+  **OIDC-ready**. Use a **proven auth library/provider, never hand-rolled.**
+
+---
+
+## 12. Tech stack
+
+| Layer | Choice |
+|---|---|
+| Language | **TypeScript** everywhere |
+| Repo | **pnpm + Turborepo monorepo**; shared packages: step-schema types, locator engine, storage adapter |
+| API | **NestJS** (guards fit RBAC, interceptors fit audit) |
+| Frontend | **React SPA (Vite)** + **TanStack Query** + **CSS Modules** |
+| Worker | separate **Playwright** service |
+| DB access | **Drizzle** (SQL-first, first-class JSONB) |
+| Extension | **WXT** (Vite-powered MV3, shares monorepo types) |
+| DB / queue / storage | Postgres / pg-boss / StorageAdapter (per above) |
+| Timeline | embed Playwright Trace Viewer |
+
+---
+
+## 13. Claude / MCP automation (phase 2)
+
+- **AI surface:** Varys ships an **MCP server, Claude-Code-driven** — exposes its primitives
+  (drive the live browser, take screenshots/checkpoints, create/save a draft test, run a test).
+- **Authoring mechanism:** Claude **drives a live session that Varys records** — exactly like a
+  human recording, reusing the full recorder pipeline (fingerprints, variables, waits). Claude
+  perceives the page via accessibility tree + screenshots the MCP returns. *(Not* direct JSON
+  emission — that guesses selectors without touching the real DOM.)
+- **Inputs:** **SRS/spec docs + Figma/design + live exploration** of the app.
+- **Safety:** **unrestricted, full trust** — no environment limits, no mutation
+  detection/gating. *(Accepted risk #2.)*
+- **Output workflow:** AI-authored test lands in a **draft** → **human reviews/edits** in the
+  recorder/diff UI → **promotes** into a folder + tags. (This is the one human checkpoint on AI
+  output.)
+
+---
+
+## ⚠️ Accepted risks (chosen knowingly)
+
+1. **Irreversible baseline approval** — old baselines are deleted on replace; a mistaken approval
+   is unrecoverable. Mitigation: hard confirm dialog on approve.
+2. **Unrestricted AI on live/customer-prod environments** — Claude may perform mutating actions
+   (submit/delete/pay) anywhere while authoring, and recorded mutations **replay unattended on
+   every scheduled run**, including customer production. No mutation flagging or gating.
+
+## 🔭 Explicitly deferred (post-MVP)
+
+Responsive multi-viewport · cross-browser (webkit/firefox) · API/CI webhook trigger ·
+per-project retention config · RBAC role-gating · multi-tenant isolation · custom timeline UI ·
+email notifications · "existing tests as examples" for AI · in-product embedded AI button.
+
+
+| #  | Slice                                 | Scope (one line)                                                                 | Depends on         |
+|----|---------------------------------------|----------------------------------------------------------------------------------|--------------------|
+| 1  | MVP ✅                                | Record → replay → diff one element (1 test, 1 env, manual, API review)          | —                  |
+| 2  | Visual review UI                      | Diff viewer (side-by-side + highlight) + in-browser approve/reject + irreversible confirm | 1          |
+| 3  | Multi-checkpoint + capture modes      | Many checkpoints/test, full-page & region modes, recorder/in-viewer masking     | 1                  |
+| 4  | Full multi-environment + variable UX  | Env management, per-env profiles, inline variable confirm, env-agnostic guarantees | 1               |
+| 5  | Organization                          | Folders + tags + suites (saved selection = run unit)                            | —                  |
+| 6  | Suite runs + parallelism              | Fan-out/fan-in, suite × env(s), aggregated run reports                          | 4, 5               |
+| 7  | Dashboard                             | Test × env matrix, runs activity feed, per-checkpoint trend sparklines          | 6                  |
+| 8  | Scheduling + notifications            | Cron triggers + Slack/in-app alerts on diffs/failures                           | 6                  |
+| 9  | Timeline + traces                     | Playwright trace capture, retention, embedded Trace Viewer                      | 1                  |
+| 10 | Auth & multi-user                     | Google SSO + email/password + OIDC, flat authz, audit surfacing                 | —                  |
+| 11 | Cloud storage + retention enforcement | Azure Blob + S3 adapters + tiered cleanup job                                   | —                  |
+| 12 | CI/webhook triggers                   | Pipeline-driven runs                                                            | 6                  |
+| 13 | Scored-locator upgrade                | Replace ranked matcher with confidence scoring (no re-record)                   | 1                  |
+| 14 | Claude/MCP authoring (Phase 2)        | MCP server → live-session authoring → draft → promote (likely 2 PRDs)           | Most of the above  |

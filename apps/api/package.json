@@ -1,0 +1,39 @@
+{
+  "name": "@varys/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "node dist/main.js",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.0.6",
+    "@nestjs/core": "^11.0.6",
+    "@nestjs/platform-express": "^11.0.6",
+    "@varys/db": "workspace:*",
+    "@varys/queue": "workspace:*",
+    "@varys/step-schema": "workspace:*",
+    "@varys/storage-adapter": "workspace:*",
+    "drizzle-orm": "^0.39.1",
+    "pg": "^8.13.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@nestjs/testing": "^11.0.6",
+    "@varys/fixture-app": "workspace:*",
+    "@varys/runner": "workspace:*",
+    "@swc/core": "^1.10.16",
+    "@testcontainers/postgresql": "^10.18.0",
+    "@types/pg": "^8.11.11",
+    "@types/supertest": "^6.0.2",
+    "supertest": "^7.0.0",
+    "testcontainers": "^10.18.0",
+    "unplugin-swc": "^1.5.1",
+    "vitest": "^3.0.5"
+  }
+}

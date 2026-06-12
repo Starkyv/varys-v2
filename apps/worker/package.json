@@ -1,0 +1,17 @@
+{
+  "name": "@varys/worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "node dist/main.js",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@varys/db": "workspace:*",
+    "@varys/queue": "workspace:*",
+    "@varys/runner": "workspace:*",
+    "@varys/storage-adapter": "workspace:*"
+  }
+}
