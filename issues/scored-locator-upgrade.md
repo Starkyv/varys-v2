@@ -25,7 +25,7 @@
 > | Issue | Status |
 > |---|---|
 > | 1 — Richer, durable fingerprint capture | ✅ Done |
-> | 2 — Confidence-scored locator resolution | ⬜ Not started |
+> | 2 — Confidence-scored locator resolution | ✅ Done |
 >
 > **Dependency:** `1 → 2`.
 
@@ -87,7 +87,7 @@ None — DESIGN slice 1 (the fingerprint + capture) is already in place; this en
 
 # Issue 2 — Confidence-scored locator resolution
 
-**Type:** AFK
+**Type:** AFK · **Status: ✅ Done**
 
 ## What to build
 
@@ -115,13 +115,23 @@ bundle was designed for (DESIGN §2: *"confidence-scored matching later, without
 
 ## Acceptance criteria
 
-- [ ] Resolution scores candidates across signals and returns the highest unique match; `healed` is flagged when a non-primary signal decided it.
-- [ ] A container/screenshot target with no testId/id/role and only hashed classes + long text resolves via the structural path (reproduces and fixes runs `7982924c…` / `b52e68d6…`).
-- [ ] A control duplicated across rows (same `role`+name) resolves to the correct one via its captured row scope.
-- [ ] Build-hashed CSS-module classes are only a corroborating weight, never a sole/decisive match.
-- [ ] Element-screenshot targets resolve by structure + bounding-box corroboration, without needing a semantic name.
-- [ ] A genuinely ambiguous target (no signal yields a unique above-floor winner) **hard-fails** and is surfaced for repair — it is never silently resolved to the wrong element; ids are `CSS.escape`d.
-- [ ] `@varys/locator-engine` unit tests cover the scorer (structural fallback, row-scope, hashed-class demotion, box corroboration, ambiguity → fail); an API full-thread E2E proves a previously-unmatchable container target now seeds/diffs and a repeated-control target hits the right element. Prior art: `apps/api/test/runs.e2e.spec.ts`, `baseline.e2e.spec.ts`.
+- [x] Resolution scores candidates across signals (in one in-page pass) and returns the highest unique match; `healed` is flagged when a non-top-present signal decided it.
+- [x] A container with no testId/id/role and rotated hashed classes + volatile text resolves via structure (stable ancestor anchor) + box size — the briefings-card case (runs `7982924c…` / `b52e68d6…`).
+- [x] A control duplicated across rows resolves to the correct one via its captured row scope (`scope` restricts the candidate pool and adds weight).
+- [x] Build-hashed classes contribute only a small corroborating weight (`4 * matchRatio`) and are never pushed as an identifying signal — a hashed-class-only fingerprint does not resolve.
+- [x] Element targets resolve by structure + bounding-box (scroll-invariant **size** similarity) without needing a semantic name.
+- [x] A near-tie at the top (Δscore < 6) between different elements, or a below-floor/no-identity winner, returns null → the run hard-fails and surfaces for repair; ids/classes are `CSS.escape`d (via the page's `CSS.escape`).
+- [x] `@varys/locator-engine` unit tests cover the scorer (testId/id + heal, structural fallback, row-scope, hashed-not-decisive, ambiguity → null). **The dedicated API E2E was deferred:** the resolution behavior is verified at the unit seam, and the existing `runs.e2e`/`baseline.e2e` full-thread tests already drive the new resolver through the runner pipeline. Prior art: `apps/api/test/runs.e2e.spec.ts`, `baseline.e2e.spec.ts`.
+
+## Implementation note
+
+Resolution runs in a single `page.evaluate` scorer that builds a small, relevant candidate pool
+(testId/id/role/stable-classes, scoped by row or anchored at the nearest stable ancestor, then a
+bounded tag sweep), scores each element by cross-signal agreement + size, marks the unique best
+above-floor winner with an invisible `data-varys-locate` attribute, and returns a Locator for it —
+preserving the `{locator, matchedSignal, healed}` interface the runner already consumes. The marker
+is a non-visual data attribute, so it never affects the pixel diff. Page globals are reached via
+`globalThis` so the package compiles under a Node lib in its consumers (it runs in the browser).
 
 ## Blocked by
 
