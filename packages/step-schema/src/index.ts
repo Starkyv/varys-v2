@@ -72,7 +72,13 @@ export type Wait = z.infer<typeof wait>;
 export const screenshotStep = z.object({
   type: z.literal("screenshot"),
   name: z.string().min(1),
-  target: fingerprint,
+  /** How the checkpoint is captured. Absent ⇒ `element` (back-compat). */
+  captureMode: z.enum(["element", "fullpage", "region"]).default("element"),
+  /** Required for `element` capture (enforced on the definition); the resolved
+   *  locator is screenshotted. */
+  target: fingerprint.optional(),
+  /** Required for `region` capture; the clipped rectangle (screenshot-pixel space). */
+  rect: rect.optional(),
   waitBefore: z.array(wait).optional(),
   /** Regions (in screenshot pixel space) the diff ignores. */
   masks: z.array(rect).optional(),
@@ -106,11 +112,34 @@ export const viewport = z.object({
   deviceScaleFactor: z.number().positive().default(1),
 });
 
-export const testDefinition = z.object({
-  name: z.string().min(1),
-  viewport,
-  steps: z.array(step).min(1),
-});
+export const testDefinition = z
+  .object({
+    name: z.string().min(1),
+    viewport,
+    steps: z.array(step).min(1),
+  })
+  // Per-mode requirements: element ⇒ target, region ⇒ rect, fullpage ⇒ neither.
+  // (Refined here rather than on screenshotStep so it stays a discriminated-union
+  // member on `type`.)
+  .superRefine((def, ctx) => {
+    def.steps.forEach((s, i) => {
+      if (s.type !== "screenshot") return;
+      if (s.captureMode === "element" && !s.target) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["steps", i, "target"],
+          message: "element capture requires a target",
+        });
+      }
+      if (s.captureMode === "region" && !s.rect) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["steps", i, "rect"],
+          message: "region capture requires a rect",
+        });
+      }
+    });
+  });
 
 export type Step = z.infer<typeof step>;
 export type NavigateStep = z.infer<typeof navigateStep>;

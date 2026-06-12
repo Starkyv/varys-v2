@@ -134,14 +134,27 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
 
       // Smart default: settle the network before capturing the checkpoint.
       await page.waitForLoadState("networkidle").catch(() => undefined);
-      const found = await resolve(page, step.target);
-      if (!found) {
-        throw new Error(
-          `could not locate checkpoint "${step.name}" — no fingerprint signal matched`,
-        );
+
+      // Capture by mode (absent ⇒ element, for back-compat). Element resolves the
+      // fingerprint locator; full-page captures the scrollable page; region clips a rect.
+      let actual: Buffer;
+      let healed = false;
+      if (step.captureMode === "fullpage") {
+        actual = await page.screenshot({ fullPage: true });
+      } else if (step.captureMode === "region") {
+        if (!step.rect) throw new Error(`region checkpoint "${step.name}" has no rect`);
+        actual = await page.screenshot({ clip: step.rect });
+      } else {
+        if (!step.target) throw new Error(`element checkpoint "${step.name}" has no target`);
+        const found = await resolve(page, step.target);
+        if (!found) {
+          throw new Error(
+            `could not locate checkpoint "${step.name}" — no fingerprint signal matched`,
+          );
+        }
+        actual = await found.locator.screenshot();
+        healed = found.healed;
       }
-      const actual = await found.locator.screenshot();
-      const healed = found.healed;
       const actualKey = `runs/${runId}/${step.name}.png`;
       await storage.put(actualKey, actual);
       const threshold = step.threshold ?? DEFAULT_THRESHOLD;

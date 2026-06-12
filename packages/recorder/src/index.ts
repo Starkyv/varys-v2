@@ -1,9 +1,15 @@
-import type { Fingerprint, TestDefinition, Viewport } from "@varys/step-schema";
+import type { Fingerprint, Rect, TestDefinition, Viewport } from "@varys/step-schema";
 
 export type CaptureFn = (el: Element) => Fingerprint;
 
+/** How to capture a checkpoint: an element (default), a drawn region, or the full page. */
+export type CheckpointSpec =
+  | { mode?: "element"; el: Element }
+  | { mode: "region"; rect: Rect }
+  | { mode: "fullpage" };
+
 export interface RecordedSession {
-  checkpoint(el: Element, name: string): void;
+  checkpoint(name: string, spec: CheckpointSpec): void;
   getDefinition(name: string, viewport: Viewport): TestDefinition;
   /** Number of steps recorded so far (navigate + clicks + types + screenshots). */
   stepCount(): number;
@@ -51,8 +57,14 @@ export function startRecorder(
   doc.addEventListener("change", onChange, true);
 
   return {
-    checkpoint(el, name) {
-      steps.push({ type: "screenshot", name, target: capture(el) });
+    checkpoint(name, spec) {
+      if (spec.mode === "fullpage") {
+        steps.push({ type: "screenshot", name, captureMode: "fullpage" });
+      } else if (spec.mode === "region") {
+        steps.push({ type: "screenshot", name, captureMode: "region", rect: spec.rect });
+      } else {
+        steps.push({ type: "screenshot", name, captureMode: "element", target: capture(spec.el) });
+      }
     },
     getDefinition(name, viewport) {
       return { name, viewport, steps: [...steps] };

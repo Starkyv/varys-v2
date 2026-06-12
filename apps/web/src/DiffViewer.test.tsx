@@ -23,6 +23,7 @@ const diffRun: RunView = {
     {
       name: "hero",
       reviewState: "diff",
+      captureMode: "element",
       resolution: null,
       diffScore: 0.12,
       threshold: 0.01,
@@ -44,6 +45,7 @@ const seedRun: RunView = {
     {
       name: "hero",
       reviewState: "pending-baseline",
+      captureMode: "element",
       resolution: null,
       diffScore: null,
       threshold: 0.01,
@@ -81,6 +83,18 @@ describe("DiffViewer", () => {
     // ...and back, without re-fetching (same checkpoint).
     await userEvent.click(screen.getByRole("button", { name: /side by side/i }));
     expect(screen.getByRole("img", { name: "baseline" })).toBeInTheDocument();
+  });
+
+  it("shows each checkpoint's capture mode", async () => {
+    const fullpageRun: RunView = {
+      ...diffRun,
+      checkpoints: [{ ...diffRun.checkpoints[0], captureMode: "fullpage" }],
+    };
+    server.use(http.get(`${API_BASE}/runs/run-1`, () => HttpResponse.json(fullpageRun)));
+
+    renderWithClient(<DiffViewer runId="run-1" />);
+
+    expect(await screen.findByText(/full page/i)).toBeInTheDocument();
   });
 
   it("shows the server-computed verdict metadata (diff score, threshold, healed)", async () => {

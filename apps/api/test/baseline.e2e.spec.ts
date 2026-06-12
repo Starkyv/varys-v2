@@ -341,6 +341,78 @@ describe("Baseline lifecycle", () => {
     expect(rerun.checkpoints[0].reviewState).toBe("passed");
   });
 
+  // Slice 3 Issue 1 — full-page capture: seeds + diffs like an element checkpoint.
+  it("a full-page checkpoint seeds a baseline and diffs against it", async () => {
+    fixture.setVariant("default");
+    const definition = {
+      name: "full-page test",
+      viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+      steps: [
+        { type: "navigate", url: fixture.url },
+        { type: "screenshot", name: "page", captureMode: "fullpage" },
+      ],
+    };
+    const test = await request(app.getHttpServer())
+      .post("/tests")
+      .send(definition)
+      .expect(201);
+    const approvePage = (runId: string) =>
+      request(app.getHttpServer())
+        .post(`/runs/${runId}/checkpoints/page/approve`)
+        .expect(201);
+
+    const seed = await runToCompletion(test.body.id);
+    expect(seed.checkpoints[0]).toMatchObject({ name: "page", reviewState: "pending-baseline" });
+    expect(seed.checkpoints[0].actualUrl).toEqual(expect.any(String));
+    await approvePage(seed.runId);
+
+    const pass = await runToCompletion(test.body.id);
+    expect(pass.checkpoints[0].reviewState).toBe("passed");
+
+    fixture.setVariant("changed");
+    const diff = await runToCompletion(test.body.id);
+    fixture.setVariant("default");
+    expect(diff.checkpoints[0].reviewState).toBe("diff");
+  });
+
+  // Slice 3 Issue 1 — region capture: a clipped rect seeds + diffs like an element.
+  it("a region checkpoint seeds a baseline and diffs against it", async () => {
+    fixture.setVariant("default");
+    const definition = {
+      name: "region test",
+      viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+      steps: [
+        { type: "navigate", url: fixture.url },
+        {
+          type: "screenshot",
+          name: "area",
+          captureMode: "region",
+          rect: { x: 24, y: 24, width: 240, height: 120 }, // the #hero box
+        },
+      ],
+    };
+    const test = await request(app.getHttpServer())
+      .post("/tests")
+      .send(definition)
+      .expect(201);
+    const approveArea = (runId: string) =>
+      request(app.getHttpServer())
+        .post(`/runs/${runId}/checkpoints/area/approve`)
+        .expect(201);
+
+    const seed = await runToCompletion(test.body.id);
+    expect(seed.checkpoints[0]).toMatchObject({ name: "area", reviewState: "pending-baseline" });
+    await approveArea(seed.runId);
+
+    const pass = await runToCompletion(test.body.id);
+    expect(pass.checkpoints[0].reviewState).toBe("passed");
+
+    fixture.setVariant("changed");
+    const diff = await runToCompletion(test.body.id);
+    fixture.setVariant("default");
+    expect(diff.checkpoints[0].reviewState).toBe("diff");
+  });
+
   // Issue 5 TB2 — a wait makes a deferred element available before the screenshot.
   it("waits for a deferred element before screenshotting", async () => {
     fixture.setVariant("deferred");

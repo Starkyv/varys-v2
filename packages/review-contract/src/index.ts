@@ -11,6 +11,9 @@
 /** The two states that need a human decision, plus the resolved `passed`. */
 export type ReviewState = "pending-baseline" | "diff" | "passed";
 
+/** How a checkpoint was captured (absent in old definitions ⇒ `element`). */
+export type CaptureMode = "element" | "fullpage" | "region";
+
 /** The audited decision a reviewer can take on a checkpoint. */
 export type Resolution = "approved" | "rejected";
 
@@ -26,6 +29,8 @@ export interface CheckpointView {
   /** Checkpoint (screenshot) name within the test. */
   name: string;
   reviewState: ReviewState;
+  /** How this checkpoint was captured (element / full-page / region). */
+  captureMode: CaptureMode;
   /** The recorded decision, or null while the checkpoint still needs review. */
   resolution: Resolution | null;
   /** Pixel-diff score the server computed; null on a first seed (nothing to diff). */

@@ -8,6 +8,7 @@ import {
 import { baselines, environments, runResults, runs, testVersions, tests } from "@varys/db";
 import { type Boss, enqueueRun } from "@varys/queue";
 import type {
+  CaptureMode,
   CheckpointView,
   NeedsReviewItem,
   Resolution,
@@ -71,6 +72,7 @@ export class RunsService {
         createdAt: runs.createdAt,
         environmentId: runs.environmentId,
         testName: tests.name,
+        definition: testVersions.definition,
       })
       .from(runs)
       .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
@@ -78,6 +80,13 @@ export class RunsService {
       .where(eq(runs.id, runId))
       .limit(1);
     if (!row) throw new NotFoundException(`Run ${runId} not found`);
+
+    // Capture mode lives on the screenshot step of the version that ran; map it by
+    // checkpoint name (absent ⇒ element, for definitions recorded before capture modes).
+    const captureModes = new Map<string, CaptureMode>();
+    for (const s of (row.definition as TestDefinition).steps) {
+      if (s.type === "screenshot") captureModes.set(s.name, s.captureMode ?? "element");
+    }
 
     // Environment name for the reviewer's context; "default" when none was chosen.
     let environment = ENVIRONMENT;
@@ -117,6 +126,7 @@ export class RunsService {
         (r): CheckpointView => ({
           name: r.name,
           reviewState: r.reviewState as ReviewState,
+          captureMode: captureModes.get(r.name) ?? "element",
           resolution: r.resolution as Resolution | null,
           diffScore: r.diffScore,
           threshold: r.threshold,

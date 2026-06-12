@@ -1,10 +1,17 @@
-import type { CheckpointView } from "@varys/review-contract";
+import type { CaptureMode, CheckpointView } from "@varys/review-contract";
 import { useState } from "react";
 import { useDecision, useRunView } from "./queries";
 import styles from "./DiffViewer.module.css";
 
 /** Exactly two ways to look this slice (swipe + onion-skin are deferred). */
 type ViewMode = "side-by-side" | "overlay";
+
+/** Human label for how the checkpoint was captured. */
+const MODE_LABEL: Record<CaptureMode, string> = {
+  element: "Element",
+  fullpage: "Full page",
+  region: "Region",
+};
 
 /**
  * The diff viewer: given a run id (deep link), fetch the review read-model and
@@ -63,7 +70,9 @@ function CheckpointPanel({
 
   return (
     <section className={styles.panel} aria-label={`Checkpoint ${cp.name}`}>
-      <h2>{cp.name}</h2>
+      <h2>
+        {cp.name} <span className={styles.mode}>{MODE_LABEL[cp.captureMode]}</span>
+      </h2>
 
       {isFirstSeed ? (
         <>

@@ -125,6 +125,8 @@ describe("Runs API", () => {
     expect(body.testName).toBe("read-model test");
     expect(body.environment).toBe("default");
     expect(Number.isNaN(Date.parse(body.runTimestamp as string))).toBe(false);
+    // captureMode surfaces in the read-model, defaulting to element for back-compat.
+    expect((body.checkpoints as { captureMode: string }[])[0].captureMode).toBe("element");
   });
 
   // visual-review-ui Issue 3 TB1 — the read-model reports a checkpoint's audited
