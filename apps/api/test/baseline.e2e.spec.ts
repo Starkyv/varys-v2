@@ -71,10 +71,13 @@ describe("Baseline lifecycle", () => {
     if (storageDir) await rm(storageDir, { recursive: true, force: true });
   });
 
-  async function runToCompletion(testId: string): Promise<RunView & { runId: string }> {
+  async function runToCompletion(
+    testId: string,
+    environmentId?: string,
+  ): Promise<RunView & { runId: string }> {
     const run = await request(app.getHttpServer())
       .post("/runs")
-      .send({ testId })
+      .send({ testId, environmentId })
       .expect(201);
     const runId = run.body.runId as string;
     let body: RunView = { status: "queued", checkpoints: [] };
@@ -261,5 +264,49 @@ describe("Baseline lifecycle", () => {
 
     const run = await runToCompletion(test.body.id);
     expect(run.status).toBe("failed");
+  });
+
+  // Issue 4 TB3 — run against an environment: resolve {{baseUrl}}/{{secret}}, log in, never leak.
+  it("runs against an environment, logs in with a resolved secret, and never leaks it", async () => {
+    fixture.setVariant("login");
+
+    const env = await request(app.getHttpServer())
+      .post("/environments")
+      .send({
+        name: "demo",
+        values: { baseUrl: fixture.url, username: "alice" },
+        secrets: { password: "s3cr3t" },
+      })
+      .expect(201);
+
+    const definition = {
+      name: "login flow",
+      viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+      steps: [
+        { type: "navigate", url: "{{baseUrl}}" },
+        { type: "type", target: { tag: "input", attributes: { id: "username" } }, value: "{{username}}" },
+        { type: "type", target: { tag: "input", attributes: { id: "password" } }, value: "{{secret:password}}" },
+        { type: "click", target: { tag: "button", attributes: { id: "submit" } } },
+        { type: "screenshot", name: "app", target: { tag: "div", attributes: { id: "app" } } },
+      ],
+    };
+    const test = await request(app.getHttpServer())
+      .post("/tests")
+      .send(definition)
+      .expect(201);
+
+    const run = await runToCompletion(test.body.id, env.body.id);
+    fixture.setVariant("default");
+
+    expect(run.status).toBe("needs_review");
+    expect(run.checkpoints[0]).toMatchObject({ name: "app", reviewState: "pending-baseline" });
+    expect(run.checkpoints[0].actualUrl).toEqual(expect.any(String));
+
+    // The secret must not leak into run data or the stored (tokenized) definition.
+    expect(JSON.stringify(run)).not.toContain("s3cr3t");
+    const testGet = await request(app.getHttpServer())
+      .get(`/tests/${test.body.id}`)
+      .expect(200);
+    expect(JSON.stringify(testGet.body)).not.toContain("s3cr3t");
   });
 });

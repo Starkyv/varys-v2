@@ -37,6 +37,7 @@ export const runs = pgTable("runs", {
   testVersionId: uuid("test_version_id")
     .notNull()
     .references(() => testVersions.id),
+  environmentId: uuid("environment_id"),
   status: text("status").notNull().default("queued"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -119,6 +120,7 @@ CREATE TABLE IF NOT EXISTS test_versions (
 CREATE TABLE IF NOT EXISTS runs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   test_version_id uuid NOT NULL REFERENCES test_versions(id),
+  environment_id uuid,
   status text NOT NULL DEFAULT 'queued',
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()

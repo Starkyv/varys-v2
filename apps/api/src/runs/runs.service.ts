@@ -50,7 +50,7 @@ export class RunsService {
     @Inject(STORAGE) private readonly storage: StorageAdapter,
   ) {}
 
-  async create(testId: string): Promise<CreatedRun> {
+  async create(testId: string, environmentId?: string): Promise<CreatedRun> {
     const [version] = await this.db
       .select({ id: testVersions.id })
       .from(testVersions)
@@ -61,7 +61,11 @@ export class RunsService {
 
     const [run] = await this.db
       .insert(runs)
-      .values({ testVersionId: version.id, status: "queued" })
+      .values({
+        testVersionId: version.id,
+        environmentId: environmentId ?? null,
+        status: "queued",
+      })
       .returning({ id: runs.id });
 
     await enqueueRun(this.boss, run.id);

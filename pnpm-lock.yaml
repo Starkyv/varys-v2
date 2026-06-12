@@ -195,6 +195,9 @@ importers:
       '@varys/storage-adapter':
         specifier: workspace:*
         version: link:../storage-adapter
+      '@varys/variable-resolver':
+        specifier: workspace:*
+        version: link:../variable-resolver
       drizzle-orm:
         specifier: ^0.39.1
         version: 0.39.3(@types/pg@8.20.0)(pg@8.21.0)

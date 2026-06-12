@@ -1,8 +1,16 @@
-import { baselines, type Db, runResults, runs, testVersions } from "@varys/db";
+import {
+  baselines,
+  type Db,
+  environments,
+  runResults,
+  runs,
+  testVersions,
+} from "@varys/db";
 import { diffPng } from "@varys/diff-engine";
 import { resolve } from "@varys/locator-engine";
 import type { TestDefinition } from "@varys/step-schema";
 import type { StorageAdapter } from "@varys/storage-adapter";
+import { type EnvironmentProfile, resolveDefinition } from "@varys/variable-resolver";
 import { and, eq } from "drizzle-orm";
 import { chromium } from "playwright";
 
@@ -12,8 +20,6 @@ export interface ReplayDeps {
 }
 
 const DEFAULT_THRESHOLD = 0.01;
-/** Real per-environment runs arrive in MVP Issue 4; until then, one default. */
-const ENVIRONMENT = "default";
 
 function viewportKey(vp: TestDefinition["viewport"]): string {
   return `${vp.width}x${vp.height}@${vp.deviceScaleFactor}`;
@@ -34,14 +40,41 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
     .where(eq(runs.id, runId));
 
   const [row] = await db
-    .select({ testId: testVersions.testId, definition: testVersions.definition })
+    .select({
+      testId: testVersions.testId,
+      definition: testVersions.definition,
+      environmentId: runs.environmentId,
+    })
     .from(runs)
     .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
     .where(eq(runs.id, runId))
     .limit(1);
   if (!row) throw new Error(`Run ${runId} not found`);
   const { testId } = row;
-  const definition = row.definition as TestDefinition;
+  const recorded = row.definition as TestDefinition;
+
+  // Resolve {{baseUrl}}/{{var}}/{{secret}} against the run's environment (if any).
+  // Secrets live only in this transient resolved definition — never persisted.
+  let environment = "default";
+  let definition = recorded;
+  if (row.environmentId) {
+    const [env] = await db
+      .select({
+        name: environments.name,
+        values: environments.values,
+        secrets: environments.secrets,
+      })
+      .from(environments)
+      .where(eq(environments.id, row.environmentId))
+      .limit(1);
+    if (!env) throw new Error(`Environment ${row.environmentId} not found`);
+    const profile: EnvironmentProfile = {
+      values: (env.values ?? {}) as Record<string, string>,
+      secrets: (env.secrets ?? {}) as Record<string, string>,
+    };
+    definition = resolveDefinition(recorded, profile);
+    environment = env.name;
+  }
   const vpKey = viewportKey(definition.viewport);
 
   const browser = await chromium.launch();
@@ -60,6 +93,17 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
     for (const step of definition.steps) {
       if (step.type === "navigate") {
         await page.goto(step.url, { waitUntil: "networkidle" });
+        continue;
+      }
+
+      if (step.type === "click" || step.type === "type") {
+        const target = await resolve(page, step.target);
+        if (!target) throw new Error(`could not locate ${step.type} target`);
+        if (step.type === "type") {
+          await target.locator.fill(step.value);
+        } else {
+          await target.locator.click();
+        }
         continue;
       }
 
@@ -82,7 +126,7 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
           and(
             eq(baselines.testId, testId),
             eq(baselines.checkpointName, step.name),
-            eq(baselines.environment, ENVIRONMENT),
+            eq(baselines.environment, environment),
             eq(baselines.viewportKey, vpKey),
           ),
         )

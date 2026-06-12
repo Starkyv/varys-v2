@@ -28,10 +28,14 @@ export function resolveDefinition(
   definition: TestDefinition,
   profile: EnvironmentProfile,
 ): TestDefinition {
-  const steps = definition.steps.map((step) =>
-    step.type === "navigate"
-      ? { ...step, url: resolveString(step.url, profile) }
-      : step,
-  );
+  const steps = definition.steps.map((step) => {
+    if (step.type === "navigate") {
+      return { ...step, url: resolveString(step.url, profile) };
+    }
+    if (step.type === "type") {
+      return { ...step, value: resolveString(step.value, profile) };
+    }
+    return step;
+  });
   return { ...definition, steps };
 }

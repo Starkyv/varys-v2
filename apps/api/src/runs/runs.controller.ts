@@ -6,8 +6,8 @@ export class RunsController {
   constructor(private readonly runs: RunsService) {}
 
   @Post()
-  create(@Body() body: { testId: string }) {
-    return this.runs.create(body.testId);
+  create(@Body() body: { testId: string; environmentId?: string }) {
+    return this.runs.create(body.testId, body.environmentId);
   }
 
   @Get(":id")

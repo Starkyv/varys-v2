@@ -21,6 +21,7 @@
     "@varys/locator-engine": "workspace:*",
     "@varys/step-schema": "workspace:*",
     "@varys/storage-adapter": "workspace:*",
+    "@varys/variable-resolver": "workspace:*",
     "drizzle-orm": "^0.39.1",
     "playwright": "^1.50.1"
   }

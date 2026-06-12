@@ -53,7 +53,23 @@ export const screenshotStep = z.object({
   threshold: z.number().positive().max(1).optional(),
 });
 
-export const step = z.discriminatedUnion("type", [navigateStep, screenshotStep]);
+export const clickStep = z.object({
+  type: z.literal("click"),
+  target: fingerprint,
+});
+
+export const typeStep = z.object({
+  type: z.literal("type"),
+  target: fingerprint,
+  value: z.string(),
+});
+
+export const step = z.discriminatedUnion("type", [
+  navigateStep,
+  clickStep,
+  typeStep,
+  screenshotStep,
+]);
 
 export const viewport = z.object({
   width: z.number().int().positive(),
