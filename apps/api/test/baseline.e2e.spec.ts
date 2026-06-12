@@ -309,4 +309,65 @@ describe("Baseline lifecycle", () => {
       .expect(200);
     expect(JSON.stringify(testGet.body)).not.toContain("s3cr3t");
   });
+
+  // Issue 5 TB1 — a fully-masked checkpoint never diffs, even when it changes.
+  it("a fully-masked checkpoint does not diff even when it changes", async () => {
+    fixture.setVariant("default");
+    const definition = {
+      name: "masked",
+      viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+      steps: [
+        { type: "navigate", url: fixture.url },
+        {
+          type: "screenshot",
+          name: "hero",
+          target: { tag: "div", attributes: { id: "hero" }, text: "Hero" },
+          masks: [{ x: 0, y: 0, width: 10000, height: 10000 }],
+        },
+      ],
+    };
+    const test = await request(app.getHttpServer())
+      .post("/tests")
+      .send(definition)
+      .expect(201);
+
+    await decide((await runToCompletion(test.body.id)).runId, "approve");
+
+    fixture.setVariant("changed");
+    const rerun = await runToCompletion(test.body.id);
+    fixture.setVariant("default");
+
+    expect(rerun.status).toBe("passed");
+    expect(rerun.checkpoints[0].reviewState).toBe("passed");
+  });
+
+  // Issue 5 TB2 — a wait makes a deferred element available before the screenshot.
+  it("waits for a deferred element before screenshotting", async () => {
+    fixture.setVariant("deferred");
+    const definition = {
+      name: "wait test",
+      viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+      steps: [
+        { type: "navigate", url: fixture.url },
+        {
+          type: "screenshot",
+          name: "hero",
+          target: { tag: "div", attributes: { id: "hero" }, text: "Hero" },
+          waitBefore: [
+            { kind: "selector", target: { tag: "div", attributes: { id: "hero" } }, state: "visible" },
+          ],
+        },
+      ],
+    };
+    const test = await request(app.getHttpServer())
+      .post("/tests")
+      .send(definition)
+      .expect(201);
+
+    const run = await runToCompletion(test.body.id);
+    fixture.setVariant("default");
+
+    expect(run.status).toBe("needs_review");
+    expect(run.checkpoints[0].reviewState).toBe("pending-baseline");
+  });
 });

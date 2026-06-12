@@ -8,7 +8,7 @@ import { createServer } from "node:http";
  * `setVariant` lets a test change what the same URL renders, so one test can
  * seed a baseline and then produce a visual diff on a later run.
  */
-export type Variant = "default" | "changed" | "login";
+export type Variant = "default" | "changed" | "login" | "deferred";
 
 function html(variant: Variant): string {
   if (variant === "login") {
@@ -36,6 +36,36 @@ function html(variant: Variant): string {
     <button id="submit" type="button" onclick="document.getElementById('app').textContent = 'Welcome'">Log in</button>
   </form>
   <div id="app"></div>
+</body>
+</html>`;
+  }
+
+  if (variant === "deferred") {
+    return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Varys Fixture — Deferred</title>
+<style>
+  * { margin: 0; }
+  body { background: #ffffff; font-family: Arial, sans-serif; }
+  #hero {
+    width: 240px; height: 120px; margin: 24px;
+    background: #3366cc; color: #ffffff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px;
+  }
+</style>
+</head>
+<body>
+  <script>
+    setTimeout(function () {
+      var d = document.createElement("div");
+      d.id = "hero";
+      d.textContent = "Hero";
+      document.body.appendChild(d);
+    }, 2000);
+  </script>
 </body>
 </html>`;
   }

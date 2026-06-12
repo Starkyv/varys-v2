@@ -8,11 +8,11 @@ import {
 } from "@varys/db";
 import { diffPng } from "@varys/diff-engine";
 import { resolve } from "@varys/locator-engine";
-import type { TestDefinition } from "@varys/step-schema";
+import type { Fingerprint, TestDefinition, Wait } from "@varys/step-schema";
 import type { StorageAdapter } from "@varys/storage-adapter";
 import { type EnvironmentProfile, resolveDefinition } from "@varys/variable-resolver";
 import { and, eq } from "drizzle-orm";
-import { chromium } from "playwright";
+import { chromium, type Locator, type Page } from "playwright";
 
 export interface ReplayDeps {
   db: Db;
@@ -23,6 +23,29 @@ const DEFAULT_THRESHOLD = 0.01;
 
 function viewportKey(vp: TestDefinition["viewport"]): string {
   return `${vp.width}x${vp.height}@${vp.deviceScaleFactor}`;
+}
+
+/** Best-effort single locator from a fingerprint, for wait conditions. */
+function waitLocator(page: Page, fp: Fingerprint): Locator {
+  if (fp.testId) return page.locator(`[data-testid="${fp.testId}"]`);
+  if (fp.attributes?.id) return page.locator(`#${fp.attributes.id}`);
+  if (fp.text) return page.getByText(fp.text, { exact: true });
+  return page.locator(fp.tag);
+}
+
+async function applyWaits(page: Page, waits: Wait[] | undefined): Promise<void> {
+  for (const w of waits ?? []) {
+    if (w.kind === "delay") {
+      await page.waitForTimeout(w.ms);
+    } else if (w.kind === "networkIdle") {
+      await page.waitForLoadState("networkidle", { timeout: w.timeoutMs });
+    } else {
+      await waitLocator(page, w.target).waitFor({
+        state: w.state,
+        timeout: w.timeoutMs,
+      });
+    }
+  }
 }
 
 /**
@@ -96,6 +119,8 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
         continue;
       }
 
+      await applyWaits(page, step.waitBefore);
+
       if (step.type === "click" || step.type === "type") {
         const target = await resolve(page, step.target);
         if (!target) throw new Error(`could not locate ${step.type} target`);
@@ -107,6 +132,8 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
         continue;
       }
 
+      // Smart default: settle the network before capturing the checkpoint.
+      await page.waitForLoadState("networkidle").catch(() => undefined);
       const found = await resolve(page, step.target);
       if (!found) {
         throw new Error(
@@ -146,7 +173,12 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
       } else {
         const baselineBytes = await storage.get(baseline.artifactKey);
         if (!baselineBytes) throw new Error("baseline artifact missing");
-        const { verdict, score, diffImage } = diffPng(baselineBytes, actual, threshold);
+        const { verdict, score, diffImage } = diffPng(
+          baselineBytes,
+          actual,
+          threshold,
+          step.masks ?? [],
+        );
 
         if (verdict === "match") {
           await db.insert(runResults).values({

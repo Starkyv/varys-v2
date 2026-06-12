@@ -1,11 +1,39 @@
 import pixelmatch from "pixelmatch";
 import { PNG } from "pngjs";
 
+export interface Rect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface DiffResult {
   verdict: "match" | "diff";
   /** Mismatched-pixel ratio in [0, 1]. */
   score: number;
   diffImage: Buffer;
+}
+
+function paintRect(
+  data: Buffer,
+  width: number,
+  height: number,
+  rect: Rect,
+): void {
+  const x0 = Math.max(0, Math.floor(rect.x));
+  const y0 = Math.max(0, Math.floor(rect.y));
+  const x1 = Math.min(width, Math.floor(rect.x + rect.width));
+  const y1 = Math.min(height, Math.floor(rect.y + rect.height));
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const o = (y * width + x) * 4;
+      data[o] = 0;
+      data[o + 1] = 0;
+      data[o + 2] = 0;
+      data[o + 3] = 255;
+    }
+  }
 }
 
 /**
@@ -17,6 +45,7 @@ export function diffPng(
   baseline: Buffer,
   actual: Buffer,
   threshold: number,
+  masks: Rect[] = [],
 ): DiffResult {
   const a = PNG.sync.read(baseline);
   const b = PNG.sync.read(actual);
@@ -26,6 +55,11 @@ export function diffPng(
   }
 
   const { width, height } = a;
+  // Neutralize masked regions in both images so they can't contribute a diff.
+  for (const mask of masks) {
+    paintRect(a.data, width, height, mask);
+    paintRect(b.data, width, height, mask);
+  }
   const diff = new PNG({ width, height });
   const mismatched = pixelmatch(a.data, b.data, diff.data, width, height, {
     threshold: 0.1,

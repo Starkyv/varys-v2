@@ -45,10 +45,37 @@ export const fingerprint = z.object({
 
 export type Fingerprint = z.infer<typeof fingerprint>;
 
+export const rect = z.object({
+  x: z.number(),
+  y: z.number(),
+  width: z.number(),
+  height: z.number(),
+});
+export type Rect = z.infer<typeof rect>;
+
+/** Per-step wait primitives applied before the step runs. */
+export const wait = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("delay"), ms: z.number().int().nonnegative() }),
+  z.object({
+    kind: z.literal("networkIdle"),
+    timeoutMs: z.number().int().positive().optional(),
+  }),
+  z.object({
+    kind: z.literal("selector"),
+    target: fingerprint,
+    state: z.enum(["visible", "hidden"]),
+    timeoutMs: z.number().int().positive().optional(),
+  }),
+]);
+export type Wait = z.infer<typeof wait>;
+
 export const screenshotStep = z.object({
   type: z.literal("screenshot"),
   name: z.string().min(1),
   target: fingerprint,
+  waitBefore: z.array(wait).optional(),
+  /** Regions (in screenshot pixel space) the diff ignores. */
+  masks: z.array(rect).optional(),
   /** Max mismatched-pixel ratio (0..1) tolerated before a diff is flagged. */
   threshold: z.number().positive().max(1).optional(),
 });
@@ -56,12 +83,14 @@ export const screenshotStep = z.object({
 export const clickStep = z.object({
   type: z.literal("click"),
   target: fingerprint,
+  waitBefore: z.array(wait).optional(),
 });
 
 export const typeStep = z.object({
   type: z.literal("type"),
   target: fingerprint,
   value: z.string(),
+  waitBefore: z.array(wait).optional(),
 });
 
 export const step = z.discriminatedUnion("type", [
