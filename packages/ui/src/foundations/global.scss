@@ -1,0 +1,57 @@
+// Base element styles — applies the tokens to bare HTML so unstyled content already
+// looks on-brand. Scoped intentionally to document root; component styles layer on top.
+html {
+  font-family: var(--font-text);
+  font-size: 100%; // 16px root — token rem values resolve against this.
+}
+
+body {
+  background: var(--color-bg-page);
+  color: var(--color-text);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-regular);
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-display);
+  color: var(--color-text-strong);
+  line-height: var(--line-height-tight);
+}
+
+a {
+  color: var(--color-primary);
+  transition: color var(--duration-fast) var(--ease-standard);
+
+  &:hover {
+    color: var(--color-primary-hover);
+  }
+}
+
+code,
+pre,
+kbd,
+samp {
+  font-family: var(--font-mono);
+}
+
+::selection {
+  background: var(--color-primary-soft);
+  color: var(--color-text-strong);
+}
+
+// Respect reduced-motion globally (also aligns with the runner's animation freeze).
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

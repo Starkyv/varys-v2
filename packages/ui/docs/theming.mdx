@@ -1,0 +1,41 @@
+# Theming
+
+Every token is a CSS custom property declared on `:root` (light defaults). Themes
+and brands override a subset under an attribute selector — no JS, no recompiling,
+no re-mounting.
+
+## Color mode
+
+```
+[data-theme="dark"]  { --color-bg-page: #0d0f17; --color-text: #c4c9d4; … }
+```
+
+Toggle with the hook:
+
+```tsx
+const { theme, toggleTheme } = useTheme();
+<Button onClick={toggleTheme}>{theme === "dark" ? "Light" : "Dark"}</Button>;
+```
+
+## Multi-brand (per company)
+
+A brand overrides only the `--color-brand-*` ramp (and focus ring); every semantic
+alias that references the ramp re-points automatically.
+
+```
+[data-brand="acme"] { --color-brand-500: #d83a2a; … }
+```
+
+```tsx
+const { setBrand } = useTheme();
+setBrand("acme"); // sets data-brand on <html>; "nexus" clears it (default)
+```
+
+### Adding a customer
+
+1. Copy `themes/brands/acme.scss` → `themes/brands/<customer>.scss`.
+2. Override the `--color-brand-*` steps with the customer's palette.
+3. Register it in `index.scss` (`@use "./themes/brands/<customer>";`).
+4. Widen `BrandName` in `types/index.ts` if you want it typed.
+
+Composes with color mode: `<html data-theme="dark" data-brand="acme">`.

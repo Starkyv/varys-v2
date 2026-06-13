@@ -1,0 +1,84 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  font-family: var(--font-text);
+  font-weight: var(--font-weight-medium);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* --- Sizes --- */
+.sm {
+  height: 18px;
+  padding: 0 var(--space-8);
+  font-size: var(--font-size-xs);
+}
+.md {
+  height: 22px;
+  padding: 0 var(--space-12);
+  font-size: var(--font-size-sm);
+}
+
+/* --- Tone: each sets local color vars consumed by the appearance rules --- */
+.neutral {
+  --b-solid: var(--color-neutral-500);
+  --b-soft-bg: var(--color-neutral-100);
+  --b-soft-fg: var(--color-neutral-700);
+}
+.primary {
+  --b-solid: var(--color-primary);
+  --b-soft-bg: var(--color-primary-soft);
+  --b-soft-fg: var(--color-primary);
+}
+.success {
+  --b-solid: var(--color-success);
+  --b-soft-bg: var(--color-success-soft);
+  --b-soft-fg: var(--color-success-fg);
+}
+.warning {
+  --b-solid: var(--color-warning);
+  --b-soft-bg: var(--color-warning-soft);
+  --b-soft-fg: var(--color-warning-fg);
+}
+.danger {
+  --b-solid: var(--color-danger);
+  --b-soft-bg: var(--color-danger-soft);
+  --b-soft-fg: var(--color-danger-fg);
+}
+.info {
+  --b-solid: var(--color-info);
+  --b-soft-bg: var(--color-info-soft);
+  --b-soft-fg: var(--color-info-fg);
+}
+
+/* --- Appearance --- */
+.soft {
+  background: var(--b-soft-bg);
+  color: var(--b-soft-fg);
+}
+.solid {
+  background: var(--b-solid);
+  color: #fff;
+}
+.outline {
+  background: transparent;
+  color: var(--b-soft-fg);
+  border-color: currentColor;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--b-solid);
+  flex: 0 0 auto;
+}
+
+.icon {
+  display: inline-flex;
+  font-size: 1.1em;
+  margin-left: calc(var(--space-2) * -1);
+}

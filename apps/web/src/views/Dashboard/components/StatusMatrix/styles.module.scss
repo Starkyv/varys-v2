@@ -1,0 +1,156 @@
+@use "../../../../styles/mixins" as *;
+
+.card {
+  @include card();
+}
+
+.skeletonStack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+}
+
+.state {
+  padding: var(--space-24) var(--space-8);
+  text-align: center;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.retry {
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: var(--color-primary);
+  font: inherit;
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+
+  @include focus-ring;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  margin-bottom: var(--space-20);
+}
+
+.icon {
+  @include icon-square(32px, 18px);
+  flex: 0 0 auto;
+}
+
+.titleBlock {
+  flex: 1;
+  min-width: 0;
+}
+
+.title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+}
+
+.subtitle {
+  margin-top: 2px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.legend {
+  display: flex;
+  gap: var(--space-12);
+  align-items: center;
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.legendDot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+}
+
+.scroll {
+  overflow-x: auto;
+}
+
+.grid {
+  min-width: 520px;
+}
+
+.headRow {
+  display: grid;
+  align-items: center;
+  padding: var(--space-8) var(--space-12);
+}
+
+.headTest {
+  @include overline;
+}
+
+.headEnv {
+  text-align: center;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-muted);
+  text-transform: capitalize;
+}
+
+.row {
+  display: grid;
+  align-items: center;
+  border-top: 1px solid var(--color-border);
+  padding: var(--space-4) var(--space-12);
+}
+
+.rowName {
+  @include truncate;
+  font-size: var(--font-size-base);
+  color: var(--color-text-strong);
+  font-weight: var(--font-weight-medium);
+  padding-right: var(--space-8);
+}
+
+.cellWrap {
+  display: flex;
+  justify-content: center;
+  padding: var(--space-6) 0;
+}
+
+.cell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-size: 14px;
+
+  @include focus-ring;
+
+  &:disabled {
+    cursor: default;
+  }
+}
+
+@include mq-down("md") {
+  .legend {
+    display: none;
+  }
+}

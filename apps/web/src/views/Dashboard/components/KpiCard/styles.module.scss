@@ -1,0 +1,43 @@
+@use "../../../../styles/mixins" as *;
+
+.card {
+  @include card(var(--space-20));
+}
+
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8);
+  margin-bottom: var(--space-12);
+}
+
+.label {
+  @include overline;
+  color: var(--color-text-muted);
+}
+
+.iconSquare {
+  @include icon-square(28px, 15px);
+}
+
+.valueRow {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-12);
+}
+
+.value {
+  font-family: var(--font-display);
+  font-size: var(--font-size-3xl);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--letter-spacing-tight);
+  color: var(--color-text-strong);
+  line-height: 1;
+}
+
+.sub {
+  margin-top: var(--space-8);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}

@@ -1,0 +1,182 @@
+@use "../../../../styles/mixins" as *;
+
+.wrap {
+  border-bottom: 1px solid var(--color-border);
+
+  &:last-child {
+    border-bottom: none;
+  }
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  padding: var(--space-12) var(--space-16);
+  background: var(--color-bg-surface);
+  cursor: grab;
+  transition: background-color var(--duration-fast) var(--ease-standard);
+
+  &:hover {
+    background: var(--color-bg-subtle);
+  }
+  &:active {
+    cursor: grabbing;
+  }
+}
+
+.grip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  color: var(--color-text-subtle);
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+}
+
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.name {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+  @include truncate;
+}
+
+.envBadge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 var(--space-8);
+  border-radius: var(--radius-full);
+  background: var(--color-info-soft);
+  color: var(--color-info-fg);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  margin-top: var(--space-6);
+  flex-wrap: wrap;
+}
+
+.folder {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 var(--space-6);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-inset);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  font-family: var(--font-mono);
+}
+
+.created {
+  flex: 0 0 auto;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+  font-variant-numeric: tabular-nums;
+  margin-right: var(--space-4);
+}
+
+/* --- Organize editor --- */
+.editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+  padding: var(--space-16);
+  background: var(--color-bg-subtle);
+  border-top: 1px dashed var(--color-border-strong);
+}
+
+.editorTop {
+  display: grid;
+  grid-template-columns: 1fr 200px;
+  gap: var(--space-12);
+}
+
+.tagEditor {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-6);
+}
+
+.editTag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 var(--space-8);
+  border-radius: var(--radius-full);
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-text);
+  font-size: var(--font-size-xs);
+  font-family: var(--font-mono);
+}
+
+.tagRemove {
+  border: none;
+  background: transparent;
+  color: var(--color-text-subtle);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+
+  &:hover {
+    color: var(--color-danger-fg);
+  }
+}
+
+.tagInput {
+  height: 28px;
+  min-width: 140px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  padding: 0 var(--space-10);
+  font-family: var(--font-text);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-strong);
+
+  &:focus-visible {
+    outline: none;
+    border-color: var(--color-primary);
+  }
+}
+
+.editorActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-8);
+}
+
+@include mq-down("sm") {
+  .created {
+    display: none;
+  }
+  .editorTop {
+    grid-template-columns: 1fr;
+  }
+}

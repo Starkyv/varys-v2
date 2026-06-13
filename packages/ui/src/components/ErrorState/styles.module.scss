@@ -1,0 +1,38 @@
+.error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-16);
+  text-align: center;
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
+  padding: var(--space-48);
+}
+
+.medallion {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-full);
+  background: var(--color-danger-soft);
+  color: var(--color-danger-fg);
+  font-size: 26px;
+}
+
+.title {
+  font-family: var(--font-display);
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+}
+
+.description {
+  max-width: 400px;
+  font-size: var(--font-size-base);
+  color: var(--color-text-muted);
+  line-height: var(--line-height-normal);
+}

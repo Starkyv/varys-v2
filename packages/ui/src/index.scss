@@ -1,0 +1,21 @@
+// ---------------------------------------------------------------------------
+// Design-system stylesheet entry. Import ONCE at the app root:
+//
+//   import "@varys/ui/styles.scss";
+//
+// Emission order matters: token custom properties first, then theme overrides,
+// then the reset + base element styles.
+// ---------------------------------------------------------------------------
+
+// Tokens (light defaults on :root)
+@use "./themes/tokens";
+
+// Explicit theme + brand overrides (attribute-scoped — no output unless applied)
+@use "./themes/light";
+@use "./themes/dark";
+@use "./themes/brands/acme";
+@use "./themes/brands/globex";
+
+// Foundations
+@use "./foundations/reset";
+@use "./foundations/global";

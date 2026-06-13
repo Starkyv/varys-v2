@@ -1,0 +1,87 @@
+@use "../../styles/mixins" as *;
+
+.loading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  margin-bottom: var(--space-16);
+}
+
+.count {
+  font-size: var(--font-size-base);
+  color: var(--color-text);
+
+  strong {
+    color: var(--color-text-strong);
+  }
+}
+
+.spacer {
+  flex: 1;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-16);
+  @include card(var(--space-16) var(--space-20));
+}
+
+.glyph {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-lg);
+}
+
+.body {
+  flex: 1;
+  min-width: 0;
+}
+
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.cpName {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+}
+
+.stateBadge {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 var(--space-8);
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+}
+
+.meta {
+  margin-top: 3px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.env {
+  text-transform: capitalize;
+}

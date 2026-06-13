@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { ArtifactsModule } from "./artifacts/artifacts.module";
+import { DashboardModule } from "./dashboard/dashboard.module";
 import { DbModule } from "./db/db.module";
 import { EnvironmentsModule } from "./environments/environments.module";
 import { FoldersModule } from "./folders/folders.module";
@@ -20,6 +21,7 @@ import { TestsModule } from "./tests/tests.module";
     FoldersModule,
     SuitesModule,
     SuiteRunsModule,
+    DashboardModule,
   ],
 })
 export class AppModule {}

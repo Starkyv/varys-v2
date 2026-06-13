@@ -1,0 +1,406 @@
+@use "../../../../styles/mixins" as *;
+
+/* ---- Rail shell ------------------------------------------------------- */
+
+.rail {
+  position: relative;
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
+  padding: 0 var(--space-20) var(--space-20);
+  max-height: calc(100vh - 168px);
+  overflow-y: auto;
+}
+
+.railHeader {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8);
+  padding: var(--space-16) var(--space-2) var(--space-12);
+  background: var(--color-bg-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.railTitle {
+  @include overline;
+  color: var(--color-text-muted);
+}
+
+.summaryPill {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 var(--space-10);
+  border-radius: var(--radius-full);
+  background: var(--color-bg-inset);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.rows {
+  padding-top: var(--space-4);
+
+  &:focus {
+    outline: none;
+  }
+}
+
+/* ---- Page divider (nice-to-have) -------------------------------------- */
+
+.divider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  margin: var(--space-12) 0 var(--space-4);
+  padding-left: 52px; // clear the 44px gutter + column gap
+  color: var(--color-text-subtle);
+}
+
+.dividerLabel {
+  @include truncate;
+  max-width: 240px;
+  font-size: var(--font-size-xs);
+}
+
+.dividerRule {
+  flex: 1;
+  height: 1px;
+  background: var(--color-border);
+}
+
+/* ---- Row scaffold ----------------------------------------------------- */
+
+.rowWrap {
+  position: relative;
+}
+
+.row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  column-gap: var(--space-8);
+  align-items: stretch;
+  width: 100%;
+  cursor: pointer;
+  font-family: var(--font-text);
+  border-radius: var(--radius-lg);
+
+  @include focus-ring;
+}
+
+/* The connector gutter: a continuous 2px line with the node sitting on it. */
+.gutter {
+  position: relative;
+  display: flex;
+  justify-content: center;
+}
+
+.line {
+  position: absolute;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  background: var(--color-border-strong);
+}
+
+.node {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-bg-surface);
+  color: var(--color-text-muted);
+  // The ring masks the connector line so it reads as passing *behind* the node.
+  box-shadow: 0 0 0 4px var(--color-bg-surface);
+}
+
+.nodeHero {
+  width: 32px;
+  height: 32px;
+  margin-top: var(--space-12);
+}
+
+.nodeStep {
+  width: 28px;
+  height: 28px;
+  margin-top: var(--space-8);
+}
+
+.nodeNever {
+  border: 1.5px dashed var(--color-border-strong);
+  color: var(--color-text-subtle);
+  background: var(--color-bg-surface);
+}
+
+/* ---- Bodies ----------------------------------------------------------- */
+
+.body {
+  min-width: 0;
+}
+
+/* Checkpoint hero card */
+.heroBody {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  margin: var(--space-6) 0;
+  padding: var(--space-12) var(--space-16);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-surface);
+  box-shadow: var(--shadow-xs);
+  transition:
+    border-color var(--duration-fast) var(--ease-standard),
+    background var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard);
+}
+
+.row:hover .heroBody:not(.bodySelected) {
+  border-color: var(--color-border-strong);
+  box-shadow: var(--shadow-md);
+}
+
+.heroBody.bodySelected {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+  box-shadow:
+    inset 3px 0 0 var(--color-primary),
+    var(--shadow-sm);
+}
+
+/* Compact step row */
+.stepBody {
+  display: flex;
+  align-items: center;
+  gap: var(--space-10);
+  padding: var(--space-8) var(--space-12) var(--space-8) 0;
+  border-radius: var(--radius-md);
+  transition: background var(--duration-fast) var(--ease-standard);
+}
+
+.row:hover .stepBody:not(.bodySelected) {
+  background: var(--color-bg-subtle);
+}
+
+.stepBody.bodySelected {
+  background: var(--color-primary-soft);
+  box-shadow: inset 3px 0 0 var(--color-primary);
+}
+
+/* ---- Thumbnail -------------------------------------------------------- */
+
+.thumb {
+  position: relative;
+  flex: 0 0 auto;
+  width: 112px;
+  height: 74px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  overflow: hidden;
+  background: var(--color-bg-inset);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.thumbAlert {
+  border-color: var(--color-danger);
+  box-shadow: 0 0 0 1px var(--color-danger);
+}
+
+.thumbImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top center;
+  display: block;
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+
+.thumbImgLoaded {
+  opacity: 1;
+}
+
+.thumbShimmer {
+  position: absolute;
+  inset: 0;
+  background: var(--color-bg-subtle);
+  animation: rt-pulse 1.2s ease-in-out infinite;
+}
+
+.thumbFallback {
+  display: inline-flex;
+  color: var(--color-text-subtle);
+}
+
+@keyframes rt-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* ---- Hero text -------------------------------------------------------- */
+
+.heroText {
+  flex: 1;
+  min-width: 0;
+}
+
+.heroTitleRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  min-width: 0;
+}
+
+.cpName {
+  @include truncate;
+  flex: 0 1 auto;
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+}
+
+.captureChip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  height: 17px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-inset);
+  color: var(--color-text-muted);
+  font-size: 10px;
+  font-family: var(--font-mono);
+}
+
+.heroMeta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  margin-top: var(--space-6);
+  flex-wrap: wrap;
+}
+
+.stateBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 19px;
+  padding: 0 var(--space-8);
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+}
+
+.score {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.healed {
+  display: inline-flex;
+  align-items: center;
+  height: 19px;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-info-soft);
+  color: var(--color-info-fg);
+  font-size: 10px;
+  font-weight: var(--font-weight-medium);
+}
+
+.open {
+  flex: 0 0 auto;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-primary);
+}
+
+.openChevron {
+  transform: rotate(-90deg);
+}
+
+/* ---- Step text -------------------------------------------------------- */
+
+.stepLabel {
+  @include truncate;
+  flex: 0 1 auto;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+}
+
+.stepLabelFailing {
+  color: var(--color-danger-fg);
+  font-weight: var(--font-weight-medium);
+}
+
+.stepLabelNever {
+  color: var(--color-text-subtle);
+}
+
+.errorPreview {
+  @include truncate;
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-danger-fg);
+}
+
+.duration {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.durationFailing {
+  color: var(--color-danger-fg);
+}
+
+.durationNever {
+  color: var(--color-text-subtle);
+}
+
+// On a single column the rail flows with the page instead of scrolling internally.
+@include mq-down("lg") {
+  .rail {
+    max-height: none;
+    overflow: visible;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thumbShimmer {
+    animation: none;
+  }
+  .thumbImg {
+    transition: none;
+  }
+}

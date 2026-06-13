@@ -1,0 +1,21 @@
+// Example brand theme — "Acme". Demonstrates multi-company theming: a brand only
+// overrides the primitives that differ (here, the brand ramp + focus ring); every
+// semantic alias that references `--color-brand-*` re-points automatically.
+//
+// Apply with `data-brand="acme"` on a container (composes with `data-theme`).
+// Rename / duplicate this file per real customer (cf. DESIGN §5: customer = env).
+
+[data-brand="acme"] {
+  --color-brand-50: #fdeceb;
+  --color-brand-100: #fad3d0;
+  --color-brand-200: #f4a8a1;
+  --color-brand-300: #ee7d72;
+  --color-brand-400: #e85a4c;
+  --color-brand-500: #d83a2a; // Acme red
+  --color-brand-600: #b62f22;
+  --color-brand-700: #93251b;
+  --color-brand-800: #701c14;
+  --color-brand-900: #4d130e;
+
+  --color-focus-ring: rgba(216, 58, 42, 0.32);
+}

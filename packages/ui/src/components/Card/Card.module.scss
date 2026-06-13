@@ -1,0 +1,64 @@
+@use "../../foundations/mixins" as *;
+
+.card {
+  @include card(var(--space-24));
+
+  display: flex;
+  flex-direction: column;
+}
+
+.interactive {
+  cursor: pointer;
+  transition:
+    box-shadow var(--duration-base) var(--ease-standard),
+    transform var(--duration-base) var(--ease-standard),
+    border-color var(--duration-base) var(--ease-standard);
+
+  &:hover {
+    box-shadow: var(--shadow-md);
+    border-color: var(--color-border-strong);
+    transform: translateY(-2px);
+  }
+}
+
+.flush {
+  padding: 0;
+}
+
+/* --- Header --- */
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  margin-bottom: var(--space-20);
+}
+
+.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-subtle);
+  color: var(--color-text-muted);
+  flex: 0 0 auto;
+  font-size: 1.05rem;
+}
+
+.title {
+  @include text("h3");
+
+  color: var(--color-text-strong);
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  @include truncate;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  flex: 0 0 auto;
+}

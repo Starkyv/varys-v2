@@ -127,21 +127,29 @@ export function captureFingerprint(el: Element, opts?: CaptureOptions): Fingerpr
       nameFromAttr = true;
     }
   }
-  if (!accessibleName) {
+  // Only borrow a descendant's aria-label when the element has NO text of its own —
+  // i.e. it's genuinely icon-only (<button><svg aria-label="Close"/></button>). An
+  // unscoped descendant search would otherwise hijack any container that merely
+  // *encloses* a labelled control (a panel around a "Pagination" nav, a card around a
+  // "More options" menu) and stamp that volatile child label as the container's own
+  // high-confidence name. A text-bearing element uses its own content instead (below).
+  if (!accessibleName && !rawText) {
     const childAria = el.querySelector("[aria-label]")?.getAttribute("aria-label")?.trim();
     if (childAria) {
       accessibleName = childAria;
       nameFromAttr = true;
     }
   }
-  if (!accessibleName) {
+  // Same rule for an icon's <title>/alt: only when the element has no text of its own,
+  // so a labelled icon *inside* a text-bearing control can't override the control's name.
+  if (!accessibleName && !rawText) {
     const svgTitle = el.querySelector("svg title")?.textContent?.trim();
     if (svgTitle) {
       accessibleName = svgTitle;
       nameFromAttr = true;
     }
   }
-  if (!accessibleName) {
+  if (!accessibleName && !rawText) {
     const imgAlt = el.querySelector("img[alt]")?.getAttribute("alt")?.trim();
     if (imgAlt) {
       accessibleName = imgAlt;

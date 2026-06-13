@@ -1,0 +1,106 @@
+.label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-strong);
+  margin-bottom: var(--space-8);
+}
+
+.req {
+  color: var(--color-danger);
+}
+
+.hint {
+  color: var(--color-text-subtle);
+  font-weight: var(--font-weight-regular);
+}
+
+.envGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-8);
+  margin-bottom: var(--space-16);
+}
+
+.env {
+  display: flex;
+  align-items: center;
+  gap: var(--space-10);
+  padding: var(--space-10) var(--space-12);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-bg-surface);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-text);
+  transition: all var(--duration-fast) var(--ease-standard);
+
+  &:hover {
+    border-color: var(--color-neutral-300);
+  }
+}
+
+.envSel {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+
+  &:hover {
+    border-color: var(--color-primary);
+  }
+}
+
+.check {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  color: #fff;
+}
+
+.checkOn {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+}
+
+.envName {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-strong);
+  text-transform: capitalize;
+}
+
+.envEmpty {
+  grid-column: 1 / -1;
+  padding: var(--space-12);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+}
+
+.traceRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  padding: var(--space-12);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.traceTitle {
+  flex: 1;
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-strong);
+}
+
+.total {
+  color: var(--color-text-strong);
+}

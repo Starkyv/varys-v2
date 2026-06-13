@@ -1,0 +1,99 @@
+import type { CaptureMode, CheckpointView } from "@varys/review-contract";
+import {
+  Badge,
+  Columns,
+  cx,
+  Layers,
+  OnionSkin,
+  SegmentedControl,
+  type SegmentedOption,
+  SwipeView,
+} from "@varys/ui";
+import { useState } from "react";
+import { scorePct } from "../../../../lib/format";
+import { DecisionBar } from "../DecisionBar";
+import { DiffStage, type DiffMode } from "../DiffStage";
+import { MaskTuning } from "../MaskTuning";
+import styles from "./styles.module.scss";
+
+const CAPTURE_LABEL: Record<CaptureMode, string> = {
+  element: "Element",
+  fullpage: "Full page",
+  region: "Region",
+};
+
+export function CheckpointViewer({ checkpoint: cp, runId }: { checkpoint: CheckpointView; runId: string }) {
+  const [mode, setMode] = useState<DiffMode>("side-by-side");
+  const [swipe, setSwipe] = useState(50);
+  const [onion, setOnion] = useState(50);
+
+  const isPending = cp.reviewState === "pending-baseline";
+  const hasBaseline = !isPending && cp.baselineUrl != null;
+  const over = cp.diffScore != null && cp.diffScore > cp.threshold;
+
+  const modeOptions: SegmentedOption<DiffMode>[] = [
+    { value: "side-by-side", label: "Side by side", icon: <Columns size={14} /> },
+    ...(cp.diffUrl ? [{ value: "diff-highlight" as const, label: "Highlight", icon: <Layers size={14} /> }] : []),
+    ...(hasBaseline
+      ? [
+          { value: "swipe" as const, label: "Swipe", icon: <SwipeView size={14} /> },
+          { value: "onion" as const, label: "Onion", icon: <OnionSkin size={14} /> },
+        ]
+      : []),
+  ];
+
+  return (
+    <div className={styles.card}>
+      <header className={styles.header}>
+        <div className={styles.name}>{cp.name}</div>
+        <span className={styles.capture}>{CAPTURE_LABEL[cp.captureMode]}</span>
+        {cp.healed && (
+          <Badge tone="info" size="sm">
+            healed
+          </Badge>
+        )}
+        <span className={styles.spacer} />
+        {!isPending && modeOptions.length > 1 && (
+          <SegmentedControl ariaLabel="Diff view mode" options={modeOptions} value={mode} onValueChange={setMode} />
+        )}
+      </header>
+
+      <DiffStage checkpoint={cp} mode={mode} swipe={swipe} onion={onion} />
+
+      {mode === "swipe" && hasBaseline && (
+        <div className={styles.sliderRow}>
+          <span className={styles.sliderEnd}>Baseline</span>
+          <input type="range" min={0} max={100} value={swipe} onChange={(e) => setSwipe(Number(e.target.value))} className={styles.slider} />
+          <span className={styles.sliderEnd}>Actual</span>
+        </div>
+      )}
+      {mode === "onion" && hasBaseline && (
+        <div className={styles.sliderRow}>
+          <span className={styles.sliderEnd}>Opacity</span>
+          <input type="range" min={0} max={100} value={onion} onChange={(e) => setOnion(Number(e.target.value))} className={styles.slider} />
+          <span className={cx(styles.sliderEnd, styles.mono)}>{onion}%</span>
+        </div>
+      )}
+
+      <div className={styles.review}>
+        <div
+          className={cx(styles.verdict, isPending ? styles.verdictInfo : over ? styles.verdictDanger : styles.verdictSuccess)}
+        >
+          <span className={styles.verdictLabel}>
+            {isPending ? "First capture — no baseline yet" : over ? "Over threshold" : "Within threshold"}
+          </span>
+          {!isPending && (
+            <span className={styles.verdictScore}>
+              Diff <strong className={styles.mono}>{scorePct(cp.diffScore)}</strong> · threshold{" "}
+              <strong className={styles.mono}>{scorePct(cp.threshold, 2)}</strong>
+            </span>
+          )}
+        </div>
+
+        {hasBaseline && cp.diffUrl && <MaskTuning checkpoint={cp} runId={runId} />}
+
+        <DecisionBar checkpoint={cp} runId={runId} />
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,133 @@
+@use "../../../../styles/mixins" as *;
+
+.card {
+  @include card-flush;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  padding: var(--space-16) var(--space-20);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.glyph {
+  @include icon-square(32px, 17px);
+}
+
+.title {
+  font-family: var(--font-display);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.outcome {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 var(--space-10);
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+}
+
+.outcome_passed {
+  background: var(--color-success-soft);
+  color: var(--color-success-fg);
+}
+
+.outcome_failed {
+  background: var(--color-danger-soft);
+  color: var(--color-danger-fg);
+}
+
+.outcome_never {
+  background: var(--color-bg-inset);
+  color: var(--color-text-muted);
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+  padding: var(--space-20);
+}
+
+.label {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-md);
+  color: var(--color-text-strong);
+  word-break: break-word;
+  line-height: var(--line-height-snug);
+}
+
+.neverNote {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  line-height: var(--line-height-snug);
+}
+
+.meta {
+  display: flex;
+  gap: var(--space-32);
+  flex-wrap: wrap;
+}
+
+.metaItem {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.metaKey {
+  @include overline;
+  color: var(--color-text-subtle);
+}
+
+.metaValue {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+}
+
+.errorCard {
+  display: flex;
+  gap: var(--space-12);
+  align-items: flex-start;
+  padding: var(--space-16);
+  border-radius: var(--radius-lg);
+  background: var(--color-danger-soft);
+  border: 1px solid var(--color-danger);
+}
+
+.errorIcon {
+  flex: 0 0 auto;
+  color: var(--color-danger-fg);
+  display: inline-flex;
+}
+
+.errorText {
+  min-width: 0;
+}
+
+.errorTitle {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-danger-fg);
+}
+
+.errorMessage {
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+  word-break: break-word;
+  line-height: var(--line-height-snug);
+}

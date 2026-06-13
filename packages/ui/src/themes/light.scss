@@ -1,0 +1,23 @@
+// Light theme — the default, already declared on :root in `_tokens.scss`.
+// This file exists so an explicit `[data-theme="light"]` (e.g. a theme toggle that
+// sets the attribute on both modes) resolves to the same semantic values, even when
+// nested inside a dark ancestor.
+@use "./tokens";
+
+[data-theme="light"] {
+  --color-bg-page: var(--color-neutral-100);
+  --color-bg-surface: var(--color-neutral-0);
+  --color-bg-subtle: var(--color-neutral-50);
+  --color-bg-inset: var(--color-neutral-100);
+
+  --color-border: var(--color-neutral-150);
+  --color-border-strong: var(--color-neutral-200);
+
+  --color-text-strong: var(--color-neutral-950);
+  --color-text: var(--color-neutral-700);
+  --color-text-muted: var(--color-neutral-500);
+  --color-text-subtle: var(--color-neutral-400);
+  --color-text-on-primary: var(--color-neutral-0);
+
+  --color-primary-soft: var(--color-brand-50);
+}

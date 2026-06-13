@@ -1,0 +1,42 @@
+.body {
+  display: flex;
+  gap: var(--space-16);
+  padding: var(--space-24) var(--space-24) 0;
+}
+
+.icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-full);
+  background: var(--color-danger-soft);
+  color: var(--color-danger-fg);
+}
+
+.title {
+  font-family: var(--font-display);
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+}
+
+.text {
+  margin: var(--space-8) 0 0;
+  font-size: var(--font-size-base);
+  color: var(--color-text);
+  line-height: var(--line-height-normal);
+}
+
+.warn {
+  color: var(--color-danger-fg);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-12);
+  padding: var(--space-24);
+}

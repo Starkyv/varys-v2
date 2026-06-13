@@ -1,0 +1,106 @@
+@use "../../../../styles/mixins" as *;
+
+.card {
+  @include card();
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  margin-bottom: var(--space-16);
+}
+
+.icon {
+  @include icon-square(32px, 18px);
+}
+
+.title {
+  margin: 0;
+  flex: 1;
+  font-family: var(--font-display);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  padding: var(--space-10) var(--space-8);
+  border: none;
+  border-top: 1px solid var(--color-border);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+
+  @include focus-ring;
+
+  &:hover {
+    background: var(--color-bg-subtle);
+  }
+}
+
+.dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+}
+
+.text {
+  flex: 1;
+  min-width: 0;
+}
+
+.name {
+  display: block;
+  font-size: var(--font-size-base);
+  color: var(--color-text-strong);
+  font-weight: var(--font-weight-medium);
+  @include truncate;
+}
+
+.meta {
+  display: block;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  text-transform: capitalize;
+}
+
+.skeletonRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  padding: var(--space-10) var(--space-8);
+  border-top: 1px solid var(--color-border);
+}
+
+.state {
+  padding: var(--space-16) var(--space-8);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.retry {
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: var(--color-primary);
+  font: inherit;
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+
+  @include focus-ring;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}

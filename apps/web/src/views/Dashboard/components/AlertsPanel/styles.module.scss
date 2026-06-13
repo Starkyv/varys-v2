@@ -1,0 +1,113 @@
+@use "../../../../styles/mixins" as *;
+
+.card {
+  @include card();
+  display: flex;
+  flex-direction: column;
+}
+
+.empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: var(--space-6);
+  padding: var(--space-24) var(--space-16);
+  min-height: 160px;
+}
+
+.emptyIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  margin-bottom: var(--space-4);
+  border-radius: var(--radius-full);
+  background: var(--color-bg-inset);
+  color: var(--color-text-subtle);
+}
+
+.emptyTitle {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+}
+
+.emptyText {
+  margin: 0;
+  max-width: 28ch;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  line-height: var(--line-height-snug);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  margin-bottom: var(--space-16);
+}
+
+.icon {
+  @include icon-square(32px, 18px);
+}
+
+.title {
+  margin: 0;
+  flex: 1;
+  font-family: var(--font-display);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+}
+
+.row {
+  display: flex;
+  gap: var(--space-12);
+  padding: var(--space-12);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-subtle);
+}
+
+.glyph {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-md);
+}
+
+.body {
+  min-width: 0;
+}
+
+.rowTitle {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-strong);
+}
+
+.detail {
+  margin-top: 2px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.time {
+  margin-top: var(--space-6);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}

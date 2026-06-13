@@ -1,0 +1,46 @@
+# Getting started
+
+`@varys/ui` is the Varys design system. It ships **tokens** (the source of truth),
+**themes** (tokens composed for light/dark + per-brand), **foundations** (reset,
+base styles, mixins), and **components** (React + SCSS modules).
+
+## Install (within the monorepo)
+
+It's a workspace package — add it as a dependency:
+
+```jsonc
+// apps/web/package.json
+"dependencies": {
+  "@varys/ui": "workspace:*"
+}
+```
+
+`sass` must be available to the consuming bundler (Vite picks up `.module.scss`
+automatically once `sass` is installed).
+
+## Wire it up
+
+```ts
+// apps/web/src/main.tsx
+import "@varys/ui/styles.scss"; // tokens + themes + reset + base — import ONCE
+```
+
+Then use components and tokens anywhere:
+
+```tsx
+import { Button, Card, CardHeader, Badge } from "@varys/ui";
+import { dataViz } from "@varys/ui/tokens";
+
+<Card>
+  <CardHeader title="Total Revenue" />
+  <Button variant="primary">Run</Button>
+</Card>;
+```
+
+## The token contract
+
+- **Style with CSS custom properties** — `color: var(--color-text)`,
+  `padding: var(--space-16)`. These re-resolve per theme/brand automatically.
+- **JS needs values?** (chart series, inline styles, the extension's shadow DOM) —
+  import from `@varys/ui/tokens`. Keep the two in sync: `tokens/*.ts` ↔
+  `themes/_tokens.scss`.

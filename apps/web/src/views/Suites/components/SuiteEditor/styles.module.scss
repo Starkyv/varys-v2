@@ -1,0 +1,132 @@
+@use "../../../../styles/mixins" as *;
+
+.editor {
+  @include card-flush;
+}
+
+.loading {
+  @include card(var(--space-16));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  padding: var(--space-16) var(--space-20);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.icon {
+  flex: 0 0 auto;
+  @include icon-square(36px, 18px);
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
+
+.nameInput {
+  flex: 1;
+  min-width: 0;
+  max-width: 320px;
+}
+
+.count {
+  flex: 1;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.delete {
+  color: var(--color-danger-fg);
+
+  &:hover {
+    background: var(--color-danger-soft);
+  }
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-12);
+  max-height: 560px;
+  overflow-y: auto;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  padding: var(--space-10) var(--space-12);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-surface);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-text);
+  transition: all var(--duration-fast) var(--ease-standard);
+
+  &:hover {
+    border-color: var(--color-neutral-300);
+  }
+}
+
+.rowSel {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
+.check {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  color: #fff;
+}
+
+.checkOn {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+}
+
+.testName {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-strong);
+  @include truncate;
+}
+
+.envBadge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 18px;
+  padding: 0 var(--space-6);
+  border-radius: var(--radius-full);
+  background: var(--color-info-soft);
+  color: var(--color-info-fg);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+}
+
+.folder {
+  flex: 0 0 auto;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+
+.empty {
+  padding: var(--space-24);
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}

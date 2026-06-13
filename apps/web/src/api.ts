@@ -1,4 +1,5 @@
 import type {
+  DashboardView,
   EnvironmentView,
   FolderSummary,
   NeedsReviewItem,
@@ -30,6 +31,16 @@ export async function fetchRunView(runId: string): Promise<RunView> {
     throw new Error(`Failed to load run ${runId} (${res.status})`);
   }
   return (await res.json()) as RunView;
+}
+
+/** Fetch the dashboard read-model (KPI summary + recent-runs feed). Throws on a
+ *  non-2xx response. */
+export async function fetchDashboard(): Promise<DashboardView> {
+  const res = await fetch(`${API_BASE}/dashboard`);
+  if (!res.ok) {
+    throw new Error(`Failed to load the dashboard (${res.status})`);
+  }
+  return (await res.json()) as DashboardView;
 }
 
 /** Fetch the flat "needs review" list. Throws on a non-2xx response. */

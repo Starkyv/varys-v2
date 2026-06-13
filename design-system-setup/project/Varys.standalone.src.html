@@ -1,0 +1,1428 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="./support.js"></script>
+</head>
+<body>
+<template id="__bundler_thumbnail" data-bg-color="#5347ce">
+  <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+    <rect width="1200" height="800" fill="#5347ce"/>
+    <g transform="translate(440,250)">
+      <rect width="320" height="320" rx="64" fill="#ffffff" opacity="0.12"/>
+      <rect x="40" y="40" width="240" height="240" rx="44" fill="#ffffff"/>
+      <text x="160" y="210" font-family="-apple-system, Segoe UI, Roboto, sans-serif" font-size="170" font-weight="700" fill="#5347ce" text-anchor="middle">V</text>
+    </g>
+    <text x="600" y="650" font-family="-apple-system, Segoe UI, Roboto, sans-serif" font-size="46" font-weight="600" fill="#ffffff" text-anchor="middle" opacity="0.9">Varys</text>
+  </svg>
+</template>
+<x-dc>
+<helmet>
+<style>
+:root {
+  --color-brand-50:#eeecfb; --color-brand-100:#dcd8f7; --color-brand-200:#bdb4f0; --color-brand-300:#a294f2; --color-brand-400:#887cfd; --color-brand-500:#5347ce; --color-brand-600:#4539b5; --color-brand-700:#382e94; --color-brand-800:#2c2474; --color-brand-900:#211b57;
+  --color-accent-blue:#4896fe; --color-accent-teal:#16c8c7;
+  --color-neutral-0:#ffffff; --color-neutral-50:#f6f7f9; --color-neutral-100:#eef0f4; --color-neutral-150:#e7eaef; --color-neutral-200:#dde1e8; --color-neutral-300:#c7ccd6; --color-neutral-400:#a0a6b2; --color-neutral-500:#8a909e; --color-neutral-600:#646b7a; --color-neutral-700:#454b58; --color-neutral-800:#2a2f3a; --color-neutral-900:#1a1d29; --color-neutral-950:#101322;
+  --color-bg-page:var(--color-neutral-100); --color-bg-surface:var(--color-neutral-0); --color-bg-subtle:var(--color-neutral-50); --color-bg-inset:var(--color-neutral-100);
+  --color-border:var(--color-neutral-150); --color-border-strong:var(--color-neutral-200);
+  --color-text-strong:var(--color-neutral-950); --color-text:var(--color-neutral-700); --color-text-muted:var(--color-neutral-500); --color-text-subtle:var(--color-neutral-400); --color-text-on-primary:var(--color-neutral-0);
+  --color-primary:var(--color-brand-500); --color-primary-hover:var(--color-brand-600); --color-primary-active:var(--color-brand-700); --color-primary-soft:var(--color-brand-50); --color-primary-fg:var(--color-neutral-0);
+  --color-success:#0ea47f; --color-success-soft:#e2f6f0; --color-success-fg:#0b8568;
+  --color-warning:#f5a524; --color-warning-soft:#fef3da; --color-warning-fg:#b5710f;
+  --color-danger:#f0445e; --color-danger-soft:#fde7eb; --color-danger-fg:#d32f49;
+  --color-info:#4896fe; --color-info-soft:#e8f1ff; --color-info-fg:#1b6fd6;
+  --color-focus-ring:rgba(83,71,206,0.32);
+  --color-dataviz-1:#5347ce; --color-dataviz-2:#887cfd; --color-dataviz-3:#4896fe; --color-dataviz-4:#16c8c7; --color-dataviz-5:#7ee0d6;
+  --space-2:.125rem; --space-4:.25rem; --space-6:.375rem; --space-8:.5rem; --space-12:.75rem; --space-16:1rem; --space-20:1.25rem; --space-24:1.5rem; --space-32:2rem; --space-40:2.5rem; --space-48:3rem; --space-64:4rem;
+  --radius-sm:6px; --radius-md:8px; --radius-lg:12px; --radius-xl:16px; --radius-2xl:20px; --radius-full:9999px;
+  --shadow-xs:0 1px 2px rgba(16,24,40,.04); --shadow-sm:0 1px 2px rgba(16,24,40,.04),0 1px 3px rgba(16,24,40,.06); --shadow-md:0 2px 4px rgba(16,24,40,.05),0 4px 12px rgba(16,24,40,.07); --shadow-lg:0 8px 24px rgba(16,24,40,.1); --shadow-focus:0 0 0 3px var(--color-focus-ring);
+  --font-display:"SF Pro Display","SF Pro Text",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;
+  --font-text:"SF Pro Text",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;
+  --font-mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --font-size-xs:.75rem; --font-size-sm:.8125rem; --font-size-base:.875rem; --font-size-md:1rem; --font-size-lg:1.125rem; --font-size-xl:1.25rem; --font-size-2xl:1.5rem; --font-size-3xl:1.875rem; --font-size-4xl:2.25rem;
+  --font-weight-regular:400; --font-weight-medium:500; --font-weight-semibold:600; --font-weight-bold:700;
+  --line-height-tight:1.2; --line-height-snug:1.35; --line-height-normal:1.5; --line-height-relaxed:1.65;
+  --letter-spacing-tight:-0.01em; --letter-spacing-wide:0.04em;
+  --duration-fast:120ms; --duration-base:200ms; --ease-standard:cubic-bezier(.4,0,.2,1);
+}
+* { box-sizing: border-box; }
+html, body { margin:0; padding:0; }
+body { background: var(--color-bg-page); color: var(--color-text); font-family: var(--font-text); font-size: var(--font-size-base); -webkit-font-smoothing: antialiased; }
+::selection { background: var(--color-primary-soft); color: var(--color-text-strong); }
+*::-webkit-scrollbar { width:10px; height:10px; }
+*::-webkit-scrollbar-thumb { background: var(--color-neutral-200); border-radius:var(--radius-full); border:2px solid var(--color-bg-page); }
+*::-webkit-scrollbar-thumb:hover { background: var(--color-neutral-300); }
+@keyframes vspin { to { transform: rotate(360deg); } }
+@keyframes vshimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }
+@keyframes vpulse { 0%,100% { opacity:1; } 50% { opacity:.45; } }
+@keyframes vfade { from { opacity:0; transform: translateY(6px); } to { opacity:1; transform:none; } }
+.vskel { background: linear-gradient(90deg, var(--color-neutral-100) 0%, var(--color-neutral-50) 50%, var(--color-neutral-100) 100%); background-size: 800px 100%; animation: vshimmer 1.4s infinite linear; border-radius: var(--radius-sm); }
+[data-focusring]:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+</style>
+</helmet>
+
+<div style="display:flex; height:100vh; width:100%; overflow:hidden; font-family:var(--font-text); color:var(--color-text);">
+
+  <aside style="width:{{ sidebarWidth }}; flex:0 0 auto; background:var(--color-bg-surface); border-right:1px solid var(--color-border); display:flex; flex-direction:column; transition:width var(--duration-base) var(--ease-standard); overflow:hidden;">
+    <div style="display:flex; align-items:center; gap:var(--space-12); height:64px; padding:0 var(--space-20); flex:0 0 auto;">
+      <div style="width:32px; height:32px; flex:0 0 auto; border-radius:var(--radius-md); background:linear-gradient(135deg,var(--color-brand-500),var(--color-brand-400)); display:flex; align-items:center; justify-content:center; color:#fff; font-family:var(--font-display); font-weight:var(--font-weight-bold); font-size:var(--font-size-lg); box-shadow:var(--shadow-sm);">V</div>
+      <div style="display:{{ labelDisplay }}; min-width:0;">
+        <div style="font-family:var(--font-display); font-weight:var(--font-weight-bold); font-size:var(--font-size-md); color:var(--color-text-strong); line-height:1;">Varys</div>
+        <div style="font-size:var(--font-size-xs); color:var(--color-text-subtle); margin-top:2px;">Visual regression</div>
+      </div>
+    </div>
+
+    <nav style="flex:1; overflow-y:auto; padding:var(--space-12) var(--space-12) var(--space-20);">
+      <sc-for list="{{ navGroups }}" as="group" hint-placeholder-count="4">
+        <div style="margin-bottom:var(--space-16);">
+          <div style="display:{{ labelDisplay }}; font-size:var(--font-size-xs); font-weight:var(--font-weight-semibold); letter-spacing:var(--letter-spacing-wide); text-transform:uppercase; color:var(--color-text-subtle); padding:0 var(--space-12); margin-bottom:var(--space-8);">{{ group.label }}</div>
+          <sc-for list="{{ group.items }}" as="item" hint-placeholder-count="3">
+            <button data-focusring="1" onClick="{{ item.onClick }}" title="{{ item.name }}" style="width:100%; display:flex; align-items:center; gap:var(--space-12); padding:var(--space-8) var(--space-12); border:none; border-radius:var(--radius-md); cursor:pointer; font-family:var(--font-text); font-size:var(--font-size-base); text-align:left; margin-bottom:2px; transition:background var(--duration-fast) var(--ease-standard); {{ item.style }}" style-hover="filter:brightness(0.985);">
+              <span style="flex:0 0 auto; display:inline-flex; width:20px; height:20px; font-size:19px;">{{ item.icon }}</span>
+              <span style="flex:1; min-width:0; display:{{ labelDisplay }}; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ item.name }}</span>
+              <sc-if value="{{ item.count }}" hint-placeholder-val="">
+                <span style="display:{{ labelDisplay }}; flex:0 0 auto; min-width:20px; height:20px; padding:0 6px; border-radius:var(--radius-full); background:var(--color-warning-soft); color:var(--color-warning-fg); font-size:var(--font-size-xs); font-weight:var(--font-weight-semibold); display:inline-flex; align-items:center; justify-content:center;">{{ item.count }}</span>
+              </sc-if>
+            </button>
+          </sc-for>
+        </div>
+      </sc-for>
+    </nav>
+
+    <div style="flex:0 0 auto; border-top:1px solid var(--color-border); padding:var(--space-12);">
+      <button data-focusring="1" style="width:100%; display:flex; align-items:center; gap:var(--space-12); padding:var(--space-8); border:none; background:transparent; border-radius:var(--radius-md); cursor:pointer; text-align:left;" style-hover="background:var(--color-bg-subtle);">
+        <span style="width:32px; height:32px; flex:0 0 auto; border-radius:var(--radius-full); background:linear-gradient(135deg,var(--color-dataviz-3),var(--color-dataviz-4)); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:var(--font-weight-semibold); font-size:var(--font-size-sm);">MK</span>
+        <span style="flex:1; min-width:0; display:{{ labelDisplay }};">
+          <span style="display:block; font-size:var(--font-size-sm); font-weight:var(--font-weight-medium); color:var(--color-text-strong); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Mira Kessler</span>
+          <span style="display:block; font-size:var(--font-size-xs); color:var(--color-text-subtle);">QA · Platform</span>
+        </span>
+        <span style="display:{{ labelDisplay }}; flex:0 0 auto; color:var(--color-text-subtle);">{{ icons.chevronDown }}</span>
+      </button>
+    </div>
+  </aside>
+
+  <div style="flex:1; min-width:0; display:flex; flex-direction:column; overflow:hidden;">
+    <header style="flex:0 0 auto; height:64px; display:flex; align-items:center; gap:var(--space-16); padding:0 var(--space-32); background:var(--color-bg-surface); border-bottom:1px solid var(--color-border);">
+      <button data-focusring="1" onClick="{{ toggleSidebar }}" title="Toggle sidebar" style="flex:0 0 auto; width:36px; height:36px; display:inline-flex; align-items:center; justify-content:center; border:1px solid var(--color-border); background:var(--color-bg-surface); border-radius:var(--radius-md); cursor:pointer; color:var(--color-text-muted);" style-hover="background:var(--color-bg-subtle);"><span style="display:inline-flex;">{{ icons.menu }}</span></button>
+      <div style="min-width:0; flex:0 1 auto; max-width:340px;">
+        <div style="font-family:var(--font-display); font-size:var(--font-size-lg); font-weight:var(--font-weight-semibold); color:var(--color-text-strong); line-height:1.15; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ screenTitle }}</div>
+        <div style="font-size:var(--font-size-xs); color:var(--color-text-muted); margin-top:1px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ screenSubtitle }}</div>
+      </div>
+
+      <div style="flex:1;"></div>
+
+      <div style="position:relative; width:280px; max-width:30vw; flex:0 0 auto;">
+        <span style="position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--color-text-subtle); display:inline-flex; pointer-events:none;">{{ icons.search }}</span>
+        <input data-focusring="1" placeholder="Search tests, runs, checkpoints…" style="width:100%; height:38px; padding:0 var(--space-12) 0 38px; border:1px solid var(--color-border-strong); border-radius:var(--radius-md); background:var(--color-bg-subtle); font-family:var(--font-text); font-size:var(--font-size-base); color:var(--color-text-strong);" />
+      </div>
+
+      <div style="display:inline-flex; align-items:center; background:var(--color-bg-subtle); border:1px solid var(--color-border); border-radius:var(--radius-md); padding:2px; gap:2px; flex:0 0 auto;" title="Preview state (demo)">
+        <sc-for list="{{ vsOptions }}" as="opt" hint-placeholder-count="4">
+          <button data-focusring="1" onClick="{{ opt.onClick }}" style="height:28px; padding:0 var(--space-12); border:none; border-radius:var(--radius-sm); cursor:pointer; font-family:var(--font-text); font-size:var(--font-size-xs); font-weight:var(--font-weight-medium); white-space:nowrap; {{ opt.style }}">{{ opt.label }}</button>
+        </sc-for>
+      </div>
+
+      <button data-focusring="1" onClick="{{ goAlerts }}" title="Alerts" style="position:relative; flex:0 0 auto; width:38px; height:38px; display:inline-flex; align-items:center; justify-content:center; border:1px solid var(--color-border); background:var(--color-bg-surface); border-radius:var(--radius-md); cursor:pointer; color:var(--color-text-muted);" style-hover="background:var(--color-bg-subtle);">
+        <span style="display:inline-flex;">{{ icons.bell }}</span>
+        <span style="position:absolute; top:7px; right:8px; width:7px; height:7px; border-radius:var(--radius-full); background:var(--color-danger); border:1.5px solid var(--color-bg-surface);"></span>
+      </button>
+
+      <button data-focusring="1" onClick="{{ openRunDialog }}" style="flex:0 0 auto; height:38px; padding:0 var(--space-16); display:inline-flex; align-items:center; gap:var(--space-8); border:none; border-radius:var(--radius-md); background:var(--color-primary); color:var(--color-primary-fg); font-family:var(--font-text); font-size:var(--font-size-base); font-weight:var(--font-weight-medium); cursor:pointer;" style-hover="background:var(--color-primary-hover);"><span style="display:inline-flex;">{{ icons.play }}</span>Run test</button>
+    </header>
+
+    <main style="flex:1; overflow-y:auto; background:var(--color-bg-page);">
+      <div style="max-width:1280px; margin:0 auto; padding:var(--space-32);">
+
+        <!-- ===================== DASHBOARD ===================== -->
+        <sc-if value="{{ isDashboard }}" hint-placeholder-val="{{ true }}">
+          <div>
+
+            <sc-if value="{{ vsError }}" hint-placeholder-val="">
+              <div style="background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); padding:var(--space-48); text-align:center; display:flex; flex-direction:column; align-items:center; gap:var(--space-16);">
+                <span style="width:56px; height:56px; border-radius:var(--radius-full); background:var(--color-danger-soft); color:var(--color-danger-fg); display:inline-flex; align-items:center; justify-content:center; font-size:26px;">{{ icons.alert }}</span>
+                <div style="font-family:var(--font-display); font-size:var(--font-size-xl); font-weight:var(--font-weight-semibold); color:var(--color-text-strong);">Couldn't load the dashboard</div>
+                <div style="font-size:var(--font-size-base); color:var(--color-text-muted); max-width:380px;">The metrics service returned a 503. Your data is safe — this is a temporary read failure.</div>
+                <button data-focusring="1" onClick="{{ retry }}" style="height:38px; padding:0 var(--space-20); border:none; border-radius:var(--radius-md); background:var(--color-primary); color:var(--color-primary-fg); font-weight:var(--font-weight-medium); cursor:pointer; font-family:var(--font-text);">Retry</button>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ vsLoading }}" hint-placeholder-val="">
+              <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:var(--space-20); margin-bottom:var(--space-20);">
+                <div class="vskel" style="height:118px; border-radius:var(--radius-xl);"></div>
+                <div class="vskel" style="height:118px; border-radius:var(--radius-xl);"></div>
+                <div class="vskel" style="height:118px; border-radius:var(--radius-xl);"></div>
+                <div class="vskel" style="height:118px; border-radius:var(--radius-xl);"></div>
+              </div>
+              <div style="display:grid; grid-template-columns:2fr 1fr; gap:var(--space-20);">
+                <div class="vskel" style="height:340px; border-radius:var(--radius-xl);"></div>
+                <div class="vskel" style="height:340px; border-radius:var(--radius-xl);"></div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ vsData }}" hint-placeholder-val="{{ true }}">
+              <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:var(--space-20); margin-bottom:var(--space-20);">
+                <sc-for list="{{ kpis }}" as="k" hint-placeholder-count="4">
+                  <div style="background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); padding:var(--space-20);">
+                    <div style="display:flex; align-items:center; justify-content:space-between; gap:var(--space-8); margin-bottom:var(--space-12);">
+                      <span style="font-size:var(--font-size-xs); font-weight:var(--font-weight-semibold); letter-spacing:var(--letter-spacing-wide); text-transform:uppercase; color:var(--color-text-muted);">{{ k.label }}</span>
+                      <span style="width:28px; height:28px; border-radius:var(--radius-md); background:var(--color-bg-subtle); color:var(--color-text-muted); display:inline-flex; align-items:center; justify-content:center; font-size:15px;">{{ k.icon }}</span>
+                    </div>
+                    <div style="display:flex; align-items:baseline; gap:var(--space-12);">
+                      <span style="font-family:var(--font-display); font-size:var(--font-size-3xl); font-weight:var(--font-weight-bold); letter-spacing:var(--letter-spacing-tight); color:var(--color-text-strong); line-height:1;">{{ k.value }}</span>
+                      <span style="display:inline-flex; align-items:center; gap:3px; height:20px; padding:0 var(--space-8); border-radius:var(--radius-full); font-size:var(--font-size-xs); font-weight:var(--font-weight-medium); background:{{ k.deltaBg }}; color:{{ k.deltaFg }};"><span style="display:inline-flex; width:13px; height:13px;">{{ k.arrow }}</span>{{ k.delta }}</span>
+                    </div>
+                    <div style="font-size:var(--font-size-xs); color:var(--color-text-subtle); margin-top:var(--space-8);">{{ k.sub }}</div>
+                  </div>
+                </sc-for>
+              </div>
+
+              <div style="display:grid; grid-template-columns:2fr 1fr; gap:var(--space-20); margin-bottom:var(--space-20);">
+                <div style="background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); padding:var(--space-24);">
+                  <div style="display:flex; align-items:center; gap:var(--space-12); margin-bottom:var(--space-20);">
+                    <span style="width:32px; height:32px; border-radius:var(--radius-md); background:var(--color-bg-subtle); color:var(--color-text-muted); display:inline-flex; align-items:center; justify-content:center; font-size:18px;">{{ icons.grid }}</span>
+                    <div style="flex:1; min-width:0;">
+                      <h3 style="margin:0; font-family:var(--font-display); font-size:var(--font-size-md); font-weight:var(--font-weight-semibold); color:var(--color-text-strong);">Test × Environment status</h3>
+                      <div style="font-size:var(--font-size-xs); color:var(--color-text-muted); margin-top:2px;">Latest run per cell · click to open</div>
+                    </div>
+                    <div style="display:flex; gap:var(--space-12); align-items:center;">
+                      <sc-for list="{{ matrixLegend }}" as="lg" hint-placeholder-count="4">
+                        <span style="display:inline-flex; align-items:center; gap:5px; font-size:var(--font-size-xs); color:var(--color-text-muted);"><span style="width:8px; height:8px; border-radius:var(--radius-full); background:{{ lg.dot }};"></span>{{ lg.label }}</span>
+                      </sc-for>
+                    </div>
+                  </div>
+                  <div style="overflow-x:auto;">
+                    <div style="min-width:520px;">
+                      <div style="display:grid; grid-template-columns:{{ matrixGridCols }}; align-items:center; padding:var(--space-8) var(--space-12);">
+                        <div style="font-size:var(--font-size-xs); font-weight:var(--font-weight-semibold); letter-spacing:var(--letter-spacing-wide); text-transform:uppercase; color:var(--color-text-subtle);">Test</div>
+                        <sc-for list="{{ matrixEnvs }}" as="env" hint-placeholder-count="5">
+                          <div style="text-align:center; font-size:var(--font-size-xs); font-weight:var(--font-weight-semibold); color:var(--color-text-muted); text-transform:capitalize;">{{ env }}</div>
+                        </sc-for>
+                      </div>
+                      <sc-for list="{{ matrixRows }}" as="row" hint-placeholder-count="6">
+                        <div style="display:grid; grid-template-columns:{{ matrixGridCols }}; align-items:center; border-top:1px solid var(--color-border); padding:var(--space-4) var(--space-12);">
+                          <div style="font-size:var(--font-size-base); color:var(--color-text-strong); font-weight:var(--font-weight-medium); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding-right:var(--space-8);">{{ row.name }}</div>
+                          <sc-for list="{{ row.cells }}" as="cell" hint-placeholder-count="5">
+                            <div style="display:flex; justify-content:center; padding:var(--space-6) 0;">
+                              <button data-focusring="1" onClick="{{ cell.onClick }}" title="{{ cell.title }}" style="width:30px; height:30px; border-radius:var(--radius-md); border:1px solid {{ cell.border }}; background:{{ cell.bg }}; color:{{ cell.fg }}; display:inline-flex; align-items:center; justify-content:center; cursor:pointer; font-size:14px;" style-hover="transform:scale(1.12);">{{ cell.icon }}</button>
+                            </div>
+                          </sc-for>
+                        </div>
+                      </sc-for>
+                    </div>
+                  </div>
+                </div>
+
+                <div style="background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); padding:var(--space-24); display:flex; flex-direction:column;">
+                  <div style="display:flex; align-items:center; gap:var(--space-12); margin-bottom:var(--space-16);">
+                    <span style="width:32px; height:32px; border-radius:var(--radius-md); background:var(--color-bg-subtle); color:var(--color-text-muted); display:inline-flex; align-items:center; justify-content:center; font-size:18px;">{{ icons.bell }}</span>
+                    <h3 style="margin:0; flex:1; font-family:var(--font-display); font-size:var(--font-size-md); font-weight:var(--font-weight-semibold); color:var(--color-text-strong);">Alerts</h3>
+                  </div>
+                  <div style="display:flex; flex-direction:column; gap:var(--space-12);">
+                    <sc-for list="{{ alerts }}" as="a" hint-placeholder-count="4">
+                      <div style="display:flex; gap:var(--space-12); padding:var(--space-12); border:1px solid var(--color-border); border-radius:var(--radius-lg); background:var(--color-bg-subtle);">
+                        <span style="flex:0 0 auto; width:28px; height:28px; border-radius:var(--radius-md); background:{{ a.bg }}; color:{{ a.fg }}; display:inline-flex; align-items:center; justify-content:center; font-size:15px;">{{ a.icon }}</span>
+                        <div style="min-width:0;">
+                          <div style="font-size:var(--font-size-sm); font-weight:var(--font-weight-medium); color:var(--color-text-strong);">{{ a.title }}</div>
+                          <div style="font-size:var(--font-size-xs); color:var(--color-text-muted); margin-top:2px;">{{ a.detail }}</div>
+                          <div style="font-size:var(--font-size-xs); color:var(--color-text-subtle); margin-top:var(--space-6);">{{ a.time }}</div>
+                        </div>
+                      </div>
+                    </sc-for>
+                  </div>
+                </div>
+              </div>
+
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:var(--space-20);">
+                <div style="background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); padding:var(--space-24);">
+                  <div style="display:flex; align-items:center; gap:var(--space-12); margin-bottom:var(--space-16);">
+                    <span style="width:32px; height:32px; border-radius:var(--radius-md); background:var(--color-bg-subtle); color:var(--color-text-muted); display:inline-flex; align-items:center; justify-content:center; font-size:18px;">{{ icons.activity }}</span>
+                    <h3 style="margin:0; flex:1; font-family:var(--font-display); font-size:var(--font-size-md); font-weight:var(--font-weight-semibold); color:var(--color-text-strong);">Recent runs</h3>
+                    <button data-focusring="1" onClick="{{ goRuns }}" style="height:30px; padding:0 var(--space-12); border:1px solid var(--color-border-strong); background:var(--color-bg-surface); border-radius:var(--radius-md); font-size:var(--font-size-sm); color:var(--color-text-strong); cursor:pointer; font-family:var(--font-text);" style-hover="background:var(--color-bg-subtle);">View all</button>
+                  </div>
+                  <div style="display:flex; flex-direction:column;">
+                    <sc-for list="{{ feed }}" as="r" hint-placeholder-count="6">
+                      <button data-focusring="1" onClick="{{ r.onClick }}" style="display:flex; align-items:center; gap:var(--space-12); padding:var(--space-10) var(--space-8); border:none; border-top:1px solid var(--color-border); background:transparent; cursor:pointer; text-align:left; width:100%;" style-hover="background:var(--color-bg-subtle);">
+                        <span style="flex:0 0 auto; width:8px; height:8px; border-radius:var(--radius-full); background:{{ r.dot }};"></span>
+                        <span style="flex:1; min-width:0;">
+                          <span style="display:block; font-size:var(--font-size-base); color:var(--color-text-strong); font-weight:var(--font-weight-medium); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ r.testName }}</span>
+                          <span style="display:block; font-size:var(--font-size-xs); color:var(--color-text-muted);">{{ r.environment }} · {{ r.time }}</span>
+                        </span>
+                        <span style="flex:0 0 auto; display:inline-flex; align-items:center; gap:5px; height:22px; padding:0 var(--space-8); border-radius:var(--radius-full); font-size:var(--font-size-xs); font-weight:var(--font-weight-medium); background:{{ r.bg }}; color:{{ r.fg }};">{{ r.label }}</span>
+                      </button>
+                    </sc-for>
+                  </div>
+                </div>
+
+                <div style="background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); padding:var(--space-24);">
+                  <div style="display:flex; align-items:center; gap:var(--space-12); margin-bottom:var(--space-16);">
+                    <span style="width:32px; height:32px; border-radius:var(--radius-md); background:var(--color-bg-subtle); color:var(--color-text-muted); display:inline-flex; align-items:center; justify-content:center; font-size:18px;">{{ icons.trend }}</span>
+                    <h3 style="margin:0; flex:1; font-family:var(--font-display); font-size:var(--font-size-md); font-weight:var(--font-weight-semibold); color:var(--color-text-strong);">Checkpoint diff trend</h3>
+                    <span style="font-size:var(--font-size-xs); color:var(--color-text-subtle);">14 days</span>
+                  </div>
+                  <div style="display:flex; flex-direction:column;">
+                    <sc-for list="{{ sparklines }}" as="s" hint-placeholder-count="5">
+                      <div style="display:flex; align-items:center; gap:var(--space-16); padding:var(--space-10) 0; border-top:1px solid var(--color-border);">
+                        <span style="flex:1; min-width:0; font-size:var(--font-size-base); color:var(--color-text-strong); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ s.name }}</span>
+                        <svg viewBox="0 0 120 32" width="120" height="32" preserveAspectRatio="none" style="flex:0 0 auto; overflow:visible;"><polyline points="{{ s.points }}" fill="none" stroke="{{ s.color }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline></svg>
+                        <span style="flex:0 0 auto; width:62px; text-align:right; font-family:var(--font-mono); font-size:var(--font-size-xs); color:{{ s.scoreColor }};">{{ s.scoreLabel }}</span>
+                      </div>
+                    </sc-for>
+                  </div>
+                </div>
+              </div>
+            </sc-if>
+
+          </div>
+        </sc-if>
+
+        <!-- ===================== TESTS ===================== -->
+        <sc-if value="{{ isTests }}" hint-placeholder-val="">
+          <sc-if value="{{ vsError }}" hint-placeholder-val="">
+            <div style="background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); padding:var(--space-48); text-align:center; display:flex; flex-direction:column; align-items:center; gap:var(--space-16);">
+              <span style="width:56px; height:56px; border-radius:var(--radius-full); background:var(--color-danger-soft); color:var(--color-danger-fg); display:inline-flex; align-items:center; justify-content:center; font-size:26px;">{{ icons.alert }}</span>
+              <div style="font-family:var(--font-display); font-size:var(--font-size-xl); font-weight:var(--font-weight-semibold); color:var(--color-text-strong);">Couldn't load tests</div>
+              <div style="font-size:var(--font-size-base); color:var(--color-text-muted); max-width:380px;">GET /tests failed. Check the API connection and try again.</div>
+              <button data-focusring="1" onClick="{{ retry }}" style="height:38px; padding:0 var(--space-20); border:none; border-radius:var(--radius-md); background:var(--color-primary); color:var(--color-primary-fg); font-weight:var(--font-weight-medium); cursor:pointer; font-family:var(--font-text);">Retry</button>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ vsLoading }}" hint-placeholder-val="">
+            <div style="display:grid; grid-template-columns:240px 1fr; gap:var(--space-20);">
+              <div class="vskel" style="height:360px; border-radius:var(--radius-xl);"></div>
+              <div style="display:flex; flex-direction:column; gap:var(--space-12);">
+                <div class="vskel" style="height:40px; border-radius:var(--radius-md);"></div>
+                <div class="vskel" style="height:64px; border-radius:var(--radius-lg);"></div>
+                <div class="vskel" style="height:64px; border-radius:var(--radius-lg);"></div>
+                <div class="vskel" style="height:64px; border-radius:var(--radius-lg);"></div>
+                <div class="vskel" style="height:64px; border-radius:var(--radius-lg);"></div>
+              </div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ vsEmpty }}" hint-placeholder-val="">
+            <div style="background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); padding:var(--space-64) var(--space-48); text-align:center; display:flex; flex-direction:column; align-items:center; gap:var(--space-16);">
+              <span style="width:64px; height:64px; border-radius:var(--radius-2xl); background:var(--color-primary-soft); color:var(--color-primary); display:inline-flex; align-items:center; justify-content:center; font-size:30px;">{{ icons.tests }}</span>
+              <div style="font-family:var(--font-display); font-size:var(--font-size-xl); font-weight:var(--font-weight-semibold); color:var(--color-text-strong);">No tests yet</div>
+              <div style="font-size:var(--font-size-base); color:var(--color-text-muted); max-width:420px;">Record your first test in the Varys Chrome extension. Saved recordings appear here, ready to file, tag and run.</div>
+              <div style="display:inline-flex; align-items:center; gap:var(--space-8); height:38px; padding:0 var(--space-16); border:1px solid var(--color-border-strong); border-radius:var(--radius-md); color:var(--color-text-strong); font-weight:var(--font-weight-medium); background:var(--color-bg-surface);"><span style="font-size:15px; color:var(--color-text-muted);">{{ icons.external }}</span>Open the recorder</div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ vsData }}" hint-placeholder-val="">
+            <div style="display:flex; align-items:center; gap:var(--space-8); flex-wrap:wrap; margin-bottom:var(--space-20);">
+              <span style="font-size:var(--font-size-xs); font-weight:var(--font-weight-semibold); letter-spacing:var(--letter-spacing-wide); text-transform:uppercase; color:var(--color-text-subtle); margin-right:var(--space-4);">Tags</span>
+              <sc-for list="{{ tagChips }}" as="c" hint-placeholder-count="6">
+                <button data-focusring="1" onClick="{{ c.onClick }}" style="display:inline-flex; align-items:center; gap:5px; height:28px; padding:0 var(--space-12); border:1px solid {{ c.border }}; background:{{ c.bg }}; color:{{ c.fg }}; border-radius:var(--radius-full); font-family:var(--font-text); font-size:var(--font-size-xs); font-weight:var(--font-weight-medium); cursor:pointer;">{{ c.name }}</button>
+              </sc-for>
+              <div style="flex:1;"></div>
+              <button data-focusring="1" onClick="{{ clearFilters }}" style="height:32px; padding:0 var(--space-12); border:1px solid var(--color-border-strong); background:var(--color-bg-surface); border-radius:var(--radius-md); font-size:var(--font-size-sm); color:var(--color-text); cursor:pointer; font-family:var(--font-text);" style-hover="background:var(--color-bg-subtle);">Clear filters</button>
+            </div>
+
+            <div style="display:grid; grid-template-columns:240px 1fr; gap:var(--space-20); align-items:start;">
+              <div style="background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); padding:var(--space-12);">
+                <div style="font-size:var(--font-size-xs); font-weight:var(--font-weight-semibold); letter-spacing:var(--letter-spacing-wide); text-transform:uppercase; color:var(--color-text-subtle); padding:var(--space-8) var(--space-12) var(--space-6);">Folders</div>
+                <div style="display:flex; flex-direction:column; gap:2px;">
+                  <sc-for list="{{ folderRail }}" as="f" hint-placeholder-count="5">
+                    <button data-focusring="1" onClick="{{ f.onClick }}" onDragOver="{{ f.onDragOver }}" onDrop="{{ f.onDrop }}" onDragLeave="{{ f.onDragLeave }}" title="{{ f.name }}" style="display:flex; align-items:center; gap:var(--space-10); padding:var(--space-8) var(--space-12); border:none; border-radius:var(--radius-md); cursor:pointer; text-align:left; font-family:var(--font-text); font-size:var(--font-size-base); background:{{ f.bg }}; color:{{ f.fg }}; font-weight:{{ f.weight }}; outline:{{ f.outline }}; outline-offset:-2px; transition:background var(--duration-fast) var(--ease-standard);" style-hover="background:var(--color-bg-subtle);">
+                      <span style="flex:0 0 auto; font-size:17px; color:var(--color-text-muted);">{{ f.icon }}</span>
+                      <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ f.name }}</span>
+                      <span style="flex:0 0 auto; font-size:var(--font-size-xs); color:var(--color-text-subtle); font-variant-numeric:tabular-nums;">{{ f.count }}</span>
+                    </button>
+                  </sc-for>
+                </div>
+                <div style="margin:var(--space-8) var(--space-12) var(--space-4); padding-top:var(--space-10); border-top:1px solid var(--color-border); font-size:var(--font-size-xs); color:var(--color-text-subtle); line-height:var(--line-height-snug);">Drag a test onto a folder to file it.</div>
+              </div>
+
+              <div style="background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); overflow:hidden;">
+                <sc-if value="{{ testsEmpty }}" hint-placeholder-val="">
+                  <div style="padding:var(--space-48); text-align:center; display:flex; flex-direction:column; align-items:center; gap:var(--space-12);">
+                    <span style="width:48px; height:48px; border-radius:var(--radius-xl); background:var(--color-bg-subtle); color:var(--color-text-subtle); display:inline-flex; align-items:center; justify-content:center; font-size:22px;">{{ icons.search2 }}</span>
+                    <div style="font-size:var(--font-size-md); font-weight:var(--font-weight-semibold); color:var(--color-text-strong);">No tests match these filters</div>
+                    <button data-focusring="1" onClick="{{ clearFilters }}" style="height:34px; padding:0 var(--space-16); border:1px solid var(--color-border-strong); background:var(--color-bg-surface); border-radius:var(--radius-md); font-size:var(--font-size-sm); color:var(--color-text-strong); cursor:pointer; font-family:var(--font-text);">Clear filters</button>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ testsAny }}" hint-placeholder-val="{{ true }}">
+                  <sc-for list="{{ testRows }}" as="t" hint-placeholder-count="6">
+                    <div draggable="true" onDragStart="{{ t.onDragStart }}" onDragEnd="{{ t.onDragEnd }}" style="display:flex; align-items:center; gap:var(--space-12); padding:var(--space-12) var(--space-16); border-bottom:1px solid var(--color-border); opacity:{{ t.dragOpacity }}; cursor:grab; background:var(--color-bg-surface);" style-hover="background:var(--color-bg-subtle);">
+                      <span style="flex:0 0 auto; color:var(--color-text-subtle); font-size:16px; cursor:grab;">{{ icons.grip }}</span>
+                      <div style="flex:1; min-width:0;">
+                        <div style="display:flex; align-items:center; gap:var(--space-8);">
+                          <span style="font-size:var(--font-size-base); font-weight:var(--font-weight-semibold); color:var(--color-text-strong); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ t.name }}</span>
+                          <sc-if value="{{ t.needsEnv }}" hint-placeholder-val="">
+                            <span title="Requires an environment" style="display:inline-flex; align-items:center; gap:4px; height:18px; padding:0 var(--space-8); border-radius:var(--radius-full); background:var(--color-info-soft); color:var(--color-info-fg); font-size:var(--font-size-xs); font-weight:var(--font-weight-medium);"><span style="font-size:11px;">{{ icons.lock }}</span>env</span>
+                          </sc-if>
+                        </div>
+                        <div style="display:flex; align-items:center; gap:var(--space-8); margin-top:var(--space-6); flex-wrap:wrap;">
+                          <span style="display:inline-flex; align-items:center; gap:4px; font-size:var(--font-size-xs); color:var(--color-text-muted);"><span style="font-size:13px;">{{ t.folderIcon }}</span>{{ t.folderName }}</span>
+                          <sc-for list="{{ t.tags }}" as="tg" hint-placeholder-count="2">
+                            <span style="display:inline-flex; align-items:center; gap:3px; height:18px; padding:0 var(--space-6); border-radius:var(--radius-sm); background:var(--color-bg-inset); color:var(--color-text-muted); font-size:var(--font-size-xs); font-family:var(--font-mono);">{{ tg.name }}</span>
+                          </sc-for>
+                        </div>
+                      </div>
+                      <span style="flex:0 0 auto; font-size:var(--font-size-xs); color:var(--color-text-subtle); font-variant-numeric:tabular-nums; margin-right:var(--space-4);">{{ t.created }}</span>
+                      <button data-focusring="1" onClick="{{ t.runClick }}" style="flex:0 0 auto; height:32px; padding:0 var(--space-12); border:1px solid var(--color-border-strong); background:var(--color-bg-surface); border-radius:var(--radius-md); font-family:var(--font-text); font-size:var(--font-size-sm); font-weight:var(--font-weight-medium); color:var(--color-text-strong); cursor:pointer; display:inline-flex; align-items:center; gap:6px;" style-hover="background:var(--color-bg-subtle); border-color:var(--color-primary);"><span style="font-size:13px; color:var(--color-primary);">{{ icons.play }}</span>Run</button>
+                      <button data-focusring="1" style="flex:0 0 auto; width:32px; height:32px; border:none; background:transparent; border-radius:var(--radius-md); color:var(--color-text-subtle); cursor:pointer; display:inline-flex; align-items:center; justify-content:center; font-size:18px;" style-hover="background:var(--color-bg-inset);">{{ icons.more }}</button>
+                    </div>
+                  </sc-for>
+                </sc-if>
+              </div>
+            </div>
+          </sc-if>
+        </sc-if>
+
+        <!-- ===================== RUNS ===================== -->
+        <sc-if value="{{ isRuns }}" hint-placeholder-val="">
+          <sc-if value="{{ vsError }}" hint-placeholder-val="">
+            <div style="background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); padding:var(--space-48); text-align:center; display:flex; flex-direction:column; align-items:center; gap:var(--space-16);">
+              <span style="width:56px; height:56px; border-radius:var(--radius-full); background:var(--color-danger-soft); color:var(--color-danger-fg); display:inline-flex; align-items:center; justify-content:center; font-size:26px;">{{ icons.alert }}</span>
+              <div style="font-family:var(--font-display); font-size:var(--font-size-xl); font-weight:var(--font-weight-semibold); color:var(--color-text-strong);">Run history unavailable</div>
+              <div style="font-size:var(--font-size-base); color:var(--color-text-muted); max-width:380px;">Polling GET /runs failed. Retrying automatically every 3s.</div>
+              <button data-focusring="1" onClick="{{ retry }}" style="height:38px; padding:0 var(--space-20); border:none; border-radius:var(--radius-md); background:var(--color-primary); color:var(--color-primary-fg); font-weight:var(--font-weight-medium); cursor:pointer; font-family:var(--font-text);">Retry now</button>
+            </div>
+          </sc-if>
+          <sc-if value="{{ vsLoading }}" hint-placeholder-val="">
+            <div style="background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); padding:var(--space-16); display:flex; flex-direction:column; gap:var(--space-12);">
+              <div class="vskel" style="height:40px; border-radius:var(--radius-md);"></div>
+              <div class="vskel" style="height:52px; border-radius:var(--radius-md);"></div>
+              <div class="vskel" style="height:52px; border-radius:var(--radius-md);"></div>
+              <div class="vskel" style="height:52px; border-radius:var(--radius-md);"></div>
+              <div class="vskel" style="height:52px; border-radius:var(--radius-md);"></div>
+            </div>
+          </sc-if>
+          <sc-if value="{{ vsEmpty }}" hint-placeholder-val="">
+            <div style="background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); padding:var(--space-64) var(--space-48); text-align:center; display:flex; flex-direction:column; align-items:center; gap:var(--space-16);">
+              <span style="width:64px; height:64px; border-radius:var(--radius-2xl); background:var(--color-bg-subtle); color:var(--color-text-subtle); display:inline-flex; align-items:center; justify-content:center; font-size:30px;">{{ icons.runs }}</span>
+              <div style="font-family:var(--font-display); font-size:var(--font-size-xl); font-weight:var(--font-weight-semibold); color:var(--color-text-strong);">No runs yet</div>
+              <div style="font-size:var(--font-size-base); color:var(--color-text-muted); max-width:400px;">Trigger a test to see its replay appear here, newest first, with live status.</div>
+            </div>
+          </sc-if>
+          <sc-if value="{{ vsData }}" hint-placeholder-val="">
+            <div style="background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); overflow:hidden;">
+              <div style="display:flex; align-items:center; gap:var(--space-12); padding:var(--space-16) var(--space-20); border-bottom:1px solid var(--color-border);">
+                <h3 style="margin:0; font-family:var(--font-display); font-size:var(--font-size-md); font-weight:var(--font-weight-semibold); color:var(--color-text-strong);">All runs</h3>
+                <span style="font-size:var(--font-size-xs); color:var(--color-text-subtle);">{{ runsCount }} runs</span>
+                <div style="flex:1;"></div>
+                <span style="display:inline-flex; align-items:center; gap:6px; font-size:var(--font-size-xs); color:var(--color-text-muted);"><span style="width:7px; height:7px; border-radius:var(--radius-full); background:var(--color-success); animation:vpulse 1.6s infinite;"></span>Live · polling every 3s</span>
+              </div>
+              <div style="overflow-x:auto;">
+                <table style="width:100%; border-collapse:collapse; min-width:680px;">
+                  <thead><tr style="background:var(--color-bg-subtle);">
+                    <th style="text-align:left; padding:var(--space-10) var(--space-20); font-size:var(--font-size-xs); font-weight:var(--font-weight-semibold); letter-spacing:var(--letter-spacing-wide); text-transform:uppercase; color:var(--color-text-subtle);">Test</th>
+                    <th style="text-align:left; padding:var(--space-10) var(--space-12); font-size:var(--font-size-xs); font-weight:var(--font-weight-semibold); letter-spacing:var(--letter-spacing-wide); text-transform:uppercase; color:var(--color-text-subtle);">Environment</th>
+                    <th style="text-align:left; padding:var(--space-10) var(--space-12); font-size:var(--font-size-xs); font-weight:var(--font-weight-semibold); letter-spacing:var(--letter-spacing-wide); text-transform:uppercase; color:var(--color-text-subtle);">Status</th>
+                    <th style="text-align:right; padding:var(--space-10) var(--space-20); font-size:var(--font-size-xs); font-weight:var(--font-weight-semibold); letter-spacing:var(--letter-spacing-wide); text-transform:uppercase; color:var(--color-text-subtle);">When</th>
+                  </tr></thead>
+                  <tbody>
+                    <sc-for list="{{ runsTable }}" as="r" hint-placeholder-count="8">
+                      <tr onClick="{{ r.onClick }}" data-focusring="1" tabindex="0" style="border-top:1px solid var(--color-border); cursor:pointer;" style-hover="background:var(--color-bg-subtle);">
+                        <td style="padding:var(--space-12) var(--space-20);">
+                          <div style="font-size:var(--font-size-base); font-weight:var(--font-weight-medium); color:var(--color-text-strong);">{{ r.testName }}</div>
+                          <sc-if value="{{ r.hasError }}" hint-placeholder-val=""><div style="font-family:var(--font-mono); font-size:var(--font-size-xs); color:var(--color-danger-fg); margin-top:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:360px;">{{ r.error }}</div></sc-if>
+                        </td>
+                        <td style="padding:var(--space-12); font-size:var(--font-size-sm); color:var(--color-text); text-transform:capitalize;">{{ r.environment }}</td>
+                        <td style="padding:var(--space-12);">
+                          <span style="display:inline-flex; align-items:center; gap:6px; height:24px; padding:0 var(--space-10); border-radius:var(--radius-full); font-size:var(--font-size-xs); font-weight:var(--font-weight-medium); background:{{ r.bg }}; color:{{ r.fg }};"><span style="font-size:13px; display:inline-flex;">{{ r.glyph }}</span>{{ r.label }}</span>
+                        </td>
+                        <td style="padding:var(--space-12) var(--space-20); text-align:right; font-size:var(--font-size-sm); color:var(--color-text-muted); white-space:nowrap;">{{ r.time }}</td>
+                      </tr>
+                    </sc-for>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </sc-if>
+        </sc-if>
+
+        <!-- ===================== NEEDS REVIEW ===================== -->
+        <sc-if value="{{ isNeedsReview }}" hint-placeholder-val="">
+          <sc-if value="{{ vsError }}" hint-placeholder-val="">
+            <div style="background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); padding:var(--space-48); text-align:center; display:flex; flex-direction:column; align-items:center; gap:var(--space-16);">
+              <span style="width:56px; height:56px; border-radius:var(--radius-full); background:var(--color-danger-soft); color:var(--color-danger-fg); display:inline-flex; align-items:center; justify-content:center; font-size:26px;">{{ icons.alert }}</span>
+              <div style="font-family:var(--font-display); font-size:var(--font-size-xl); font-weight:var(--font-weight-semibold); color:var(--color-text-strong);">Review queue unavailable</div>
+              <div style="font-size:var(--font-size-base); color:var(--color-text-muted); max-width:380px;">GET /runs/needs-review failed to load.</div>
+              <button data-focusring="1" onClick="{{ retry }}" style="height:38px; padding:0 var(--space-20); border:none; border-radius:var(--radius-md); background:var(--color-primary); color:var(--color-primary-fg); font-weight:var(--font-weight-medium); cursor:pointer; font-family:var(--font-text);">Retry</button>
+            </div>
+          </sc-if>
+          <sc-if value="{{ vsLoading }}" hint-placeholder-val="">
+            <div style="display:flex; flex-direction:column; gap:var(--space-12);">
+              <div class="vskel" style="height:80px; border-radius:var(--radius-xl);"></div>
+              <div class="vskel" style="height:80px; border-radius:var(--radius-xl);"></div>
+              <div class="vskel" style="height:80px; border-radius:var(--radius-xl);"></div>
+            </div>
+          </sc-if>
+          <sc-if value="{{ vsEmpty }}" hint-placeholder-val="">
+            <div style="background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); padding:var(--space-64) var(--space-48); text-align:center; display:flex; flex-direction:column; align-items:center; gap:var(--space-16);">
+              <span style="width:64px; height:64px; border-radius:var(--radius-2xl); background:var(--color-success-soft); color:var(--color-success-fg); display:inline-flex; align-items:center; justify-content:center; font-size:32px;">{{ icons.check }}</span>
+              <div style="font-family:var(--font-display); font-size:var(--font-size-xl); font-weight:var(--font-weight-semibold); color:var(--color-text-strong);">All caught up</div>
+              <div style="font-size:var(--font-size-base); color:var(--color-text-muted); max-width:400px;">No checkpoints are waiting on a decision. New diffs and baselines will land here for triage.</div>
+            </div>
+          </sc-if>
+          <sc-if value="{{ vsData }}" hint-placeholder-val="">
+            <div style="display:flex; align-items:center; gap:var(--space-12); margin-bottom:var(--space-16);">
+              <span style="font-size:var(--font-size-base); color:var(--color-text);"><strong style="color:var(--color-text-strong);">{{ nrCount }}</strong> checkpoints awaiting a decision</span>
+              <div style="flex:1;"></div>
+              <span style="display:inline-flex; align-items:center; gap:6px; font-size:var(--font-size-xs); color:var(--color-text-muted);"><span style="width:7px; height:7px; border-radius:var(--radius-full); background:var(--color-success); animation:vpulse 1.6s infinite;"></span>Live</span>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:var(--space-12);">
+              <sc-for list="{{ nrRows }}" as="n" hint-placeholder-count="5">
+                <div style="display:flex; align-items:center; gap:var(--space-16); background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); padding:var(--space-16) var(--space-20);">
+                  <span style="flex:0 0 auto; width:40px; height:40px; border-radius:var(--radius-lg); background:{{ n.bg }}; color:{{ n.fg }}; display:inline-flex; align-items:center; justify-content:center; font-size:19px;">{{ n.glyph }}</span>
+                  <div style="flex:1; min-width:0;">
+                    <div style="display:flex; align-items:center; gap:var(--space-8);">
+                      <span style="font-size:var(--font-size-base); font-weight:var(--font-weight-semibold); color:var(--color-text-strong);">{{ n.checkpointName }}</span>
+                      <span style="display:inline-flex; align-items:center; height:18px; padding:0 var(--space-8); border-radius:var(--radius-full); background:{{ n.bg }}; color:{{ n.fg }}; font-size:var(--font-size-xs); font-weight:var(--font-weight-medium);">{{ n.label }}</span>
+                    </div>
+                    <div style="font-size:var(--font-size-sm); color:var(--color-text-muted); margin-top:3px;">{{ n.testName }} · <span style="text-transform:capitalize;">{{ n.environment }}</span> · {{ n.time }}</div>
+                  </div>
+                  <button data-focusring="1" onClick="{{ n.onClick }}" style="flex:0 0 auto; height:36px; padding:0 var(--space-16); border:none; border-radius:var(--radius-md); background:var(--color-primary); color:var(--color-primary-fg); font-family:var(--font-text); font-size:var(--font-size-base); font-weight:var(--font-weight-medium); cursor:pointer; display:inline-flex; align-items:center; gap:6px;" style-hover="background:var(--color-primary-hover);"><span style="font-size:15px;">{{ icons.eye }}</span>Review</button>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+        </sc-if>
+
+        <!-- ===================== RUN DETAIL / DIFF VIEWER ===================== -->
+        <sc-if value="{{ isRunDetail }}" hint-placeholder-val="">
+          <sc-if value="{{ vsLoading }}" hint-placeholder-val="">
+            <div class="vskel" style="height:48px; border-radius:var(--radius-md); margin-bottom:var(--space-20);"></div>
+            <div style="display:grid; grid-template-columns:260px 1fr; gap:var(--space-20);">
+              <div class="vskel" style="height:420px; border-radius:var(--radius-xl);"></div>
+              <div class="vskel" style="height:420px; border-radius:var(--radius-xl);"></div>
+            </div>
+          </sc-if>
+          <sc-if value="{{ vsError }}" hint-placeholder-val="">
+            <div style="background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); padding:var(--space-48); text-align:center; display:flex; flex-direction:column; align-items:center; gap:var(--space-16);">
+              <span style="width:56px; height:56px; border-radius:var(--radius-full); background:var(--color-danger-soft); color:var(--color-danger-fg); display:inline-flex; align-items:center; justify-content:center; font-size:26px;">{{ icons.alert }}</span>
+              <div style="font-family:var(--font-display); font-size:var(--font-size-xl); font-weight:var(--font-weight-semibold); color:var(--color-text-strong);">Couldn't load this run</div>
+              <button data-focusring="1" onClick="{{ retry }}" style="height:38px; padding:0 var(--space-20); border:none; border-radius:var(--radius-md); background:var(--color-primary); color:var(--color-primary-fg); font-weight:var(--font-weight-medium); cursor:pointer; font-family:var(--font-text);">Retry</button>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ vsRealDetail }}" hint-placeholder-val="{{ true }}">
+            <!-- header -->
+            <div style="display:flex; align-items:center; gap:var(--space-16); margin-bottom:var(--space-20);">
+              <button data-focusring="1" onClick="{{ backToRuns }}" title="Back to runs" style="flex:0 0 auto; width:38px; height:38px; border:1px solid var(--color-border-strong); background:var(--color-bg-surface); border-radius:var(--radius-md); color:var(--color-text-muted); cursor:pointer; display:inline-flex; align-items:center; justify-content:center; font-size:18px;" style-hover="background:var(--color-bg-subtle);">{{ icons.arrowLeft }}</button>
+              <div style="min-width:0; flex:1;">
+                <div style="display:flex; align-items:center; gap:var(--space-12);">
+                  <span style="font-family:var(--font-display); font-size:var(--font-size-xl); font-weight:var(--font-weight-bold); color:var(--color-text-strong);">{{ runTestName }}</span>
+                  <span style="display:inline-flex; align-items:center; gap:6px; height:24px; padding:0 var(--space-10); border-radius:var(--radius-full); font-size:var(--font-size-xs); font-weight:var(--font-weight-medium); background:{{ runStatusBg }}; color:{{ runStatusFg }};"><span style="font-size:13px;">{{ runStatusGlyph }}</span>{{ runStatusLabel }}</span>
+                </div>
+                <div style="font-size:var(--font-size-sm); color:var(--color-text-muted); margin-top:2px;"><span style="text-transform:capitalize;">{{ runEnvName }}</span> · {{ runTime }}</div>
+              </div>
+              <sc-if value="{{ runHasTrace }}" hint-placeholder-val="">
+                <button data-focusring="1" onClick="{{ openTimeline }}" style="flex:0 0 auto; height:38px; padding:0 var(--space-16); border:1px solid var(--color-border-strong); background:var(--color-bg-surface); border-radius:var(--radius-md); font-family:var(--font-text); font-size:var(--font-size-base); font-weight:var(--font-weight-medium); color:var(--color-text-strong); cursor:pointer; display:inline-flex; align-items:center; gap:var(--space-8);" style-hover="background:var(--color-bg-subtle);"><span style="font-size:15px; color:var(--color-text-muted);">{{ icons.timeline }}</span>Open timeline</button>
+              </sc-if>
+              <sc-if value="{{ showDiffViewer }}" hint-placeholder-val="{{ true }}">
+                <button data-focusring="1" onClick="{{ approveAll }}" style="flex:0 0 auto; height:38px; padding:0 var(--space-16); border:none; border-radius:var(--radius-md); background:var(--color-primary); color:var(--color-primary-fg); font-family:var(--font-text); font-size:var(--font-size-base); font-weight:var(--font-weight-medium); cursor:pointer; display:inline-flex; align-items:center; gap:var(--space-8);" style-hover="background:var(--color-primary-hover);"><span style="font-size:15px;">{{ icons.check }}</span>Approve all</button>
+              </sc-if>
+            </div>
+
+            <!-- FAILED RUN: step sequence -->
+            <sc-if value="{{ isFailed }}" hint-placeholder-val="">
+              <div style="display:flex; gap:var(--space-10); align-items:flex-start; padding:var(--space-16); border-radius:var(--radius-xl); background:var(--color-danger-soft); border:1px solid var(--color-danger); margin-bottom:var(--space-20);">
+                <span style="flex:0 0 auto; color:var(--color-danger-fg); font-size:20px;">{{ icons.alert }}</span>
+                <div><div style="font-size:var(--font-size-base); font-weight:var(--font-weight-semibold); color:var(--color-danger-fg);">Run failed</div><div style="font-family:var(--font-mono); font-size:var(--font-size-sm); color:var(--color-text); margin-top:3px;">{{ runError }}</div></div>
+              </div>
+              <div style="background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); padding:var(--space-24);">
+                <div style="display:flex; align-items:center; gap:var(--space-12); margin-bottom:var(--space-20);">
+                  <span style="width:32px; height:32px; border-radius:var(--radius-md); background:var(--color-bg-subtle); color:var(--color-text-muted); display:inline-flex; align-items:center; justify-content:center; font-size:18px;">{{ icons.timeline }}</span>
+                  <h3 style="margin:0; flex:1; font-family:var(--font-display); font-size:var(--font-size-md); font-weight:var(--font-weight-semibold); color:var(--color-text-strong);">Step sequence</h3>
+                  <span style="font-size:var(--font-size-xs); color:var(--color-text-subtle);">Dimmed steps never ran</span>
+                </div>
+                <div style="display:flex; flex-direction:column;">
+                  <sc-for list="{{ failSteps }}" as="st" hint-placeholder-count="6">
+                    <div style="display:flex; align-items:center; gap:var(--space-16); padding:var(--space-12) 0; border-top:1px solid var(--color-border); opacity:{{ st.opacity }};">
+                      <span style="flex:0 0 auto; width:26px; height:26px; border-radius:var(--radius-full); background:{{ st.dotBg }}; color:#fff; display:inline-flex; align-items:center; justify-content:center; font-size:13px;">{{ st.glyph }}</span>
+                      <span style="flex:0 0 auto; width:22px; text-align:right; font-size:var(--font-size-xs); color:var(--color-text-subtle); font-variant-numeric:tabular-nums;">{{ st.index }}</span>
+                      <span style="flex:1; min-width:0; font-family:var(--font-mono); font-size:var(--font-size-sm); color:{{ st.labelColor }}; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ st.label }}</span>
+                      <span style="flex:0 0 auto; font-size:var(--font-size-xs); color:var(--color-text-muted); font-variant-numeric:tabular-nums;">{{ st.duration }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-if>
+
+            <!-- DIFF VIEWER -->
+            <sc-if value="{{ showDiffViewer }}" hint-placeholder-val="">
+              <div style="display:grid; grid-template-columns:260px 1fr; gap:var(--space-20); align-items:start;">
+                <!-- checkpoint list -->
+                <div style="background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); padding:var(--space-12);">
+                  <div style="font-size:var(--font-size-xs); font-weight:var(--font-weight-semibold); letter-spacing:var(--letter-spacing-wide); text-transform:uppercase; color:var(--color-text-subtle); padding:var(--space-8) var(--space-12) var(--space-6);">Checkpoints</div>
+                  <div style="display:flex; flex-direction:column; gap:2px;">
+                    <sc-for list="{{ cpList }}" as="c" hint-placeholder-count="4">
+                      <button data-focusring="1" onClick="{{ c.onClick }}" style="display:flex; align-items:center; gap:var(--space-10); padding:var(--space-10) var(--space-12); border:none; border-radius:var(--radius-md); cursor:pointer; text-align:left; font-family:var(--font-text); background:{{ c.rowBg }};" style-hover="background:var(--color-bg-subtle);">
+                        <span style="flex:0 0 auto; width:24px; height:24px; border-radius:var(--radius-sm); background:{{ c.bg }}; color:{{ c.fg }}; display:inline-flex; align-items:center; justify-content:center; font-size:13px;">{{ c.glyph }}</span>
+                        <span style="flex:1; min-width:0;"><span style="display:block; font-size:var(--font-size-sm); font-weight:var(--font-weight-medium); color:var(--color-text-strong); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ c.name }}</span><span style="display:block; font-family:var(--font-mono); font-size:var(--font-size-xs); color:var(--color-text-subtle);">{{ c.score }}</span></span>
+                        <sc-if value="{{ c.resLabel }}" hint-placeholder-val=""><span style="flex:0 0 auto; height:16px; padding:0 6px; border-radius:var(--radius-full); background:{{ c.resBg }}; color:{{ c.resFg }}; font-size:10px; font-weight:var(--font-weight-semibold); display:inline-flex; align-items:center;">{{ c.resLabel }}</span></sc-if>
+                      </button>
+                    </sc-for>
+                  </div>
+                </div>
+
+                <!-- viewer -->
+                <div style="background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); overflow:hidden;">
+                  <div style="display:flex; align-items:center; gap:var(--space-12); padding:var(--space-16) var(--space-20); border-bottom:1px solid var(--color-border); flex-wrap:wrap;">
+                    <div style="font-family:var(--font-display); font-size:var(--font-size-md); font-weight:var(--font-weight-semibold); color:var(--color-text-strong);">{{ cpName }}</div>
+                    <span style="display:inline-flex; align-items:center; height:20px; padding:0 var(--space-8); border-radius:var(--radius-sm); background:var(--color-bg-inset); color:var(--color-text-muted); font-size:var(--font-size-xs); font-family:var(--font-mono);">{{ cpCaptureMode }}</span>
+                    <sc-if value="{{ cpHealed }}" hint-placeholder-val=""><span style="display:inline-flex; align-items:center; gap:4px; height:20px; padding:0 var(--space-8); border-radius:var(--radius-full); background:var(--color-info-soft); color:var(--color-info-fg); font-size:var(--font-size-xs); font-weight:var(--font-weight-medium);">healed</span></sc-if>
+                    <div style="flex:1;"></div>
+                    <div style="display:inline-flex; align-items:center; background:var(--color-bg-subtle); border:1px solid var(--color-border); border-radius:var(--radius-md); padding:2px; gap:2px;">
+                      <sc-for list="{{ viewModes }}" as="m" hint-placeholder-count="4">
+                        <button data-focusring="1" onClick="{{ m.onClick }}" title="{{ m.label }}" style="height:28px; padding:0 var(--space-10); border:none; border-radius:var(--radius-sm); cursor:pointer; font-family:var(--font-text); font-size:var(--font-size-xs); font-weight:var(--font-weight-medium); display:inline-flex; align-items:center; gap:5px; background:{{ m.bg }}; color:{{ m.fg }}; box-shadow:{{ m.shadow }};"><span style="font-size:14px;">{{ m.icon }}</span>{{ m.label }}</button>
+                      </sc-for>
+                    </div>
+                  </div>
+
+                  <div style="padding:var(--space-20); background:var(--color-bg-inset);">
+                    <!-- first-capture (pending baseline) -->
+                    <sc-if value="{{ isPending }}" hint-placeholder-val="">
+                      <div style="display:flex; gap:var(--space-20); align-items:stretch;">
+                        <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:var(--space-12); border:2px dashed var(--color-border-strong); border-radius:var(--radius-lg); background:var(--color-bg-subtle); min-height:360px; text-align:center; padding:var(--space-24);">
+                          <span style="width:48px; height:48px; border-radius:var(--radius-xl); background:var(--color-info-soft); color:var(--color-info-fg); display:inline-flex; align-items:center; justify-content:center; font-size:24px;">{{ icons.layers }}</span>
+                          <div style="font-size:var(--font-size-base); font-weight:var(--font-weight-semibold); color:var(--color-text-strong);">No baseline yet</div>
+                          <div style="font-size:var(--font-size-sm); color:var(--color-text-muted); max-width:220px;">This is the first capture. Approve it to set the golden baseline.</div>
+                        </div>
+                        <div style="flex:1; position:relative;">
+                          <span style="position:absolute; top:10px; left:10px; z-index:2; display:inline-flex; align-items:center; height:20px; padding:0 var(--space-8); border-radius:var(--radius-full); background:var(--color-neutral-900); color:#fff; font-size:var(--font-size-xs); font-weight:var(--font-weight-medium);">Actual</span>
+                          <div style="height:380px;">
+                            <div style="background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); overflow:hidden; height:100%; display:flex; flex-direction:column;">
+                              <div style="height:30px; flex:0 0 auto; background:var(--color-neutral-100); display:flex; align-items:center; gap:6px; padding:0 12px;"><span style="width:8px; height:8px; border-radius:50%; background:#ff5f57;"></span><span style="width:8px; height:8px; border-radius:50%; background:#febc2e;"></span><span style="width:8px; height:8px; border-radius:50%; background:#28c840;"></span><span style="margin-left:8px; flex:1; height:16px; border-radius:var(--radius-full); background:#fff; border:1px solid var(--color-border); display:flex; align-items:center; padding:0 8px; font-family:var(--font-mono); font-size:9px; color:var(--color-text-subtle);">shop.example.com/account</span></div>
+                              <div style="flex:1; padding:18px 20px; display:flex; flex-direction:column; gap:10px;"><div style="font-family:var(--font-display); font-size:15px; font-weight:700; color:var(--color-text-strong);">Header navigation</div><div style="height:40px; border-radius:var(--radius-md); background:var(--color-bg-subtle); display:flex; align-items:center; gap:14px; padding:0 12px;"><span style="font-size:11px; color:var(--color-text);">Home</span><span style="font-size:11px; color:var(--color-text);">Shop</span><span style="font-size:11px; color:var(--color-text);">Account</span></div><div style="height:80px; border-radius:var(--radius-md); background:var(--color-bg-subtle);"></div></div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </sc-if>
+
+                    <!-- diff stage -->
+                    <sc-if value="{{ hasBaseline }}" hint-placeholder-val="{{ true }}">
+                      <div style="height:380px;">
+                        <div style="{{ stageStyle }}">
+                          <!-- BASELINE -->
+                          <div style="{{ baseLayerStyle }}">
+                            <span style="position:absolute; top:10px; left:10px; z-index:2; display:{{ sbsLabelDisp }}; align-items:center; height:20px; padding:0 var(--space-8); border-radius:var(--radius-full); background:var(--color-neutral-700); color:#fff; font-size:var(--font-size-xs); font-weight:var(--font-weight-medium);">Baseline</span>
+                            <div style="background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); overflow:hidden; height:100%; display:flex; flex-direction:column;">
+                              <div style="height:30px; flex:0 0 auto; background:var(--color-neutral-100); display:flex; align-items:center; gap:6px; padding:0 12px;"><span style="width:8px; height:8px; border-radius:50%; background:#ff5f57;"></span><span style="width:8px; height:8px; border-radius:50%; background:#febc2e;"></span><span style="width:8px; height:8px; border-radius:50%; background:#28c840;"></span><span style="margin-left:8px; flex:1; height:16px; border-radius:var(--radius-full); background:#fff; border:1px solid var(--color-border); display:flex; align-items:center; padding:0 8px; font-family:var(--font-mono); font-size:9px; color:var(--color-text-subtle);">shop.example.com/checkout</span></div>
+                              <div style="flex:1; padding:18px 20px; display:flex; flex-direction:column; gap:9px;">
+                                <div style="font-family:var(--font-display); font-size:15px; font-weight:700; color:var(--color-text-strong);">Order summary</div>
+                                <div style="display:flex; justify-content:space-between; font-size:12px; color:var(--color-text);"><span>Wireless keyboard</span><span>$89.00</span></div>
+                                <div style="display:flex; justify-content:space-between; font-size:12px; color:var(--color-text);"><span>USB-C cable ×2</span><span>$48.00</span></div>
+                                <div style="display:flex; justify-content:space-between; font-size:12px; color:var(--color-text-muted);"><span>Tax</span><span>$11.00</span></div>
+                                <div style="border-top:1px solid var(--color-border); margin-top:2px; padding-top:10px; display:flex; justify-content:space-between; align-items:baseline;"><span style="font-size:13px; font-weight:600; color:var(--color-text-strong);">Total</span><span style="font-family:var(--font-display); font-size:20px; font-weight:700; color:var(--color-text-strong);">{{ baseTotal }}</span></div>
+                                <button style="margin-top:auto; height:36px; border:none; border-radius:var(--radius-md); background:{{ baseBtnBg }}; color:#fff; font-weight:600; font-size:13px;">Place order</button>
+                              </div>
+                            </div>
+                          </div>
+                          <!-- ACTUAL -->
+                          <div style="{{ actualLayerStyle }}">
+                            <span style="position:absolute; top:10px; left:10px; z-index:2; display:{{ sbsLabelDisp }}; align-items:center; height:20px; padding:0 var(--space-8); border-radius:var(--radius-full); background:var(--color-neutral-900); color:#fff; font-size:var(--font-size-xs); font-weight:var(--font-weight-medium);">Actual</span>
+                            <div style="background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); overflow:hidden; height:100%; display:flex; flex-direction:column;">
+                              <div style="height:30px; flex:0 0 auto; background:var(--color-neutral-100); display:flex; align-items:center; gap:6px; padding:0 12px;"><span style="width:8px; height:8px; border-radius:50%; background:#ff5f57;"></span><span style="width:8px; height:8px; border-radius:50%; background:#febc2e;"></span><span style="width:8px; height:8px; border-radius:50%; background:#28c840;"></span><span style="margin-left:8px; flex:1; height:16px; border-radius:var(--radius-full); background:#fff; border:1px solid var(--color-border); display:flex; align-items:center; padding:0 8px; font-family:var(--font-mono); font-size:9px; color:var(--color-text-subtle);">shop.example.com/checkout</span></div>
+                              <div style="flex:1; padding:18px 20px; display:flex; flex-direction:column; gap:9px;">
+                                <div style="display:flex; align-items:center; gap:8px; min-width:0;"><span style="flex:1; min-width:0; font-family:var(--font-display); font-size:14px; font-weight:700; color:var(--color-text-strong); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Order summary</span><span style="flex:0 0 auto; display:inline-flex; align-items:center; height:16px; padding:0 6px; border-radius:var(--radius-full); background:var(--color-success-soft); color:var(--color-success-fg); font-size:9px; font-weight:600; white-space:nowrap;">Free shipping</span></div>
+                                <div style="display:flex; justify-content:space-between; font-size:12px; color:var(--color-text);"><span>Wireless keyboard</span><span>$89.00</span></div>
+                                <div style="display:flex; justify-content:space-between; font-size:12px; color:var(--color-text);"><span>USB-C cable ×2</span><span>$48.00</span></div>
+                                <div style="display:flex; justify-content:space-between; font-size:12px; color:var(--color-text-muted);"><span>Tax</span><span>$14.00</span></div>
+                                <div style="border-top:1px solid var(--color-border); margin-top:2px; padding-top:10px; display:flex; justify-content:space-between; align-items:baseline;"><span style="font-size:13px; font-weight:600; color:var(--color-text-strong);">Total</span><span style="font-family:var(--font-display); font-size:20px; font-weight:700; color:var(--color-text-strong);">{{ actualTotal }}</span></div>
+                                <button style="margin-top:auto; height:36px; border:none; border-radius:var(--radius-md); background:{{ actualBtnBg }}; color:#fff; font-weight:600; font-size:13px;">Place order</button>
+                              </div>
+                            </div>
+                            <!-- diff overlay -->
+                            <div style="position:absolute; inset:0; display:{{ diffDisp }}; pointer-events:none;">
+                              <div style="position:absolute; left:6%; top:14%; width:42%; height:7%; border-radius:4px; background:rgba(240,45,184,0.30); border:1.5px solid #f02db8;"></div>
+                              <div style="position:absolute; left:6%; top:69%; width:88%; height:8%; border-radius:4px; background:rgba(240,45,184,0.30); border:1.5px solid #f02db8;"></div>
+                              <div style="position:absolute; left:6%; top:82%; width:88%; height:11%; border-radius:6px; background:rgba(240,45,184,0.30); border:1.5px solid #f02db8;"></div>
+                            </div>
+                          </div>
+                          <!-- swipe divider -->
+                          <div style="position:absolute; top:0; bottom:0; left:{{ swipeLeft }}%; width:2px; background:var(--color-primary); display:{{ swipeDisp }}; z-index:3; pointer-events:none;"><span style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:28px; height:28px; border-radius:var(--radius-full); background:var(--color-primary); color:#fff; display:flex; align-items:center; justify-content:center; font-size:14px; box-shadow:var(--shadow-md);">{{ icons.swipe }}</span></div>
+                        </div>
+                      </div>
+
+                      <sc-if value="{{ isSwipe }}" hint-placeholder-val="">
+                        <div style="display:flex; align-items:center; gap:var(--space-12); margin-top:var(--space-16);"><span style="font-size:var(--font-size-xs); color:var(--color-text-muted); width:60px;">Baseline</span><input data-focusring="1" type="range" min="0" max="100" value="{{ swipeVal }}" onInput="{{ onSwipe }}" style="flex:1; accent-color:var(--color-primary);" /><span style="font-size:var(--font-size-xs); color:var(--color-text-muted); width:50px; text-align:right;">Actual</span></div>
+                      </sc-if>
+                      <sc-if value="{{ isOnion }}" hint-placeholder-val="">
+                        <div style="display:flex; align-items:center; gap:var(--space-12); margin-top:var(--space-16);"><span style="font-size:var(--font-size-xs); color:var(--color-text-muted); width:60px;">Opacity</span><input data-focusring="1" type="range" min="0" max="100" value="{{ onionVal }}" onInput="{{ onOnion }}" style="flex:1; accent-color:var(--color-primary);" /><span style="font-family:var(--font-mono); font-size:var(--font-size-xs); color:var(--color-text-muted); width:50px; text-align:right;">{{ onionVal }}%</span></div>
+                      </sc-if>
+                    </sc-if>
+                  </div>
+
+                  <!-- verdict + tuning -->
+                  <div style="padding:var(--space-20); display:flex; flex-direction:column; gap:var(--space-16);">
+                    <div style="display:flex; align-items:center; gap:var(--space-16); padding:var(--space-12) var(--space-16); border-radius:var(--radius-lg); background:{{ verdictBg }};">
+                      <span style="font-size:var(--font-size-sm); font-weight:var(--font-weight-semibold); color:{{ verdictColor }};">{{ verdictLabel }}</span>
+                      <div style="flex:1;"></div>
+                      <span style="font-size:var(--font-size-sm); color:var(--color-text);">Diff <strong style="font-family:var(--font-mono); color:{{ verdictColor }};">{{ scoreLabel }}</strong> · threshold <strong style="font-family:var(--font-mono); color:var(--color-text-strong);">{{ thresholdLabel }}</strong></span>
+                    </div>
+
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:var(--space-20);">
+                      <div>
+                        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:var(--space-8);"><span style="font-size:var(--font-size-sm); font-weight:var(--font-weight-medium); color:var(--color-text-strong);">Masks</span><span style="font-size:var(--font-size-xs); color:var(--color-text-subtle);">{{ maskCount }} ignored regions</span></div>
+                        <div style="display:flex; gap:var(--space-8);">
+                          <button data-focusring="1" onClick="{{ addMask }}" style="flex:1; height:34px; border:1px solid var(--color-border-strong); background:var(--color-bg-surface); border-radius:var(--radius-md); font-family:var(--font-text); font-size:var(--font-size-sm); color:var(--color-text-strong); cursor:pointer; display:inline-flex; align-items:center; justify-content:center; gap:6px;" style-hover="background:var(--color-bg-subtle);"><span style="font-size:14px; color:var(--color-text-muted);">{{ icons.plus }}</span>Add mask</button>
+                          <button data-focusring="1" onClick="{{ clearMasks }}" style="height:34px; padding:0 var(--space-12); border:1px solid var(--color-border-strong); background:var(--color-bg-surface); border-radius:var(--radius-md); font-family:var(--font-text); font-size:var(--font-size-sm); color:var(--color-text-muted); cursor:pointer;" style-hover="background:var(--color-bg-subtle);">Clear</button>
+                        </div>
+                      </div>
+                      <div>
+                        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:var(--space-8);"><span style="font-size:var(--font-size-sm); font-weight:var(--font-weight-medium); color:var(--color-text-strong);">Threshold</span><span style="font-family:var(--font-mono); font-size:var(--font-size-xs); color:var(--color-text-muted);">{{ thresholdLabel }}</span></div>
+                        <input data-focusring="1" type="range" min="0" max="5" step="0.05" value="{{ thresholdVal }}" onInput="{{ onThreshold }}" style="width:100%; accent-color:var(--color-primary); margin-top:6px;" />
+                      </div>
+                    </div>
+
+                    <div style="display:flex; align-items:center; gap:var(--space-12);">
+                      <button data-focusring="1" onClick="{{ reEvaluate }}" style="height:36px; padding:0 var(--space-16); border:1px solid var(--color-border-strong); background:var(--color-bg-surface); border-radius:var(--radius-md); font-family:var(--font-text); font-size:var(--font-size-base); font-weight:var(--font-weight-medium); color:var(--color-text-strong); cursor:pointer; display:inline-flex; align-items:center; gap:var(--space-8);" style-hover="background:var(--color-bg-subtle);"><span style="font-size:15px; color:var(--color-text-muted);">{{ icons.sliders }}</span>Re-evaluate</button>
+                      <sc-if value="{{ reevalActive }}" hint-placeholder-val=""><button data-focusring="1" onClick="{{ persistTuning }}" style="height:36px; padding:0 var(--space-16); border:1px solid var(--color-primary); background:var(--color-primary-soft); border-radius:var(--radius-md); font-family:var(--font-text); font-size:var(--font-size-base); font-weight:var(--font-weight-medium); color:var(--color-primary); cursor:pointer;">Save tuning</button></sc-if>
+                      <div style="flex:1;"></div>
+                      <sc-if value="{{ cpResolved }}" hint-placeholder-val="">
+                        <span style="display:inline-flex; align-items:center; gap:6px; font-size:var(--font-size-sm); color:var(--color-text-muted);">Decision recorded</span>
+                      </sc-if>
+                      <sc-if value="{{ cpUnresolved }}" hint-placeholder-val="{{ true }}">
+                        <button data-focusring="1" onClick="{{ rejectCp }}" style="height:38px; padding:0 var(--space-16); border:1px solid var(--color-border-strong); background:var(--color-bg-surface); border-radius:var(--radius-md); font-family:var(--font-text); font-size:var(--font-size-base); font-weight:var(--font-weight-medium); color:var(--color-danger-fg); cursor:pointer; display:inline-flex; align-items:center; gap:6px;" style-hover="background:var(--color-danger-soft);"><span style="font-size:15px;">{{ icons.x }}</span>Reject</button>
+                        <button data-focusring="1" onClick="{{ openApproveCp }}" style="height:38px; padding:0 var(--space-20); border:none; border-radius:var(--radius-md); background:var(--color-success); color:#fff; font-family:var(--font-text); font-size:var(--font-size-base); font-weight:var(--font-weight-medium); cursor:pointer; display:inline-flex; align-items:center; gap:6px;" style-hover="filter:brightness(0.96);"><span style="font-size:15px;">{{ icons.check }}</span>Approve</button>
+                      </sc-if>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </sc-if>
+          </sc-if>
+        </sc-if>
+
+        <!-- ===================== SUITES ===================== -->
+        <sc-if value="{{ isSuites }}" hint-placeholder-val="">
+          <sc-if value="{{ vsError }}" hint-placeholder-val="">
+            <div style="background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); padding:var(--space-48); text-align:center; display:flex; flex-direction:column; align-items:center; gap:var(--space-16);"><span style="width:56px; height:56px; border-radius:var(--radius-full); background:var(--color-danger-soft); color:var(--color-danger-fg); display:inline-flex; align-items:center; justify-content:center; font-size:26px;">{{ icons.alert }}</span><div style="font-family:var(--font-display); font-size:var(--font-size-xl); font-weight:var(--font-weight-semibold); color:var(--color-text-strong);">Couldn't load suites</div><button data-focusring="1" onClick="{{ retry }}" style="height:38px; padding:0 var(--space-20); border:none; border-radius:var(--radius-md); background:var(--color-primary); color:var(--color-primary-fg); font-weight:var(--font-weight-medium); cursor:pointer; font-family:var(--font-text);">Retry</button></div>
+          </sc-if>
+          <sc-if value="{{ vsLoading }}" hint-placeholder-val="">
+            <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:var(--space-20);"><div class="vskel" style="height:150px; border-radius:var(--radius-xl);"></div><div class="vskel" style="height:150px; border-radius:var(--radius-xl);"></div><div class="vskel" style="height:150px; border-radius:var(--radius-xl);"></div></div>
+          </sc-if>
+          <sc-if value="{{ vsEmpty }}" hint-placeholder-val="">
+            <div style="background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); padding:var(--space-64) var(--space-48); text-align:center; display:flex; flex-direction:column; align-items:center; gap:var(--space-16);"><span style="width:64px; height:64px; border-radius:var(--radius-2xl); background:var(--color-primary-soft); color:var(--color-primary); display:inline-flex; align-items:center; justify-content:center; font-size:30px;">{{ icons.suites }}</span><div style="font-family:var(--font-display); font-size:var(--font-size-xl); font-weight:var(--font-weight-semibold); color:var(--color-text-strong);">No suites yet</div><div style="font-size:var(--font-size-base); color:var(--color-text-muted); max-width:400px;">Group tests into a suite to run them together across environments.</div></div>
+          </sc-if>
+          <sc-if value="{{ vsData }}" hint-placeholder-val="">
+            <sc-if value="{{ suitesListMode }}" hint-placeholder-val="{{ true }}">
+              <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:var(--space-20);">
+                <sc-for list="{{ suiteCards }}" as="su" hint-placeholder-count="3">
+                  <div style="background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); padding:var(--space-20); display:flex; flex-direction:column; gap:var(--space-16);">
+                    <div style="display:flex; align-items:center; gap:var(--space-12);">
+                      <span style="width:40px; height:40px; border-radius:var(--radius-lg); background:var(--color-primary-soft); color:var(--color-primary); display:inline-flex; align-items:center; justify-content:center; font-size:20px;">{{ icons.suites }}</span>
+                      <div style="min-width:0;"><div style="font-family:var(--font-display); font-size:var(--font-size-md); font-weight:var(--font-weight-semibold); color:var(--color-text-strong); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ su.name }}</div><div style="font-size:var(--font-size-xs); color:var(--color-text-muted);">{{ su.count }} tests</div></div>
+                    </div>
+                    <div style="display:flex; gap:var(--space-8);">
+                      <button data-focusring="1" onClick="{{ su.run }}" style="flex:1; height:36px; border:none; border-radius:var(--radius-md); background:var(--color-primary); color:var(--color-primary-fg); font-family:var(--font-text); font-size:var(--font-size-sm); font-weight:var(--font-weight-medium); cursor:pointer; display:inline-flex; align-items:center; justify-content:center; gap:6px;" style-hover="background:var(--color-primary-hover);"><span style="font-size:14px;">{{ icons.play }}</span>Run</button>
+                      <button data-focusring="1" onClick="{{ su.edit }}" style="height:36px; padding:0 var(--space-14); border:1px solid var(--color-border-strong); background:var(--color-bg-surface); border-radius:var(--radius-md); font-family:var(--font-text); font-size:var(--font-size-sm); font-weight:var(--font-weight-medium); color:var(--color-text-strong); cursor:pointer; display:inline-flex; align-items:center; gap:6px;" style-hover="background:var(--color-bg-subtle);"><span style="font-size:14px; color:var(--color-text-muted);">{{ icons.pencil }}</span>Edit</button>
+                    </div>
+                  </div>
+                </sc-for>
+                <button data-focusring="1" style="border:1.5px dashed var(--color-border-strong); border-radius:var(--radius-xl); background:transparent; min-height:120px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:var(--space-8); cursor:pointer; color:var(--color-text-muted); font-family:var(--font-text);" style-hover="background:var(--color-bg-subtle); border-color:var(--color-primary); color:var(--color-primary);"><span style="font-size:22px;">{{ icons.plus }}</span><span style="font-size:var(--font-size-sm); font-weight:var(--font-weight-medium);">New suite</span></button>
+              </div>
+            </sc-if>
+            <sc-if value="{{ suiteEditMode }}" hint-placeholder-val="">
+              <div style="background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); overflow:hidden;">
+                <div style="display:flex; align-items:center; gap:var(--space-12); padding:var(--space-16) var(--space-20); border-bottom:1px solid var(--color-border);">
+                  <span style="width:36px; height:36px; border-radius:var(--radius-md); background:var(--color-primary-soft); color:var(--color-primary); display:inline-flex; align-items:center; justify-content:center; font-size:18px;">{{ icons.suites }}</span>
+                  <div style="flex:1; min-width:0;"><div style="font-family:var(--font-display); font-size:var(--font-size-md); font-weight:var(--font-weight-semibold); color:var(--color-text-strong);">{{ editingSuiteName }}</div><div style="font-size:var(--font-size-xs); color:var(--color-text-muted);">{{ editorCount }} tests selected</div></div>
+                  <button data-focusring="1" onClick="{{ closeSuiteEditor }}" style="height:36px; padding:0 var(--space-16); border:1px solid var(--color-border-strong); background:var(--color-bg-surface); border-radius:var(--radius-md); font-family:var(--font-text); font-size:var(--font-size-sm); font-weight:var(--font-weight-medium); color:var(--color-text-strong); cursor:pointer;" style-hover="background:var(--color-bg-subtle);">Cancel</button>
+                  <button data-focusring="1" onClick="{{ saveSuite }}" style="height:36px; padding:0 var(--space-16); border:none; border-radius:var(--radius-md); background:var(--color-primary); color:var(--color-primary-fg); font-family:var(--font-text); font-size:var(--font-size-sm); font-weight:var(--font-weight-medium); cursor:pointer;">Save</button>
+                </div>
+                <div style="padding:var(--space-12); display:flex; flex-direction:column; gap:2px; max-height:540px; overflow-y:auto;">
+                  <sc-for list="{{ editorTests }}" as="t" hint-placeholder-count="6">
+                    <button data-focusring="1" onClick="{{ t.toggle }}" style="display:flex; align-items:center; gap:var(--space-12); padding:var(--space-10) var(--space-12); border:1px solid {{ t.border }}; background:{{ t.bg }}; border-radius:var(--radius-md); cursor:pointer; text-align:left; font-family:var(--font-text);">
+                      <span style="flex:0 0 auto; width:18px; height:18px; border-radius:var(--radius-sm); border:2px solid {{ t.checkBorder }}; background:{{ t.checkBg }}; display:inline-flex; align-items:center; justify-content:center; color:#fff; font-size:11px;"><span style="display:{{ t.checkDisp }};">{{ icons.check }}</span></span>
+                      <span style="flex:1; min-width:0; font-size:var(--font-size-base); font-weight:var(--font-weight-medium); color:var(--color-text-strong); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ t.name }}</span>
+                      <sc-if value="{{ t.needsEnv }}" hint-placeholder-val=""><span style="flex:0 0 auto; display:inline-flex; align-items:center; gap:3px; height:18px; padding:0 var(--space-6); border-radius:var(--radius-full); background:var(--color-info-soft); color:var(--color-info-fg); font-size:var(--font-size-xs); font-weight:var(--font-weight-medium);"><span style="font-size:10px;">{{ icons.lock }}</span>env</span></sc-if>
+                      <span style="flex:0 0 auto; font-size:var(--font-size-xs); color:var(--color-text-subtle);">{{ t.folderName }}</span>
+                    </button>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-if>
+          </sc-if>
+        </sc-if>
+
+        <!-- ===================== SUITE RUNS ===================== -->
+        <sc-if value="{{ isSuiteRuns }}" hint-placeholder-val="">
+          <sc-if value="{{ vsError }}" hint-placeholder-val="">
+            <div style="background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); padding:var(--space-48); text-align:center; display:flex; flex-direction:column; align-items:center; gap:var(--space-16);"><span style="width:56px; height:56px; border-radius:var(--radius-full); background:var(--color-danger-soft); color:var(--color-danger-fg); display:inline-flex; align-items:center; justify-content:center; font-size:26px;">{{ icons.alert }}</span><div style="font-family:var(--font-display); font-size:var(--font-size-xl); font-weight:var(--font-weight-semibold); color:var(--color-text-strong);">Couldn't load suite runs</div><button data-focusring="1" onClick="{{ retry }}" style="height:38px; padding:0 var(--space-20); border:none; border-radius:var(--radius-md); background:var(--color-primary); color:var(--color-primary-fg); font-weight:var(--font-weight-medium); cursor:pointer; font-family:var(--font-text);">Retry</button></div>
+          </sc-if>
+          <sc-if value="{{ vsLoading }}" hint-placeholder-val="">
+            <div style="display:grid; grid-template-columns:380px 1fr; gap:var(--space-20);"><div class="vskel" style="height:300px; border-radius:var(--radius-xl);"></div><div class="vskel" style="height:300px; border-radius:var(--radius-xl);"></div></div>
+          </sc-if>
+          <sc-if value="{{ vsEmpty }}" hint-placeholder-val="">
+            <div style="background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); padding:var(--space-64) var(--space-48); text-align:center; display:flex; flex-direction:column; align-items:center; gap:var(--space-16);"><span style="width:64px; height:64px; border-radius:var(--radius-2xl); background:var(--color-bg-subtle); color:var(--color-text-subtle); display:inline-flex; align-items:center; justify-content:center; font-size:30px;">{{ icons.suiteRuns }}</span><div style="font-family:var(--font-display); font-size:var(--font-size-xl); font-weight:var(--font-weight-semibold); color:var(--color-text-strong);">No suite runs yet</div><div style="font-size:var(--font-size-base); color:var(--color-text-muted); max-width:400px;">Run a suite across one or more environments to see the aggregated report here.</div></div>
+          </sc-if>
+          <sc-if value="{{ vsData }}" hint-placeholder-val="">
+            <div style="display:grid; grid-template-columns:380px 1fr; gap:var(--space-20); align-items:start;">
+              <div style="display:flex; flex-direction:column; gap:var(--space-12);">
+                <sc-for list="{{ suiteRunRows }}" as="sr" hint-placeholder-count="3">
+                  <button data-focusring="1" onClick="{{ sr.onClick }}" style="text-align:left; background:{{ sr.rowBg }}; border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); padding:var(--space-16); cursor:pointer; font-family:var(--font-text);" style-hover="border-color:var(--color-border-strong);">
+                    <div style="display:flex; align-items:center; gap:var(--space-10); margin-bottom:var(--space-10);">
+                      <span style="flex:1; min-width:0; font-size:var(--font-size-base); font-weight:var(--font-weight-semibold); color:var(--color-text-strong); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ sr.name }}</span>
+                      <span style="flex:0 0 auto; display:inline-flex; align-items:center; gap:5px; height:22px; padding:0 var(--space-8); border-radius:var(--radius-full); font-size:var(--font-size-xs); font-weight:var(--font-weight-medium); background:{{ sr.bg }}; color:{{ sr.fg }};"><span style="font-size:12px;">{{ sr.glyph }}</span>{{ sr.label }}</span>
+                    </div>
+                    <div style="display:flex; height:8px; border-radius:var(--radius-full); overflow:hidden; background:var(--color-bg-inset); margin-bottom:var(--space-8);">
+                      <sc-for list="{{ sr.segs }}" as="g" hint-placeholder-count="3"><span style="width:{{ g.w }}; background:{{ g.color }};"></span></sc-for>
+                    </div>
+                    <div style="display:flex; align-items:center; justify-content:space-between; font-size:var(--font-size-xs); color:var(--color-text-muted);"><span style="text-transform:capitalize;">{{ sr.envs }}</span><span>{{ sr.total }} runs · {{ sr.time }}</span></div>
+                  </button>
+                </sc-for>
+              </div>
+
+              <div style="background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); overflow:hidden;">
+                <div style="padding:var(--space-20); border-bottom:1px solid var(--color-border);">
+                  <div style="display:flex; align-items:center; gap:var(--space-12); margin-bottom:var(--space-16);">
+                    <div style="flex:1; min-width:0;"><div style="font-family:var(--font-display); font-size:var(--font-size-lg); font-weight:var(--font-weight-bold); color:var(--color-text-strong);">{{ openSRName }}</div><div style="font-size:var(--font-size-sm); color:var(--color-text-muted); margin-top:2px; text-transform:capitalize;">{{ openSREnvs }} · {{ openSRTotal }} child runs</div></div>
+                    <span style="flex:0 0 auto; display:inline-flex; align-items:center; gap:6px; height:24px; padding:0 var(--space-10); border-radius:var(--radius-full); font-size:var(--font-size-xs); font-weight:var(--font-weight-medium); background:{{ openSRBg }}; color:{{ openSRFg }};"><span style="font-size:13px;">{{ openSRGlyph }}</span>{{ openSRLabel }}</span>
+                  </div>
+                  <div style="display:grid; grid-template-columns:repeat(5,1fr); gap:var(--space-8);">
+                    <div style="text-align:center; padding:var(--space-10) var(--space-6); border-radius:var(--radius-md); background:var(--color-success-soft);"><div style="font-family:var(--font-display); font-size:var(--font-size-xl); font-weight:var(--font-weight-bold); color:var(--color-success-fg);">{{ openSRPassed }}</div><div style="font-size:var(--font-size-xs); color:var(--color-success-fg);">Passed</div></div>
+                    <div style="text-align:center; padding:var(--space-10) var(--space-6); border-radius:var(--radius-md); background:var(--color-warning-soft);"><div style="font-family:var(--font-display); font-size:var(--font-size-xl); font-weight:var(--font-weight-bold); color:var(--color-warning-fg);">{{ openSRReview }}</div><div style="font-size:var(--font-size-xs); color:var(--color-warning-fg);">Review</div></div>
+                    <div style="text-align:center; padding:var(--space-10) var(--space-6); border-radius:var(--radius-md); background:var(--color-danger-soft);"><div style="font-family:var(--font-display); font-size:var(--font-size-xl); font-weight:var(--font-weight-bold); color:var(--color-danger-fg);">{{ openSRFailed }}</div><div style="font-size:var(--font-size-xs); color:var(--color-danger-fg);">Failed</div></div>
+                    <div style="text-align:center; padding:var(--space-10) var(--space-6); border-radius:var(--radius-md); background:var(--color-bg-inset);"><div style="font-family:var(--font-display); font-size:var(--font-size-xl); font-weight:var(--font-weight-bold); color:var(--color-text);">{{ openSRRunning }}</div><div style="font-size:var(--font-size-xs); color:var(--color-text-muted);">Running</div></div>
+                    <div style="text-align:center; padding:var(--space-10) var(--space-6); border-radius:var(--radius-md); background:var(--color-bg-inset);"><div style="font-family:var(--font-display); font-size:var(--font-size-xl); font-weight:var(--font-weight-bold); color:var(--color-text-muted);">{{ openSRQueued }}</div><div style="font-size:var(--font-size-xs); color:var(--color-text-subtle);">Queued</div></div>
+                  </div>
+                </div>
+                <div style="display:flex; flex-direction:column;">
+                  <sc-for list="{{ srChildren }}" as="c" hint-placeholder-count="6">
+                    <button data-focusring="1" onClick="{{ c.onClick }}" style="display:flex; align-items:center; gap:var(--space-12); padding:var(--space-12) var(--space-20); border:none; border-bottom:1px solid var(--color-border); background:transparent; cursor:pointer; text-align:left; width:100%;" style-hover="background:var(--color-bg-subtle);">
+                      <span style="flex:1; min-width:0; font-size:var(--font-size-base); font-weight:var(--font-weight-medium); color:var(--color-text-strong); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ c.testName }}</span>
+                      <span style="flex:0 0 auto; font-size:var(--font-size-sm); color:var(--color-text-muted); text-transform:capitalize; width:80px;">{{ c.environment }}</span>
+                      <span style="flex:0 0 auto; display:inline-flex; align-items:center; gap:5px; height:22px; padding:0 var(--space-8); border-radius:var(--radius-full); font-size:var(--font-size-xs); font-weight:var(--font-weight-medium); background:{{ c.bg }}; color:{{ c.fg }};"><span style="font-size:12px;">{{ c.glyph }}</span>{{ c.label }}</span>
+                    </button>
+                  </sc-for>
+                </div>
+              </div>
+            </div>
+          </sc-if>
+        </sc-if>
+
+        <!-- ===================== ENVIRONMENTS ===================== -->
+        <sc-if value="{{ isEnvironments }}" hint-placeholder-val="">
+          <sc-if value="{{ vsError }}" hint-placeholder-val="">
+            <div style="background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); padding:var(--space-48); text-align:center; display:flex; flex-direction:column; align-items:center; gap:var(--space-16);"><span style="width:56px; height:56px; border-radius:var(--radius-full); background:var(--color-danger-soft); color:var(--color-danger-fg); display:inline-flex; align-items:center; justify-content:center; font-size:26px;">{{ icons.alert }}</span><div style="font-family:var(--font-display); font-size:var(--font-size-xl); font-weight:var(--font-weight-semibold); color:var(--color-text-strong);">Couldn't load environments</div><button data-focusring="1" onClick="{{ retry }}" style="height:38px; padding:0 var(--space-20); border:none; border-radius:var(--radius-md); background:var(--color-primary); color:var(--color-primary-fg); font-weight:var(--font-weight-medium); cursor:pointer; font-family:var(--font-text);">Retry</button></div>
+          </sc-if>
+          <sc-if value="{{ vsLoading }}" hint-placeholder-val="">
+            <div style="display:grid; grid-template-columns:240px 1fr; gap:var(--space-20);"><div class="vskel" style="height:280px; border-radius:var(--radius-xl);"></div><div class="vskel" style="height:360px; border-radius:var(--radius-xl);"></div></div>
+          </sc-if>
+          <sc-if value="{{ vsEmpty }}" hint-placeholder-val="">
+            <div style="background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); padding:var(--space-64) var(--space-48); text-align:center; display:flex; flex-direction:column; align-items:center; gap:var(--space-16);"><span style="width:64px; height:64px; border-radius:var(--radius-2xl); background:var(--color-primary-soft); color:var(--color-primary); display:inline-flex; align-items:center; justify-content:center; font-size:30px;">{{ icons.environments }}</span><div style="font-family:var(--font-display); font-size:var(--font-size-xl); font-weight:var(--font-weight-semibold); color:var(--color-text-strong);">No environments</div><div style="font-size:var(--font-size-base); color:var(--color-text-muted); max-width:400px;">Add a deployment with its variable values and secrets so variable tests can run against it.</div></div>
+          </sc-if>
+          <sc-if value="{{ vsData }}" hint-placeholder-val="">
+            <div style="display:grid; grid-template-columns:240px 1fr; gap:var(--space-20); align-items:start;">
+              <div style="background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); padding:var(--space-12);">
+                <div style="display:flex; align-items:center; justify-content:space-between; padding:var(--space-8) var(--space-12) var(--space-6);"><span style="font-size:var(--font-size-xs); font-weight:var(--font-weight-semibold); letter-spacing:var(--letter-spacing-wide); text-transform:uppercase; color:var(--color-text-subtle);">Deployments</span></div>
+                <div style="display:flex; flex-direction:column; gap:2px;">
+                  <sc-for list="{{ envCards }}" as="e" hint-placeholder-count="5">
+                    <button data-focusring="1" onClick="{{ e.onClick }}" style="display:flex; align-items:center; gap:var(--space-10); padding:var(--space-10) var(--space-12); border:none; border-radius:var(--radius-md); cursor:pointer; text-align:left; font-family:var(--font-text); background:{{ e.rowBg }};" style-hover="background:var(--color-bg-subtle);">
+                      <span style="flex:0 0 auto; width:8px; height:8px; border-radius:var(--radius-full); background:{{ e.dot }};"></span>
+                      <span style="flex:1; min-width:0;"><span style="display:block; font-size:var(--font-size-base); font-weight:var(--font-weight-medium); color:var(--color-text-strong); text-transform:capitalize;">{{ e.name }}</span><span style="display:block; font-size:var(--font-size-xs); color:var(--color-text-subtle);">{{ e.varCount }} vars · {{ e.secretCount }} secrets</span></span>
+                    </button>
+                  </sc-for>
+                </div>
+                <button data-focusring="1" style="margin-top:var(--space-8); width:100%; height:34px; border:1.5px dashed var(--color-border-strong); background:transparent; border-radius:var(--radius-md); color:var(--color-text-muted); cursor:pointer; font-family:var(--font-text); font-size:var(--font-size-sm); display:inline-flex; align-items:center; justify-content:center; gap:6px;" style-hover="border-color:var(--color-primary); color:var(--color-primary);"><span style="font-size:14px;">{{ icons.plus }}</span>New environment</button>
+              </div>
+
+              <div style="background:var(--color-bg-surface); border:1px solid var(--color-border); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); overflow:hidden;">
+                <div style="display:flex; align-items:center; gap:var(--space-12); padding:var(--space-16) var(--space-20); border-bottom:1px solid var(--color-border);">
+                  <span style="width:36px; height:36px; border-radius:var(--radius-md); background:var(--color-bg-subtle); color:var(--color-text-muted); display:inline-flex; align-items:center; justify-content:center; font-size:18px;">{{ icons.environments }}</span>
+                  <div style="flex:1; min-width:0;"><div style="font-family:var(--font-display); font-size:var(--font-size-md); font-weight:var(--font-weight-semibold); color:var(--color-text-strong); text-transform:capitalize;">{{ envName }}</div><div style="font-size:var(--font-size-xs); color:var(--color-text-muted);">Feeds the run environment pickers</div></div>
+                  <button data-focusring="1" onClick="{{ saveEnv }}" style="height:36px; padding:0 var(--space-16); border:none; border-radius:var(--radius-md); background:var(--color-primary); color:var(--color-primary-fg); font-family:var(--font-text); font-size:var(--font-size-sm); font-weight:var(--font-weight-medium); cursor:pointer;">Save</button>
+                </div>
+                <div style="padding:var(--space-20);">
+                  <div style="font-size:var(--font-size-sm); font-weight:var(--font-weight-semibold); color:var(--color-text-strong); margin-bottom:var(--space-12);">Variables</div>
+                  <div style="display:flex; flex-direction:column; gap:var(--space-8); margin-bottom:var(--space-24);">
+                    <sc-for list="{{ envVarRows }}" as="v" hint-placeholder-count="2">
+                      <div style="display:flex; align-items:center; gap:var(--space-12);">
+                        <span style="flex:0 0 160px; font-family:var(--font-mono); font-size:var(--font-size-sm); color:var(--color-text);">{{ v.key }}</span>
+                        <input data-focusring="1" value="{{ v.value }}" onChange="{{ v.onChange }}" style="flex:1; height:36px; padding:0 var(--space-12); border:1px solid var(--color-border-strong); border-radius:var(--radius-md); background:var(--color-bg-surface); font-family:var(--font-mono); font-size:var(--font-size-sm); color:var(--color-text-strong);" />
+                      </div>
+                    </sc-for>
+                  </div>
+
+                  <div style="display:flex; align-items:center; gap:var(--space-8); margin-bottom:var(--space-12);"><span style="font-size:var(--font-size-sm); font-weight:var(--font-weight-semibold); color:var(--color-text-strong);">Secrets</span><span style="display:inline-flex; align-items:center; gap:4px; font-size:var(--font-size-xs); color:var(--color-text-muted);"><span style="font-size:12px;">{{ icons.lock }}</span>write-only · values never shown</span></div>
+                  <div style="display:flex; flex-direction:column; gap:var(--space-8); margin-bottom:var(--space-12);">
+                    <sc-for list="{{ envSecretRows }}" as="sec" hint-placeholder-count="2">
+                      <div style="display:flex; align-items:center; gap:var(--space-12); padding:var(--space-10) var(--space-12); border:1px solid var(--color-border); border-radius:var(--radius-md); background:var(--color-bg-subtle);">
+                        <span style="flex:0 0 auto; color:var(--color-text-subtle); font-size:15px;">{{ icons.lock }}</span>
+                        <span style="flex:1; font-family:var(--font-mono); font-size:var(--font-size-sm); color:var(--color-text-strong);">{{ sec.name }}</span>
+                        <span style="font-family:var(--font-mono); font-size:var(--font-size-sm); color:var(--color-text-subtle); letter-spacing:2px;">••••••••</span>
+                        <button data-focusring="1" onClick="{{ sec.remove }}" title="Remove" style="flex:0 0 auto; width:28px; height:28px; border:none; background:transparent; border-radius:var(--radius-sm); color:var(--color-text-subtle); cursor:pointer; display:inline-flex; align-items:center; justify-content:center; font-size:15px;" style-hover="background:var(--color-danger-soft); color:var(--color-danger-fg);">{{ icons.trash }}</button>
+                      </div>
+                    </sc-for>
+                  </div>
+                  <div style="display:flex; gap:var(--space-8);">
+                    <input data-focusring="1" value="{{ newSecretName }}" onInput="{{ onNewSecretName }}" placeholder="SECRET_NAME" style="flex:0 0 200px; height:36px; padding:0 var(--space-12); border:1px solid var(--color-border-strong); border-radius:var(--radius-md); background:var(--color-bg-surface); font-family:var(--font-mono); font-size:var(--font-size-sm); color:var(--color-text-strong);" />
+                    <input data-focusring="1" value="{{ newSecretVal }}" onInput="{{ onNewSecretVal }}" type="password" placeholder="value" style="flex:1; height:36px; padding:0 var(--space-12); border:1px solid var(--color-border-strong); border-radius:var(--radius-md); background:var(--color-bg-surface); font-family:var(--font-mono); font-size:var(--font-size-sm); color:var(--color-text-strong);" />
+                    <button data-focusring="1" onClick="{{ addSecret }}" style="height:36px; padding:0 var(--space-16); border:1px solid var(--color-border-strong); background:var(--color-bg-surface); border-radius:var(--radius-md); font-family:var(--font-text); font-size:var(--font-size-sm); font-weight:var(--font-weight-medium); color:var(--color-text-strong); cursor:pointer;" style-hover="background:var(--color-bg-subtle);">Add secret</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </sc-if>
+        </sc-if>
+
+      </div>
+    </main>
+  </div>
+
+  <!-- ===================== RUN DIALOG ===================== -->
+  <sc-if value="{{ runDialogOpen }}" hint-placeholder-val="">
+    <div onClick="{{ closeRunDialog }}" style="position:fixed; inset:0; z-index:1300; background:rgba(16,19,34,0.42); display:flex; align-items:center; justify-content:center; padding:var(--space-24); backdrop-filter:blur(2px);">
+      <div onClick="{{ stop }}" style="width:440px; max-width:100%; background:var(--color-bg-surface); border-radius:var(--radius-xl); box-shadow:var(--shadow-lg); overflow:hidden;">
+        <div style="padding:var(--space-24) var(--space-24) var(--space-16); display:flex; align-items:flex-start; gap:var(--space-12);">
+          <span style="width:36px; height:36px; flex:0 0 auto; border-radius:var(--radius-md); background:var(--color-primary-soft); color:var(--color-primary); display:inline-flex; align-items:center; justify-content:center; font-size:18px;">{{ icons.play }}</span>
+          <div style="flex:1; min-width:0;">
+            <div style="font-family:var(--font-display); font-size:var(--font-size-lg); font-weight:var(--font-weight-semibold); color:var(--color-text-strong);">Run test</div>
+            <div style="font-size:var(--font-size-sm); color:var(--color-text-muted); margin-top:2px;">Configure and launch a replay</div>
+          </div>
+          <button data-focusring="1" onClick="{{ closeRunDialog }}" style="flex:0 0 auto; width:30px; height:30px; border:none; background:transparent; border-radius:var(--radius-md); color:var(--color-text-muted); cursor:pointer; display:inline-flex; align-items:center; justify-content:center; font-size:16px;" style-hover="background:var(--color-bg-subtle);">{{ icons.x }}</button>
+        </div>
+        <div style="padding:0 var(--space-24) var(--space-24);">
+          <div style="margin-bottom:var(--space-16);">
+            <div style="font-size:var(--font-size-sm); font-weight:var(--font-weight-medium); color:var(--color-text-strong); margin-bottom:var(--space-8);">Test</div>
+            <select data-focusring="1" value="{{ runTestId }}" onChange="{{ onRunTestChange }}" style="width:100%; height:40px; padding:0 var(--space-12); border:1px solid var(--color-border-strong); border-radius:var(--radius-md); background:var(--color-bg-surface); font-family:var(--font-text); font-size:var(--font-size-base); color:var(--color-text-strong); cursor:pointer;">
+              <sc-for list="{{ runTestOptions }}" as="t" hint-placeholder-count="6">
+                <option value="{{ t.id }}">{{ t.name }}</option>
+              </sc-for>
+            </select>
+          </div>
+          <sc-if value="{{ runNeedsEnv }}" hint-placeholder-val="{{ true }}">
+            <div style="margin-bottom:var(--space-16);">
+              <div style="display:flex; align-items:center; gap:var(--space-6); font-size:var(--font-size-sm); font-weight:var(--font-weight-medium); color:var(--color-text-strong); margin-bottom:var(--space-8);">Environment <span style="color:var(--color-danger);">*</span></div>
+              <div style="display:flex; flex-direction:column; gap:var(--space-6);">
+                <sc-for list="{{ runEnvOptions }}" as="env" hint-placeholder-count="5">
+                  <button data-focusring="1" onClick="{{ env.onClick }}" style="display:flex; align-items:center; gap:var(--space-12); padding:var(--space-10) var(--space-12); border:1px solid {{ env.border }}; background:{{ env.bg }}; border-radius:var(--radius-md); cursor:pointer; text-align:left; font-family:var(--font-text);">
+                    <span style="width:16px; height:16px; flex:0 0 auto; border-radius:var(--radius-full); border:2px solid {{ env.ring }}; display:inline-flex; align-items:center; justify-content:center;"><span style="width:8px; height:8px; border-radius:var(--radius-full); background:{{ env.dot }};"></span></span>
+                    <span style="flex:1; font-size:var(--font-size-base); color:var(--color-text-strong); font-weight:var(--font-weight-medium);">{{ env.name }}</span>
+                    <span style="font-family:var(--font-mono); font-size:var(--font-size-xs); color:var(--color-text-subtle);">{{ env.url }}</span>
+                  </button>
+                </sc-for>
+              </div>
+            </div>
+          </sc-if>
+          <sc-if value="{{ runNoEnv }}" hint-placeholder-val="">
+            <div style="display:flex; gap:var(--space-10); padding:var(--space-12); border-radius:var(--radius-md); background:var(--color-info-soft); color:var(--color-info-fg); margin-bottom:var(--space-16); font-size:var(--font-size-sm);"><span style="flex:0 0 auto; font-size:16px;">{{ icons.info }}</span><span>No variables in this recording — it runs without an environment.</span></div>
+          </sc-if>
+          <label style="display:flex; align-items:center; gap:var(--space-12); padding:var(--space-12); border:1px solid var(--color-border); border-radius:var(--radius-md); cursor:pointer;">
+            <button data-focusring="1" onClick="{{ toggleTrace }}" role="switch" aria-checked="{{ runTrace }}" style="flex:0 0 auto; width:38px; height:22px; border-radius:var(--radius-full); border:none; cursor:pointer; padding:2px; display:flex; background:{{ traceTrackBg }}; justify-content:{{ traceJustify }}; transition:all var(--duration-fast) var(--ease-standard);"><span style="width:18px; height:18px; border-radius:var(--radius-full); background:#fff; box-shadow:var(--shadow-sm);"></span></button>
+            <span style="flex:1;"><span style="display:block; font-size:var(--font-size-base); font-weight:var(--font-weight-medium); color:var(--color-text-strong);">Keep Playwright trace</span><span style="display:block; font-size:var(--font-size-xs); color:var(--color-text-muted);">Records a trace you can open in the timeline viewer</span></span>
+          </label>
+        </div>
+        <div style="padding:var(--space-16) var(--space-24); background:var(--color-bg-subtle); border-top:1px solid var(--color-border); display:flex; justify-content:flex-end; gap:var(--space-12);">
+          <button data-focusring="1" onClick="{{ closeRunDialog }}" style="height:38px; padding:0 var(--space-16); border:1px solid var(--color-border-strong); background:var(--color-bg-surface); border-radius:var(--radius-md); font-family:var(--font-text); font-size:var(--font-size-base); font-weight:var(--font-weight-medium); color:var(--color-text-strong); cursor:pointer;" style-hover="background:var(--color-bg-inset);">Cancel</button>
+          <button data-focusring="1" onClick="{{ submitRun }}" disabled="{{ runDisabled }}" style="height:38px; padding:0 var(--space-20); border:none; border-radius:var(--radius-md); background:var(--color-primary); color:var(--color-primary-fg); font-family:var(--font-text); font-size:var(--font-size-base); font-weight:var(--font-weight-medium); cursor:pointer; display:inline-flex; align-items:center; gap:var(--space-8); opacity:{{ runOpacity }};"><span style="font-size:15px;">{{ icons.play }}</span>Run now</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- ===================== SUITE RUN DIALOG ===================== -->
+  <sc-if value="{{ srDialogOpen }}" hint-placeholder-val="">
+    <div onClick="{{ closeSuiteRun }}" style="position:fixed; inset:0; z-index:1300; background:rgba(16,19,34,0.42); display:flex; align-items:center; justify-content:center; padding:var(--space-24); backdrop-filter:blur(2px);">
+      <div onClick="{{ stop }}" style="width:460px; max-width:100%; background:var(--color-bg-surface); border-radius:var(--radius-xl); box-shadow:var(--shadow-lg); overflow:hidden;">
+        <div style="padding:var(--space-24) var(--space-24) var(--space-16); display:flex; align-items:flex-start; gap:var(--space-12);">
+          <span style="width:36px; height:36px; flex:0 0 auto; border-radius:var(--radius-md); background:var(--color-primary-soft); color:var(--color-primary); display:inline-flex; align-items:center; justify-content:center; font-size:18px;">{{ icons.suites }}</span>
+          <div style="flex:1; min-width:0;"><div style="font-family:var(--font-display); font-size:var(--font-size-lg); font-weight:var(--font-weight-semibold); color:var(--color-text-strong);">Run suite</div><div style="font-size:var(--font-size-sm); color:var(--color-text-muted); margin-top:2px;">{{ srSuiteName }} · {{ srMembers }} tests</div></div>
+          <button data-focusring="1" onClick="{{ closeSuiteRun }}" style="flex:0 0 auto; width:30px; height:30px; border:none; background:transparent; border-radius:var(--radius-md); color:var(--color-text-muted); cursor:pointer; display:inline-flex; align-items:center; justify-content:center; font-size:16px;" style-hover="background:var(--color-bg-subtle);">{{ icons.x }}</button>
+        </div>
+        <div style="padding:0 var(--space-24) var(--space-24);">
+          <div style="display:flex; align-items:center; gap:var(--space-6); font-size:var(--font-size-sm); font-weight:var(--font-weight-medium); color:var(--color-text-strong); margin-bottom:var(--space-8);">Environments <span style="color:var(--color-danger);">*</span> <span style="color:var(--color-text-subtle); font-weight:var(--font-weight-regular);">— fan out across each</span></div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:var(--space-8); margin-bottom:var(--space-16);">
+            <sc-for list="{{ srEnvOptions }}" as="env" hint-placeholder-count="5">
+              <button data-focusring="1" onClick="{{ env.toggle }}" style="display:flex; align-items:center; gap:var(--space-10); padding:var(--space-10) var(--space-12); border:1px solid {{ env.border }}; background:{{ env.bg }}; border-radius:var(--radius-md); cursor:pointer; text-align:left; font-family:var(--font-text);">
+                <span style="flex:0 0 auto; width:18px; height:18px; border-radius:var(--radius-sm); border:2px solid {{ env.border }}; background:{{ env.checkBg }}; display:inline-flex; align-items:center; justify-content:center; color:#fff; font-size:11px;"><span style="display:{{ env.checkDisp }};">{{ icons.check }}</span></span>
+                <span style="font-size:var(--font-size-base); font-weight:var(--font-weight-medium); color:var(--color-text-strong); text-transform:capitalize;">{{ env.name }}</span>
+              </button>
+            </sc-for>
+          </div>
+          <label style="display:flex; align-items:center; gap:var(--space-12); padding:var(--space-12); border:1px solid var(--color-border); border-radius:var(--radius-md); cursor:pointer;">
+            <button data-focusring="1" onClick="{{ toggleSuiteRunTrace }}" role="switch" aria-checked="{{ srTrace }}" style="flex:0 0 auto; width:38px; height:22px; border-radius:var(--radius-full); border:none; cursor:pointer; padding:2px; display:flex; background:{{ srTraceTrackBg }}; justify-content:{{ srTraceJustify }}; transition:all var(--duration-fast) var(--ease-standard);"><span style="width:18px; height:18px; border-radius:var(--radius-full); background:#fff; box-shadow:var(--shadow-sm);"></span></button>
+            <span style="flex:1; font-size:var(--font-size-base); font-weight:var(--font-weight-medium); color:var(--color-text-strong);">Keep Playwright trace</span>
+          </label>
+        </div>
+        <div style="padding:var(--space-16) var(--space-24); background:var(--color-bg-subtle); border-top:1px solid var(--color-border); display:flex; align-items:center; gap:var(--space-12);">
+          <span style="font-size:var(--font-size-sm); color:var(--color-text-muted);"><strong style="color:var(--color-text-strong);">{{ srTotal }}</strong> child runs</span>
+          <div style="flex:1;"></div>
+          <button data-focusring="1" onClick="{{ closeSuiteRun }}" style="height:38px; padding:0 var(--space-16); border:1px solid var(--color-border-strong); background:var(--color-bg-surface); border-radius:var(--radius-md); font-family:var(--font-text); font-size:var(--font-size-base); font-weight:var(--font-weight-medium); color:var(--color-text-strong); cursor:pointer;" style-hover="background:var(--color-bg-inset);">Cancel</button>
+          <button data-focusring="1" onClick="{{ submitSuiteRun }}" disabled="{{ srDisabled }}" style="height:38px; padding:0 var(--space-20); border:none; border-radius:var(--radius-md); background:var(--color-primary); color:var(--color-primary-fg); font-family:var(--font-text); font-size:var(--font-size-base); font-weight:var(--font-weight-medium); cursor:pointer; display:inline-flex; align-items:center; gap:var(--space-8); opacity:{{ srOpacity }};"><span style="font-size:15px;">{{ icons.play }}</span>Run suite</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- ===================== APPROVE CONFIRM ===================== -->
+  <sc-if value="{{ approveOpen }}" hint-placeholder-val="">
+    <div onClick="{{ closeApprove }}" style="position:fixed; inset:0; z-index:1300; background:rgba(16,19,34,0.42); display:flex; align-items:center; justify-content:center; padding:var(--space-24); backdrop-filter:blur(2px);">
+      <div onClick="{{ stop }}" style="width:420px; max-width:100%; background:var(--color-bg-surface); border-radius:var(--radius-xl); box-shadow:var(--shadow-lg); padding:var(--space-24);">
+        <div style="display:flex; gap:var(--space-16);">
+          <span style="width:44px; height:44px; flex:0 0 auto; border-radius:var(--radius-full); background:var(--color-danger-soft); color:var(--color-danger-fg); display:inline-flex; align-items:center; justify-content:center; font-size:22px;">{{ icons.alert }}</span>
+          <div style="min-width:0;">
+            <div style="font-family:var(--font-display); font-size:var(--font-size-lg); font-weight:var(--font-weight-semibold); color:var(--color-text-strong);">Replace baseline?</div>
+            <div style="font-size:var(--font-size-base); color:var(--color-text); margin-top:var(--space-8); line-height:var(--line-height-normal);">Approving <strong style="color:var(--color-text-strong);">{{ approveName }}</strong> permanently replaces the golden baseline for this checkpoint &amp; environment. <strong style="color:var(--color-danger-fg);">This cannot be undone.</strong></div>
+          </div>
+        </div>
+        <div style="display:flex; justify-content:flex-end; gap:var(--space-12); margin-top:var(--space-24);">
+          <button data-focusring="1" onClick="{{ closeApprove }}" style="height:38px; padding:0 var(--space-16); border:1px solid var(--color-border-strong); background:var(--color-bg-surface); border-radius:var(--radius-md); font-family:var(--font-text); font-size:var(--font-size-base); font-weight:var(--font-weight-medium); color:var(--color-text-strong); cursor:pointer;" style-hover="background:var(--color-bg-subtle);">Cancel</button>
+          <button data-focusring="1" onClick="{{ confirmApprove }}" style="height:38px; padding:0 var(--space-20); border:none; border-radius:var(--radius-md); background:var(--color-danger); color:#fff; font-family:var(--font-text); font-size:var(--font-size-base); font-weight:var(--font-weight-medium); cursor:pointer;" style-hover="filter:brightness(0.95);">Approve &amp; replace</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- ===================== TOAST ===================== -->
+  <sc-if value="{{ toast }}" hint-placeholder-val="">
+    <div style="position:fixed; left:50%; bottom:28px; transform:translateX(-50%); z-index:1500; display:flex; align-items:center; gap:var(--space-12); padding:var(--space-12) var(--space-20); background:var(--color-neutral-900); color:#fff; border-radius:var(--radius-full); box-shadow:var(--shadow-lg); font-size:var(--font-size-base); font-weight:var(--font-weight-medium);">
+      <span style="width:18px; height:18px; color:var(--color-dataviz-5); display:inline-flex; font-size:18px;">{{ icons.check }}</span>{{ toast }}
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { screen: "dashboard", vs: "data", collapsed: false, runId: "r1", diffMode: "side-by-side", cpIndex: 0, threshold: 1.0, swipe: 50, onion: 50, runDialog: false, runTestId: "t1", runEnv: null, runTrace: false, approve: null, toast: null, masks: null, testFolders: {}, filterFolder: null, filterTag: null, dragId: null, dragOver: null, suiteSel: {}, suiteEditing: null, suiteRunDialog: null, suiteRunEnvs: [], suiteRunTrace: false, suiteRunOpen: "sr1", envEditing: "e1", envValues: {}, envSecrets: {}, newSecretName: "", newSecretVal: "", cpResolutions: {}, reeval: null };
+
+  seedSuiteTests = { s1:["t1","t2","t8","t4","t5"], s2:["t7","t6","t8"], s3:["t1","t2","t3","t5"] };
+
+  icoEl(svg){ return React.createElement('span',{style:{display:'inline-flex',alignItems:'center',justifyContent:'center',lineHeight:0,width:'1em',height:'1em'},dangerouslySetInnerHTML:{__html:svg}}); }
+  // ---- icon set (simple line glyphs, 24x24, currentColor; sized via 1em) ----
+  ic = {
+    dashboard:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>',
+    tests:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><path d="M9 3h6M10 3v5l-5 9a2 2 0 0 0 1.8 3h10.4a2 2 0 0 0 1.8-3l-5-9V3"/><path d="M7 14h10"/></svg>',
+    suites:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>',
+    runs:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>',
+    suiteRuns:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><path d="M4 6h16M4 12h16M4 18h10"/><circle cx="19" cy="18" r="2"/></svg>',
+    needsReview:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>',
+    environments:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>',
+    chevronDown:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><path d="m6 9 6 6 6-6"/></svg>',
+    menu:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><path d="M3 6h18M3 12h18M3 18h18"/></svg>',
+    search:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>',
+    bell:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>',
+    play:'<svg viewBox="0 0 24 24" fill="currentColor" stroke="none" width="1em" height="1em"><path d="M7 5v14l12-7z"/></svg>',
+    grid:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg>',
+    activity:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>',
+    trend:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><path d="m3 17 6-6 4 4 8-8"/><path d="M17 7h4v4"/></svg>',
+    check:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><path d="m5 12 5 5L20 7"/></svg>',
+    x:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><path d="M6 6 18 18M18 6 6 18"/></svg>',
+    dot:'<svg viewBox="0 0 24 24" fill="currentColor" stroke="none" width="1em" height="1em"><circle cx="12" cy="12" r="4"/></svg>',
+    dash:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" width="1em" height="1em"><path d="M6 12h12"/></svg>',
+    clock:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+    spin:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" width="1em" height="1em" style="animation:vspin .8s linear infinite"><path d="M21 12a9 9 0 1 1-6.2-8.5"/></svg>',
+    alert:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></svg>',
+    folder:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>',
+    tag:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><path d="M3 7v5l9 9 7-7-9-9H4Z"/><circle cx="7.5" cy="7.5" r="1.4"/></svg>',
+    up:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><path d="M7 17 17 7M9 7h8v8"/></svg>',
+    down:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><path d="M7 7 17 17M17 9v8H9"/></svg>',
+    grip:'<svg viewBox="0 0 24 24" fill="currentColor" stroke="none" width="1em" height="1em"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>',
+    plus:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><path d="M12 5v14M5 12h14"/></svg>',
+    eye:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>',
+    lock:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>',
+    layers:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><path d="m12 3 9 5-9 5-9-5Z"/><path d="m3 13 9 5 9-5"/></svg>',
+    sliders:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><path d="M4 6h10M18 6h2M4 12h2M10 12h10M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>',
+    timeline:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><path d="M5 4v16"/><circle cx="5" cy="8" r="2"/><circle cx="5" cy="16" r="2"/><path d="M9 8h11M9 16h11"/></svg>',
+    external:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><path d="M14 4h6v6M20 4l-9 9M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg>',
+    search2:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>',
+    inbox:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><path d="M3 12h5l2 3h4l2-3h5"/><path d="M5 5h14l2 7v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-6Z"/></svg>',
+    info:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>',
+    pencil:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><path d="M12 20h9"/><path d="M16.5 3.5a2 2 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
+    trash:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><path d="M3 6h18M8 6V4h8v2M6 6l1 14a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-14"/></svg>',
+    more:'<svg viewBox="0 0 24 24" fill="currentColor" stroke="none" width="1em" height="1em"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>',
+    sidebyside:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><rect x="3" y="4" width="8" height="16" rx="1.5"/><rect x="13" y="4" width="8" height="16" rx="1.5"/></svg>',
+    swipe:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M12 4v16M9 9l-3 3 3 3M15 9l3 3-3 3"/></svg>',
+    onion:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><circle cx="9" cy="9" r="6"/><circle cx="15" cy="15" r="6"/></svg>',
+    arrowLeft:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="1em" height="1em"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>',
+  };
+
+  // ---------- color helpers ----------
+  TONE = {
+    success:{ bg:"var(--color-success-soft)", fg:"var(--color-success-fg)", dot:"var(--color-success)" },
+    warning:{ bg:"var(--color-warning-soft)", fg:"var(--color-warning-fg)", dot:"var(--color-warning)" },
+    danger:{ bg:"var(--color-danger-soft)", fg:"var(--color-danger-fg)", dot:"var(--color-danger)" },
+    info:{ bg:"var(--color-info-soft)", fg:"var(--color-info-fg)", dot:"var(--color-info)" },
+    neutral:{ bg:"var(--color-neutral-100)", fg:"var(--color-neutral-700)", dot:"var(--color-neutral-500)" },
+    primary:{ bg:"var(--color-primary-soft)", fg:"var(--color-primary)", dot:"var(--color-primary)" },
+  };
+  STATUS = {
+    passed:{ tone:"success", label:"Passed", icon:"check" },
+    needs_review:{ tone:"warning", label:"Needs review", icon:"eye" },
+    diff:{ tone:"warning", label:"Diff", icon:"eye" },
+    "pending-baseline":{ tone:"info", label:"Pending baseline", icon:"layers" },
+    failed:{ tone:"danger", label:"Failed", icon:"x" },
+    queued:{ tone:"neutral", label:"Queued", icon:"clock" },
+    running:{ tone:"neutral", label:"Running", icon:"spin" },
+    none:{ tone:"neutral", label:"No runs", icon:"dash" },
+  };
+  st(s){ const m=this.STATUS[s]||this.STATUS.none; const t=this.TONE[m.tone]; return { ...m, ...t, glyph:this.icoEl(this.ic[m.icon]||this.ic.dot) }; }
+
+  // ---------- data ----------
+  folders = [
+    { id:"f1", name:"Commerce", testCount:3 },
+    { id:"f2", name:"App", testCount:3 },
+    { id:"f3", name:"Auth", testCount:1 },
+    { id:"f4", name:"Marketing", testCount:1 },
+  ];
+  allTags = ["release:5.0","feature:checkout","feature:pdp","feature:cart","feature:dashboard","feature:search","smoke"];
+  envs = [
+    { id:"e1", name:"dev", values:{ baseUrl:"https://dev.app.io", region:"us-east" }, secretNames:["API_KEY"] },
+    { id:"e2", name:"demo", values:{ baseUrl:"https://demo.app.io", region:"us-east" }, secretNames:["API_KEY","DEMO_TOKEN"] },
+    { id:"e3", name:"lnrs", values:{ baseUrl:"https://lnrs.app.io", region:"eu-west" }, secretNames:["API_KEY","SSO_SECRET"] },
+    { id:"e4", name:"cfg", values:{ baseUrl:"https://cfg.app.io", region:"us-west" }, secretNames:["API_KEY"] },
+    { id:"e5", name:"carvana", values:{ baseUrl:"https://carvana.app.io", region:"us-central" }, secretNames:["API_KEY","PAY_KEY"] },
+  ];
+  tests = [
+    { id:"t1", name:"Checkout flow", createdAt:"2026-04-12", needsEnvironment:true, folderId:"f1", folderName:"Commerce", tags:["release:5.0","feature:checkout"] },
+    { id:"t2", name:"Product detail", createdAt:"2026-04-18", needsEnvironment:true, folderId:"f1", folderName:"Commerce", tags:["release:5.0","feature:pdp"] },
+    { id:"t3", name:"Cart drawer", createdAt:"2026-05-02", needsEnvironment:true, folderId:"f1", folderName:"Commerce", tags:["feature:cart"] },
+    { id:"t4", name:"Dashboard widgets", createdAt:"2026-03-28", needsEnvironment:true, folderId:"f2", folderName:"App", tags:["feature:dashboard"] },
+    { id:"t5", name:"Search results", createdAt:"2026-04-05", needsEnvironment:true, folderId:"f2", folderName:"App", tags:["feature:search"] },
+    { id:"t6", name:"Account settings", createdAt:"2026-04-22", needsEnvironment:false, folderId:"f2", folderName:"App", tags:["smoke"] },
+    { id:"t7", name:"Login page", createdAt:"2026-02-15", needsEnvironment:true, folderId:"f3", folderName:"Auth", tags:["smoke"] },
+    { id:"t8", name:"Pricing table", createdAt:"2026-03-10", needsEnvironment:false, folderId:"f4", folderName:"Marketing", tags:["release:5.0"] },
+    { id:"t9", name:"Email templates", createdAt:"2026-05-09", needsEnvironment:false, folderId:null, folderName:null, tags:[] },
+  ];
+  // matrix status per test x env
+  matrix = {
+    t1:{ dev:"passed", demo:"passed", lnrs:"passed", cfg:"needs_review", carvana:"needs_review" },
+    t2:{ dev:"passed", demo:"passed", lnrs:"failed", cfg:"needs_review", carvana:"passed" },
+    t3:{ dev:"passed", demo:"passed", lnrs:"passed", cfg:"passed", carvana:"pending-baseline" },
+    t4:{ dev:"pending-baseline", demo:"passed", lnrs:"failed", cfg:"passed", carvana:"running" },
+    t5:{ dev:"passed", demo:"running", lnrs:"passed", cfg:"passed", carvana:"passed" },
+    t8:{ dev:"passed", demo:"needs_review", lnrs:"passed", cfg:"none", carvana:"passed" },
+  };
+  runs = [
+    { runId:"r1", testName:"Checkout flow", environment:"carvana", status:"needs_review", runTimestamp:"2m ago", error:null },
+    { runId:"r2", testName:"Pricing table", environment:"demo", status:"passed", runTimestamp:"8m ago", error:null },
+    { runId:"r3", testName:"Dashboard widgets", environment:"lnrs", status:"failed", runTimestamp:"14m ago", error:"Timeout 30000ms waiting for selector \".kpi-grid\"" },
+    { runId:"r4", testName:"Login page", environment:"dev", status:"passed", runTimestamp:"22m ago", error:null },
+    { runId:"r5", testName:"Product detail", environment:"cfg", status:"needs_review", runTimestamp:"31m ago", error:null },
+    { runId:"r6", testName:"Search results", environment:"demo", status:"running", runTimestamp:"just now", error:null },
+    { runId:"r7", testName:"Cart drawer", environment:"carvana", status:"pending-baseline", runTimestamp:"1h ago", error:null },
+    { runId:"r8", testName:"Account settings", environment:"dev", status:"passed", runTimestamp:"2h ago", error:null },
+    { runId:"r9", testName:"Checkout flow", environment:"demo", status:"queued", runTimestamp:"3h ago", error:null },
+    { runId:"r10", testName:"Product detail", environment:"lnrs", status:"failed", runTimestamp:"4h ago", error:"Element not found: img.gallery-main" },
+  ];
+  needsReview = [
+    { runId:"r1", testName:"Checkout flow", environment:"carvana", runTimestamp:"2m ago", checkpointName:"Order summary", reviewState:"diff" },
+    { runId:"r1", testName:"Checkout flow", environment:"carvana", runTimestamp:"2m ago", checkpointName:"Footer", reviewState:"diff" },
+    { runId:"r5", testName:"Product detail", environment:"cfg", runTimestamp:"31m ago", checkpointName:"Gallery", reviewState:"diff" },
+    { runId:"r7", testName:"Cart drawer", environment:"carvana", runTimestamp:"1h ago", checkpointName:"Cart total", reviewState:"pending-baseline" },
+    { runId:"r4b", testName:"Dashboard widgets", environment:"dev", runTimestamp:"1h ago", checkpointName:"KPI row", reviewState:"pending-baseline" },
+  ];
+  suites = [
+    { id:"s1", name:"Release 5.0 regression", testCount:5 },
+    { id:"s2", name:"Smoke", testCount:3 },
+    { id:"s3", name:"Commerce critical", testCount:4 },
+  ];
+  suiteRuns = [
+    { suiteRunId:"sr1", suiteName:"Release 5.0 regression", environments:["dev","demo"], status:"running", counts:{ total:10, queued:1, running:2, passed:5, needsReview:1, failed:1 }, runTimestamp:"6m ago" },
+    { suiteRunId:"sr2", suiteName:"Smoke", environments:["dev"], status:"passed", counts:{ total:3, queued:0, running:0, passed:3, needsReview:0, failed:0 }, runTimestamp:"40m ago" },
+    { suiteRunId:"sr3", suiteName:"Commerce critical", environments:["carvana","cfg"], status:"needs_review", counts:{ total:8, queued:0, running:0, passed:5, needsReview:2, failed:1 }, runTimestamp:"2h ago" },
+  ];
+  // run detail read-models
+  runViews = {
+    r1:{ runId:"r1", status:"needs_review", testName:"Checkout flow", environment:"carvana", runTimestamp:"Today, 14:32", error:null, traceUrl:"/trace/r1.zip", failedStepIndex:null, steps:[],
+      timeline:[
+        { index:0, label:'navigate to "{{baseUrl}}/"', checkpointName:null, startedAt:"14:32:01", durationMs:420, outcome:"passed" },
+        { index:1, label:'click "Cart"', checkpointName:null, startedAt:"14:32:01", durationMs:180, outcome:"passed" },
+        { index:2, label:'screenshot "Header nav"', checkpointName:"Header nav", startedAt:"14:32:02", durationMs:240, outcome:"passed" },
+        { index:3, label:'click "Checkout"', checkpointName:null, startedAt:"14:32:02", durationMs:310, outcome:"passed" },
+        { index:4, label:'type email "qa@varys.io"', checkpointName:null, startedAt:"14:32:03", durationMs:90, outcome:"passed" },
+        { index:5, label:'screenshot "Order summary"', checkpointName:"Order summary", startedAt:"14:32:03", durationMs:260, outcome:"passed" },
+        { index:6, label:'screenshot "Promo banner"', checkpointName:"Promo banner", startedAt:"14:32:04", durationMs:150, outcome:"passed" },
+        { index:7, label:'screenshot "Footer"', checkpointName:"Footer", startedAt:"14:32:04", durationMs:170, outcome:"passed" },
+      ],
+      checkpoints:[
+        { name:"Order summary", reviewState:"diff", captureMode:"element", resolution:null, diffScore:0.043, threshold:0.01, healed:false, masks:[{x:18,y:62,width:40,height:14}], actualUrl:"a", baselineUrl:"b", diffUrl:"d" },
+        { name:"Promo banner", reviewState:"passed", captureMode:"region", resolution:"approved", diffScore:0.002, threshold:0.01, healed:false, masks:[], actualUrl:"a", baselineUrl:"b", diffUrl:"d" },
+        { name:"Footer", reviewState:"diff", captureMode:"fullpage", resolution:null, diffScore:0.018, threshold:0.01, healed:true, masks:[], actualUrl:"a", baselineUrl:"b", diffUrl:"d" },
+        { name:"Header nav", reviewState:"pending-baseline", captureMode:"element", resolution:null, diffScore:null, threshold:0.01, healed:false, masks:[], actualUrl:"a", baselineUrl:null, diffUrl:null },
+      ] },
+    r3:{ runId:"r3", status:"failed", testName:"Dashboard widgets", environment:"lnrs", runTimestamp:"Today, 14:18", error:'Timeout 30000ms waiting for selector ".kpi-grid"', traceUrl:"/trace/r3.zip", failedStepIndex:2,
+      steps:[
+        { index:0, label:'navigate to "{{baseUrl}}/dashboard"' },
+        { index:1, label:'click "Refresh widgets"' },
+        { index:2, label:'wait for ".kpi-grid"' },
+        { index:3, label:'screenshot "KPI row"' },
+        { index:4, label:'screenshot "Chart panel"' },
+        { index:5, label:'screenshot "Activity feed"' },
+      ],
+      timeline:[
+        { index:0, label:'navigate to "{{baseUrl}}/dashboard"', checkpointName:null, startedAt:"14:18:00", durationMs:510, outcome:"passed" },
+        { index:1, label:'click "Refresh widgets"', checkpointName:null, startedAt:"14:18:01", durationMs:230, outcome:"passed" },
+        { index:2, label:'wait for ".kpi-grid"', checkpointName:null, startedAt:"14:18:01", durationMs:30000, outcome:"failed" },
+      ],
+      checkpoints:[] },
+  };
+
+  // ---------- nav ----------
+  go(s){ this.setState({ screen:s }); }
+  openRun(id){ this.setState({ screen:"runDetail", runId:id, cpIndex:0, diffMode:"side-by-side" }); }
+  toggleSidebar(){ this.setState({ collapsed:!this.state.collapsed }); }
+  setVS(v){ this.setState({ vs:v }); }
+  showToast(msg){ this.setState({ toast:msg }); clearTimeout(this._tt); this._tt=setTimeout(()=>this.setState({ toast:null }),2800); }
+  stop(e){ e && e.stopPropagation && e.stopPropagation(); }
+
+  // run dialog
+  openRunDialog(){ this.setState({ runDialog:true }); }
+  openRunFor(testId){ const t=this.tests.find(x=>x.id===testId); this.setState({ runDialog:true, runTestId:testId, runEnv: t && t.needsEnvironment ? null : "default" }); }
+  closeRunDialog(){ this.setState({ runDialog:false }); }
+  onRunTestChange(e){ const id=e.target.value; const t=this.tests.find(x=>x.id===id); this.setState({ runTestId:id, runEnv: t && t.needsEnvironment ? null : "default" }); }
+  toggleTrace(){ this.setState({ runTrace:!this.state.runTrace }); }
+  submitRun(){ const t=this.tests.find(x=>x.id===this.state.runTestId); if(t && t.needsEnvironment && !this.state.runEnv) return; const envName=this.state.runEnv && this.state.runEnv!=="default" ? (this.envs.find(e=>e.id===this.state.runEnv)||{}).name : null; this.setState({ runDialog:false }); this.showToast(`Queued “${t.name}”${envName?" · "+envName:""}`); }
+
+  // review
+  openApprove(name){ this.setState({ approve:{ name } }); }
+  closeApprove(){ this.setState({ approve:null }); }
+  confirmApprove(){ const name=this.state.approve&&this.state.approve.name; const r={ ...this.state.cpResolutions }; r[name]="approved"; this.setState({ approve:null, cpResolutions:r }); this.showToast(`Baseline replaced for “${name}”`); }
+  rejectCp(name){ const r={ ...this.state.cpResolutions }; r[name]="rejected"; this.setState({ cpResolutions:r }); this.showToast(`“${name}” marked as regression`); }
+  approveAll(){ const rv=this.runViews[this.state.runId]; const r={ ...this.state.cpResolutions }; (rv?rv.checkpoints:[]).forEach(c=>{ if(c.reviewState!=="passed") r[c.name]="approved"; }); this.setState({ cpResolutions:r }); this.showToast("Approved all checkpoints in run"); }
+  curCp(){ const rv=this.runViews[this.state.runId]||this.runViews.r1; const cps=rv.checkpoints||[]; return cps[Math.min(this.state.cpIndex,Math.max(0,cps.length-1))]; }
+  effMaskCount(){ const cp=this.curCp(); return this.state.masks!=null?this.state.masks:(cp?cp.masks.length:0); }
+  onThreshold(e){ this.setState({ threshold:parseFloat(e.target.value), reeval:null }); }
+  onSwipe(e){ this.setState({ swipe:parseInt(e.target.value,10) }); }
+  onOnion(e){ this.setState({ onion:parseInt(e.target.value,10) }); }
+  addMask(){ this.setState({ masks:this.effMaskCount()+1, reeval:null }); }
+  clearMasks(){ this.setState({ masks:0, reeval:null }); }
+  reEvaluate(){ const cp=this.curCp(); const base=cp&&cp.diffScore!=null?cp.diffScore*100:0; const sim=Math.max(0.1, base - this.effMaskCount()*0.9); const verdict=sim>this.state.threshold?"diff":"match"; this.setState({ reeval:{ score:Math.round(sim*10)/10, verdict } }); this.showToast("Re-evaluated against stored baseline"); }
+  persistTuning(){ this.setState({ reeval:null }); this.showToast("Masks & threshold saved → new test version v8"); }
+  openTimeline(){ this.showToast("Opening Playwright trace in timeline viewer…"); }
+  backToRuns(){ this.setState({ screen:"runs" }); }
+
+  // suites
+  suiteMembers(id){ return this.state.suiteSel[id] || this.seedSuiteTests[id] || []; }
+  openSuiteEditor(id){ const sel={ ...this.state.suiteSel }; sel[id]=this.suiteMembers(id).slice(); this.setState({ suiteEditing:id, suiteSel:sel }); }
+  closeSuiteEditor(){ this.setState({ suiteEditing:null }); }
+  toggleSuiteTest(id, testId){ const sel={ ...this.state.suiteSel }; const cur=(sel[id]||this.suiteMembers(id)).slice(); const i=cur.indexOf(testId); if(i>=0) cur.splice(i,1); else cur.push(testId); sel[id]=cur; this.setState({ suiteSel:sel }); }
+  saveSuite(){ const id=this.state.suiteEditing; const n=this.suiteMembers(id).length; this.setState({ suiteEditing:null }); this.showToast(`Suite saved · ${n} tests`); }
+  openSuiteRun(id){ this.setState({ suiteRunDialog:id, suiteRunEnvs:[], suiteRunTrace:false }); }
+  closeSuiteRun(){ this.setState({ suiteRunDialog:null }); }
+  toggleSuiteRunEnv(envId){ const cur=this.state.suiteRunEnvs.slice(); const i=cur.indexOf(envId); if(i>=0) cur.splice(i,1); else cur.push(envId); this.setState({ suiteRunEnvs:cur }); }
+  toggleSuiteRunTrace(){ this.setState({ suiteRunTrace:!this.state.suiteRunTrace }); }
+  submitSuiteRun(){ if(!this.state.suiteRunEnvs.length) return; const su=this.suites.find(x=>x.id===this.state.suiteRunDialog); const n=this.state.suiteRunEnvs.length; const m=this.suiteMembers(su.id).length; this.setState({ suiteRunDialog:null, screen:"suiteRuns" }); this.showToast(`Queued “${su.name}” · ${m}×${n} = ${m*n} runs`); }
+  openSuiteRunReport(id){ this.setState({ suiteRunOpen:id }); }
+
+  // environments
+  envVals(env){ return { ...env.values, ...(this.state.envValues[env.id]||{}) }; }
+  envSecretList(env){ return this.state.envSecrets[env.id] || env.secretNames; }
+  editEnv(id){ this.setState({ envEditing:id, newSecretName:"", newSecretVal:"" }); }
+  onEnvVal(envId,key,e){ const v={ ...this.state.envValues }; v[envId]={ ...(v[envId]||{}), [key]:e.target.value }; this.setState({ envValues:v }); }
+  removeSecret(envId,name){ const env=this.envs.find(x=>x.id===envId); const cur=this.envSecretList(env).filter(n=>n!==name); const m={ ...this.state.envSecrets }; m[envId]=cur; this.setState({ envSecrets:m }); this.showToast(`Removed secret ${name}`); }
+  onNewSecretName(e){ this.setState({ newSecretName:e.target.value }); }
+  onNewSecretVal(e){ this.setState({ newSecretVal:e.target.value }); }
+  addSecret(envId){ const name=(this.state.newSecretName||"").trim(); if(!name) return; const env=this.envs.find(x=>x.id===envId); const cur=this.envSecretList(env).slice(); if(!cur.includes(name)) cur.push(name); const m={ ...this.state.envSecrets }; m[envId]=cur; this.setState({ envSecrets:m, newSecretName:"", newSecretVal:"" }); this.showToast(`Secret ${name} added (write-only)`); }
+  saveEnv(){ this.showToast("Environment saved"); }
+
+  // tests organize / drag-drop
+  folderOf(t){ return this.state.testFolders[t.id]!==undefined ? this.state.testFolders[t.id] : t.folderId; }
+  moveTest(testId, folderId){ const m={ ...this.state.testFolders }; m[testId]=folderId; const t=this.tests.find(x=>x.id===testId); const fname = folderId? (this.folders.find(f=>f.id===folderId)||{}).name : "Unfiled"; this.setState({ testFolders:m, dragId:null, dragOver:null }); if(t) this.showToast(`Moved “${t.name}” to ${fname}`); }
+  onDragStart(id){ this.setState({ dragId:id }); }
+  onDragEnd(){ this.setState({ dragId:null, dragOver:null }); }
+  onDragOverFolder(fid,e){ e&&e.preventDefault&&e.preventDefault(); if(this.state.dragOver!==fid) this.setState({ dragOver:fid }); }
+  onDropFolder(fid,e){ e&&e.preventDefault&&e.preventDefault(); if(this.state.dragId) this.moveTest(this.state.dragId, fid==="__unfiled"?null:fid); }
+  setFilterFolder(f){ this.setState({ filterFolder:f }); }
+  setFilterTag(t){ this.setState({ filterTag: this.state.filterTag===t?null:t }); }
+
+  spark(seed, down){
+    const n=14; let pts=[]; let v=20+((seed*7)%10);
+    for(let i=0;i<n;i++){ v += Math.sin(i*1.3+seed)*4 + ((i*seed)%5)-2; if(down && i>8) v-=2.2; v=Math.max(4,Math.min(30,v)); pts.push((i*(120/(n-1))).toFixed(1)+","+(32-v).toFixed(1)); }
+    return pts.join(" ");
+  }
+
+  renderVals(){
+    const s=this.state; const ic={}; for(const k in this.ic) ic[k]=this.icoEl(this.ic[k]);
+    const navStyle=(scr)=>{ const a=s.screen===scr; return `background:${a?"var(--color-primary-soft)":"transparent"}; color:${a?"var(--color-primary)":"var(--color-text)"}; font-weight:${a?"var(--font-weight-semibold)":"var(--font-weight-medium)"};`; };
+    const navGroups=[
+      { label:"Monitor", items:[ { name:"Dashboard", icon:ic.dashboard, style:navStyle("dashboard"), onClick:()=>this.go("dashboard") } ] },
+      { label:"Library", items:[
+        { name:"Tests", icon:ic.tests, style:navStyle("tests"), onClick:()=>this.go("tests") },
+        { name:"Suites", icon:ic.suites, style:navStyle("suites"), onClick:()=>this.go("suites") },
+      ] },
+      { label:"Execution", items:[
+        { name:"Runs", icon:ic.runs, style:navStyle("runs"), onClick:()=>this.go("runs") },
+        { name:"Suite runs", icon:ic.suiteRuns, style:navStyle("suiteRuns"), onClick:()=>this.go("suiteRuns") },
+        { name:"Needs review", icon:ic.needsReview, style:navStyle("needsReview"), onClick:()=>this.go("needsReview"), count:this.needsReview.length },
+      ] },
+      { label:"Configure", items:[ { name:"Environments", icon:ic.environments, style:navStyle("environments"), onClick:()=>this.go("environments") } ] },
+    ];
+
+    const titles={ dashboard:["Dashboard","Visual regression health across every environment"], tests:["Tests","Organize, file and run your recordings"], suites:["Suites","Saved selections you run against environments"], runs:["Runs","Every replay, newest first · live"], suiteRuns:["Suite runs","Fan-outs of suite × environment"], needsReview:["Needs review","Checkpoints awaiting a human decision"], environments:["Environments","Per-deployment variables & secrets"], runDetail:[(this.runViews[s.runId]||{}).testName||"Run","Run detail & diff review"] };
+    const [screenTitle,screenSubtitle]=titles[s.screen]||["",""];
+
+    const vsOptions=["data","loading","empty","error"].map(v=>({ label:({data:"Data",loading:"Loading",empty:"Empty",error:"Error"})[v], onClick:()=>this.setVS(v), style:`background:${s.vs===v?"var(--color-bg-surface)":"transparent"}; color:${s.vs===v?"var(--color-primary)":"var(--color-text-muted)"}; box-shadow:${s.vs===v?"var(--shadow-xs)":"none"};` }));
+
+    // dashboard
+    const kpis=[
+      { label:"Total tests", value:"124", delta:"+6", deltaBg:this.TONE.success.bg, deltaFg:this.TONE.success.fg, arrow:ic.up, sub:"across 5 environments", icon:ic.tests },
+      { label:"Pass rate", value:"94.2%", delta:"2.1%", deltaBg:this.TONE.success.bg, deltaFg:this.TONE.success.fg, arrow:ic.up, sub:"last 7 days", icon:ic.check },
+      { label:"Needs review", value:"7", delta:"+3", deltaBg:this.TONE.warning.bg, deltaFg:this.TONE.warning.fg, arrow:ic.up, sub:"checkpoints pending", icon:ic.eye },
+      { label:"Failures", value:"3", delta:"1", deltaBg:this.TONE.danger.bg, deltaFg:this.TONE.danger.fg, arrow:ic.down, sub:"in the last 24h", icon:ic.x },
+    ];
+    const matrixEnvs=this.envs.map(e=>e.name);
+    const matrixGridCols="minmax(120px,1.6fr) repeat("+matrixEnvs.length+", minmax(0,1fr))";
+    const matrixRows=this.tests.filter(t=>this.matrix[t.id]).map(t=>({ name:t.name, cells:matrixEnvs.map(en=>{ const stt=this.matrix[t.id][en]||"none"; const m=this.st(stt); const isNone=stt==="none"; return { onClick:()=>{ if(!isNone) this.openRun("r1"); }, title:`${t.name} · ${en} · ${m.label}`, bg:isNone?"var(--color-bg-subtle)":m.bg, fg:m.fg, border:isNone?"var(--color-border)":"transparent", icon:m.glyph }; }) }));
+    const matrixLegend=[ { label:"Passed", dot:this.TONE.success.dot }, { label:"Review", dot:this.TONE.warning.dot }, { label:"Failed", dot:this.TONE.danger.dot }, { label:"Baseline", dot:this.TONE.info.dot } ];
+    const feed=this.runs.slice(0,6).map(r=>{ const m=this.st(r.status); return { ...r, dot:m.dot, bg:m.bg, fg:m.fg, label:m.label, time:r.runTimestamp, onClick:()=>this.openRun(this.runViews[r.runId]?r.runId:"r1") }; });
+    const sparkData=[ ["Order summary",0.043,"danger",true],["Promo banner",0.002,"success",false],["Tier cards",0.011,"warning",false],["KPI row",0.004,"success",false],["Gallery",0.026,"danger",true] ];
+    const sparklines=sparkData.map((d,i)=>({ name:d[0], points:this.spark(i+2,d[3]), color:this.TONE[d[2]].dot, scoreLabel:(d[1]*100).toFixed(1)+"%", scoreColor:this.TONE[d[2]].fg }));
+    const alerts=[
+      { title:"Footer diff on Checkout flow", detail:"carvana · 1.8% over threshold", time:"2m ago", bg:this.TONE.warning.bg, fg:this.TONE.warning.fg, icon:ic.eye },
+      { title:"Dashboard widgets failed", detail:"lnrs · selector timeout", time:"14m ago", bg:this.TONE.danger.bg, fg:this.TONE.danger.fg, icon:ic.alert },
+      { title:"Baseline approved", detail:"Login page · dev", time:"1h ago", bg:this.TONE.success.bg, fg:this.TONE.success.fg, icon:ic.check },
+    ];
+
+    // run dialog
+    const runTest=this.tests.find(t=>t.id===s.runTestId)||this.tests[0];
+    const runNeedsEnv=!!(runTest&&runTest.needsEnvironment);
+    const runEnvOptions=this.envs.map(e=>{ const sel=s.runEnv===e.id; return { name:e.name, url:e.values.baseUrl, onClick:()=>this.setState({ runEnv:e.id }), bg:sel?"var(--color-primary-soft)":"var(--color-bg-surface)", border:sel?"var(--color-primary)":"var(--color-border-strong)", ring:sel?"var(--color-primary)":"var(--color-border-strong)", dot:sel?"var(--color-primary)":"transparent" }; });
+    const runDisabled=runNeedsEnv && !s.runEnv;
+
+    // approve
+    const ap=s.approve;
+
+    // ---- Tests screen ----
+    const counts={}; this.folders.forEach(f=>counts[f.id]=0); let unfiled=0;
+    this.tests.forEach(t=>{ const fid=this.folderOf(t); if(fid&&counts[fid]!==undefined) counts[fid]++; else unfiled++; });
+    const railItem=(id,name,count,icon,dropTo,droppable)=>{ const active=s.filterFolder===id; const over=droppable&&s.dragId&&s.dragOver===dropTo; return { id,name,count,icon, active, onClick:()=>this.setFilterFolder(id),
+      bg: over?"var(--color-primary-soft)":(active?"var(--color-bg-inset)":"transparent"), fg: active?"var(--color-text-strong)":"var(--color-text)", weight: active?"var(--font-weight-semibold)":"var(--font-weight-medium)", outline: over?"2px dashed var(--color-primary)":"2px solid transparent",
+      onDragOver: droppable?((e)=>this.onDragOverFolder(dropTo,e)):null, onDrop: droppable?((e)=>this.onDropFolder(dropTo,e)):null, onDragLeave: droppable?(()=>{ if(s.dragOver===dropTo) this.setState({dragOver:null}); }):null }; };
+    const folderRail=[ railItem("__all","All tests",this.tests.length,ic.tests,null,false), ...this.folders.map(f=>railItem(f.id,f.name,counts[f.id],ic.folder,f.id,true)), railItem("__unfiled","Unfiled",unfiled,ic.inbox,"__unfiled",true) ];
+    const tagChips=this.allTags.map(t=>({ name:t, active:s.filterTag===t, onClick:()=>this.setFilterTag(t), bg:s.filterTag===t?"var(--color-primary)":"var(--color-bg-surface)", fg:s.filterTag===t?"#fff":"var(--color-text)", border:s.filterTag===t?"var(--color-primary)":"var(--color-border-strong)" }));
+    const filteredTests=this.tests.filter(t=>{ const fid=this.folderOf(t); if(s.filterFolder==="__unfiled" && fid) return false; if(s.filterFolder && s.filterFolder!=="__all" && s.filterFolder!=="__unfiled" && fid!==s.filterFolder) return false; if(s.filterTag && !t.tags.includes(s.filterTag)) return false; return true; });
+    const testRows=filteredTests.map(t=>{ const fid=this.folderOf(t); const fname=fid?(this.folders.find(f=>f.id===fid)||{}).name:"Unfiled"; return { id:t.id, name:t.name, folderName:fname, folderIcon: fid?ic.folder:ic.inbox, tags:t.tags.map(tg=>({name:tg})), needsEnv:t.needsEnvironment, created:t.createdAt, dragOpacity:s.dragId===t.id?"0.4":"1",
+      onDragStart:()=>this.onDragStart(t.id), onDragEnd:()=>this.onDragEnd(), runClick:()=>this.openRunFor(t.id) }; });
+    const testsEmpty=filteredTests.length===0;
+
+    // ---- Runs ----
+    const mapRun=(id)=>this.runViews[id]?id:"r1";
+    const runsTable=this.runs.map(r=>{ const m=this.st(r.status); return { testName:r.testName, environment:r.environment, label:m.label, bg:m.bg, fg:m.fg, dot:m.dot, glyph:m.glyph, running:r.status==="running"||r.status==="queued", time:r.runTimestamp, error:r.error, hasError:!!r.error, onClick:()=>this.openRun(mapRun(r.runId)) }; });
+
+    // ---- Needs review ----
+    const nrRows=this.needsReview.map(n=>{ const m=this.st(n.reviewState); return { testName:n.testName, environment:n.environment, checkpointName:n.checkpointName, time:n.runTimestamp, label:m.label, bg:m.bg, fg:m.fg, glyph:m.glyph, pending:n.reviewState==="pending-baseline", onClick:()=>this.openRun(mapRun(n.runId)) }; });
+
+    // ---- Run detail / diff viewer ----
+    const rv=this.runViews[s.runId]||this.runViews.r1;
+    const isFailed=rv.status==="failed";
+    const hdr=this.st(rv.status);
+    const cps=rv.checkpoints||[];
+    const cpIndex=Math.min(s.cpIndex, Math.max(0, cps.length-1));
+    const cpEff=(c)=>{ const res=s.cpResolutions[c.name]; if(res==="approved") return "passed"; if(res==="rejected") return "diff"; return c.reviewState; };
+    const cpList=cps.map((c,i)=>{ const res=s.cpResolutions[c.name]; const m=this.st(res==="rejected"?"failed":cpEff(c)); return { name:c.name, selected:i===cpIndex, onClick:()=>this.setState({ cpIndex:i }), bg:m.bg, fg:m.fg, glyph:m.glyph, score: c.diffScore==null?"—":(c.diffScore*100).toFixed(1)+"%", rowBg:i===cpIndex?"var(--color-bg-inset)":"transparent", resLabel: res==="approved"?"Approved":res==="rejected"?"Rejected":null, resBg: res==="approved"?"var(--color-success-soft)":"var(--color-danger-soft)", resFg: res==="approved"?"var(--color-success-fg)":"var(--color-danger-fg)" }; });
+    const cp=cps[cpIndex]||null;
+    const cpRes=cp?s.cpResolutions[cp.name]:null;
+    const isPending=!!(cp&&cp.reviewState==="pending-baseline");
+    const thr=s.threshold; // percent
+    const score=cp&&cp.diffScore!=null?cp.diffScore*100:null;
+    const reeval=s.reeval; // {score, verdict} after live re-evaluate, or null
+    const effScore=reeval?reeval.score:score;
+    const verdictDiff=effScore!=null && effScore>thr;
+    const maskCount = s.masks!=null ? s.masks : (cp?cp.masks.length:0);
+    const mode=s.diffMode;
+    const sbs=mode==="side-by-side";
+    let actualLayerStyle = sbs?"flex:1; min-width:0; position:relative;":"position:absolute; inset:0;";
+    if(mode==="swipe") actualLayerStyle += " clip-path:inset(0 "+(100-s.swipe)+"% 0 0);";
+    if(mode==="onion") actualLayerStyle += " opacity:"+(s.onion/100)+";";
+    const verdictColor = isPending?"var(--color-info-fg)":(verdictDiff?"var(--color-danger-fg)":"var(--color-success-fg)");
+    const verdictBg = isPending?"var(--color-info-soft)":(verdictDiff?"var(--color-danger-soft)":"var(--color-success-soft)");
+    const stageStyle = sbs?"display:flex; gap:var(--space-16); height:100%;":"position:relative; height:100%;";
+    let baseLayerStyle = sbs?"flex:1; min-width:0; position:relative;":"position:absolute; inset:0;";
+    if(mode==="diff-highlight") baseLayerStyle += " display:none;";
+
+    const viewModes=[ {k:"side-by-side",label:"Side by side",icon:ic.sidebyside},{k:"diff-highlight",label:"Highlight",icon:ic.layers},{k:"swipe",label:"Swipe",icon:ic.swipe},{k:"onion",label:"Onion skin",icon:ic.onion} ].map(v=>({ label:v.label, icon:v.icon, onClick:()=>this.setState({ diffMode:v.k }), active:mode===v.k, bg:mode===v.k?"var(--color-bg-surface)":"transparent", fg:mode===v.k?"var(--color-primary)":"var(--color-text-muted)", shadow:mode===v.k?"var(--shadow-xs)":"none" }));
+
+    // failed-run steps
+    const failSteps=(rv.steps||[]).map((st,i)=>{ const tl=(rv.timeline||[]).find(t=>t.index===i); const ran=!!tl; const failedHere=rv.failedStepIndex===i; const neverRan=rv.failedStepIndex!=null && i>rv.failedStepIndex; const outcome=failedHere?"failed":(ran?"passed":"skipped"); const m=this.st(outcome==="failed"?"failed":(outcome==="passed"?"passed":"queued")); return { label:st.label, index:i+1, duration: tl?(tl.durationMs>=1000?(tl.durationMs/1000).toFixed(1)+"s":tl.durationMs+"ms"):(neverRan?"never ran":"—"), failedHere, neverRan, ran, glyph: failedHere?this.icoEl(this.ic.x):(ran?this.icoEl(this.ic.check):this.icoEl(this.ic.dash)), dotBg: failedHere?"var(--color-danger)":(ran?"var(--color-success)":"var(--color-neutral-300)"), opacity: neverRan?"0.5":"1", labelColor: failedHere?"var(--color-danger-fg)":"var(--color-text-strong)" }; });
+
+    // ---- Suites ----
+    const suiteEditing=s.suiteEditing;
+    const suiteCards=this.suites.map(su=>({ name:su.name, count:this.suiteMembers(su.id).length, edit:()=>this.openSuiteEditor(su.id), run:()=>this.openSuiteRun(su.id) }));
+    const editingSuite=suiteEditing?this.suites.find(x=>x.id===suiteEditing):null;
+    const editorTests=suiteEditing?this.tests.map(t=>{ const sel=this.suiteMembers(suiteEditing).includes(t.id); return { name:t.name, folderName:t.folderName||"Unfiled", needsEnv:t.needsEnvironment, toggle:()=>this.toggleSuiteTest(suiteEditing,t.id), bg:sel?"var(--color-primary-soft)":"var(--color-bg-surface)", border:sel?"var(--color-primary)":"var(--color-border)", checkBg:sel?"var(--color-primary)":"transparent", checkBorder:sel?"var(--color-primary)":"var(--color-border-strong)", checkDisp:sel?"inline-flex":"none" }; }):[];
+    const editorCount=suiteEditing?this.suiteMembers(suiteEditing).length:0;
+
+    // suite run dialog
+    const srDialog=s.suiteRunDialog;
+    const srSuite=srDialog?this.suites.find(x=>x.id===srDialog):null;
+    const srEnvOptions=this.envs.map(e=>{ const sel=s.suiteRunEnvs.includes(e.id); return { name:e.name, toggle:()=>this.toggleSuiteRunEnv(e.id), bg:sel?"var(--color-primary-soft)":"var(--color-bg-surface)", border:sel?"var(--color-primary)":"var(--color-border-strong)", checkBg:sel?"var(--color-primary)":"transparent", checkDisp:sel?"inline-flex":"none" }; });
+    const srMembers=srDialog?this.suiteMembers(srDialog).length:0;
+    const srEnvCount=s.suiteRunEnvs.length;
+
+    // ---- Suite runs ----
+    const suiteRunRows=this.suiteRuns.map(sr=>{ const m=this.st(sr.status); const c=sr.counts; const segs=[ {n:c.passed,color:"var(--color-success)"},{n:c.needsReview,color:"var(--color-warning)"},{n:c.failed,color:"var(--color-danger)"},{n:c.running,color:"var(--color-neutral-400)"},{n:c.queued,color:"var(--color-neutral-200)"} ].filter(x=>x.n>0).map(x=>({ w:(x.n/c.total*100)+"%", color:x.color })); return { id:sr.suiteRunId, name:sr.suiteName, envs:sr.environments.join(" · "), time:sr.runTimestamp, label:m.label, bg:m.bg, fg:m.fg, glyph:m.glyph, total:c.total, passed:c.passed, needsReview:c.needsReview, failed:c.failed, segs, selected:s.suiteRunOpen===sr.suiteRunId, onClick:()=>this.openSuiteRunReport(sr.suiteRunId), rowBg:s.suiteRunOpen===sr.suiteRunId?"var(--color-bg-inset)":"var(--color-bg-surface)" }; });
+    const openSR=this.suiteRuns.find(x=>x.suiteRunId===s.suiteRunOpen)||this.suiteRuns[0];
+    const childPool=["Checkout flow","Product detail","Cart drawer","Login page","Pricing table","Search results","Dashboard widgets","Account settings"];
+    const stArr=[]; const cc=openSR.counts; ["passed","needsReview","failed","running","queued"].forEach(k=>{ const map={passed:"passed",needsReview:"needs_review",failed:"failed",running:"running",queued:"queued"}; for(let i=0;i<cc[k];i++) stArr.push(map[k]); });
+    const srChildren=stArr.map((st,i)=>{ const m=this.st(st); return { testName:childPool[i%childPool.length], environment:openSR.environments[i%openSR.environments.length], label:m.label, bg:m.bg, fg:m.fg, glyph:m.glyph, onClick:()=>this.openRun("r1") }; });
+    const openSRm=this.st(openSR.status);
+
+    // ---- Environments ----
+    const envEditing=s.envEditing||this.envs[0].id;
+    const envSel=this.envs.find(e=>e.id===envEditing)||this.envs[0];
+    const envCards=this.envs.map(e=>({ name:e.name, varCount:Object.keys(this.envVals(e)).length, secretCount:this.envSecretList(e).length, onClick:()=>this.editEnv(e.id), rowBg:envEditing===e.id?"var(--color-bg-inset)":"transparent", dot: envEditing===e.id?"var(--color-primary)":"var(--color-neutral-300)" }));
+    const envVarRows=Object.entries(this.envVals(envSel)).map(([k,v])=>({ key:k, value:v, onChange:(e)=>this.onEnvVal(envSel.id,k,e) }));
+    const envSecretRows=this.envSecretList(envSel).map(n=>({ name:n, remove:()=>this.removeSecret(envSel.id,n) }));
+
+    return {
+      icons:ic,
+      sidebarWidth:s.collapsed?"72px":"248px",
+      labelDisplay:s.collapsed?"none":"block",
+      navGroups, screenTitle, screenSubtitle, vsOptions,
+      isDashboard:s.screen==="dashboard", isTests:s.screen==="tests", isSuites:s.screen==="suites", isRuns:s.screen==="runs", isSuiteRuns:s.screen==="suiteRuns", isNeedsReview:s.screen==="needsReview", isRunDetail:s.screen==="runDetail", isEnvironments:s.screen==="environments",
+      vsData:s.vs==="data", vsLoading:s.vs==="loading", vsEmpty:s.vs==="empty", vsError:s.vs==="error",
+      toggleSidebar:()=>this.toggleSidebar(),
+      goRuns:()=>this.go("runs"), goAlerts:()=>this.go("needsReview"),
+      openRunDialog:()=>this.setState({ runDialog:true }),
+      retry:()=>this.setVS("data"),
+      kpis, matrixEnvs, matrixGridCols, matrixRows, matrixLegend, feed, sparklines, alerts,
+      // run dialog
+      runDialogOpen:!!s.runDialog, runTestId:s.runTestId, runTestOptions:this.tests.map(t=>({ id:t.id, name:t.name })),
+      runNeedsEnv, runNoEnv:!runNeedsEnv, runEnvOptions, runTrace:s.runTrace,
+      traceTrackBg:s.runTrace?"var(--color-primary)":"var(--color-neutral-300)", traceJustify:s.runTrace?"flex-end":"flex-start",
+      runDisabled, runOpacity:runDisabled?"0.5":"1",
+      closeRunDialog:()=>this.closeRunDialog(), submitRun:()=>this.submitRun(), toggleTrace:()=>this.toggleTrace(), onRunTestChange:(e)=>this.onRunTestChange(e),
+      // approve confirm
+      approveOpen:!!ap, approveName:ap?ap.name:"", closeApprove:()=>this.closeApprove(), confirmApprove:()=>this.confirmApprove(),
+      // toast + misc
+      toast:s.toast, stop:(e)=>this.stop(e),
+      // tests
+      folderRail, tagChips, testRows, testsEmpty, testsAny:!testsEmpty, clearFilters:()=>this.setState({ filterFolder:null, filterTag:null }),
+      runsTable, runsCount:this.runs.length, nrRows, nrCount:this.needsReview.length, goNeedsReview:()=>this.go("needsReview"),
+      // run detail
+      isFailed, runTestName:rv.testName, runEnvName:rv.environment, runTime:rv.runTimestamp, runStatusLabel:hdr.label, runStatusBg:hdr.bg, runStatusFg:hdr.fg, runStatusGlyph:hdr.glyph, runHasTrace:!!rv.traceUrl, runError:rv.error,
+      backToRuns:()=>this.backToRuns(), openTimeline:()=>this.openTimeline(), approveAll:()=>this.approveAll(),
+      cpList, cpName:cp?cp.name:"", cpCaptureMode:cp?cp.captureMode:"", cpHealed:!!(cp&&cp.healed), isPending, hasCps:cps.length>0,
+      viewModes, sbs, isHighlight:mode==="diff-highlight", isSwipe:mode==="swipe", isOnion:mode==="onion",
+      actualLayerStyle, stageStyle, baseLayerStyle, sbsLabelDisp: sbs?"inline-flex":"none", diffDisp: mode==="diff-highlight"?"block":"none", swipeDisp: mode==="swipe"?"block":"none", swipeLeft: s.swipe,
+      swipeVal:s.swipe, onionVal:s.onion, onSwipe:(e)=>this.onSwipe(e), onOnion:(e)=>this.onOnion(e),
+      maskCount, addMask:()=>this.addMask(), clearMasks:()=>this.clearMasks(),
+      thresholdVal:thr, thresholdLabel:thr.toFixed(2)+"%", onThreshold:(e)=>this.onThreshold(e),
+      scoreLabel: effScore!=null?effScore.toFixed(1)+"%":"—", verdictColor, verdictBg,
+      verdictLabel: isPending?"First capture — no baseline yet":(verdictDiff?"Over threshold":"Within threshold"),
+      reevalActive:!!reeval, reEvaluate:()=>this.reEvaluate(), persistTuning:()=>this.persistTuning(),
+      cpRejected:cpRes==="rejected", cpApproved:cpRes==="approved", cpResolved:!!cpRes, cpUnresolved:!cpRes,
+      vsRealDetail: s.vs!=="loading" && s.vs!=="error", showDiffViewer: !isFailed && cps.length>0, hasBaseline:!isPending,
+      openApproveCp:()=>{ if(cp) this.openApprove(cp.name); }, rejectCp:()=>{ if(cp) this.rejectCp(cp.name); },
+      failSteps,
+      // synthetic screenshot differs baseline vs actual
+      baseTotal:"$148.00", actualTotal:"$162.00", baseBtnBg:"var(--color-primary)", actualBtnBg:"var(--color-accent-teal)",
+      // suites
+      suitesListMode:!suiteEditing, suiteEditMode:!!suiteEditing, suiteCards, editingSuiteName:editingSuite?editingSuite.name:"", editorTests, editorCount,
+      closeSuiteEditor:()=>this.closeSuiteEditor(), saveSuite:()=>this.saveSuite(),
+      // suite run dialog
+      srDialogOpen:!!srDialog, srSuiteName:srSuite?srSuite.name:"", srEnvOptions, srMembers, srEnvCount, srTotal:srMembers*srEnvCount, srDisabled:srEnvCount===0, srOpacity:srEnvCount===0?"0.5":"1",
+      srTrace:s.suiteRunTrace, srTraceTrackBg:s.suiteRunTrace?"var(--color-primary)":"var(--color-neutral-300)", srTraceJustify:s.suiteRunTrace?"flex-end":"flex-start",
+      closeSuiteRun:()=>this.closeSuiteRun(), toggleSuiteRunTrace:()=>this.toggleSuiteRunTrace(), submitSuiteRun:()=>this.submitSuiteRun(),
+      // suite runs
+      suiteRunRows, srChildren, openSRName:openSR.suiteName, openSREnvs:openSR.environments.join(" · "), openSRTotal:openSR.counts.total, openSRLabel:openSRm.label, openSRBg:openSRm.bg, openSRFg:openSRm.fg, openSRGlyph:openSRm.glyph,
+      openSRPassed:openSR.counts.passed, openSRReview:openSR.counts.needsReview, openSRFailed:openSR.counts.failed, openSRRunning:openSR.counts.running, openSRQueued:openSR.counts.queued,
+      // environments
+      envCards, envName:envSel.name, envVarRows, envSecretRows, secretCount:envSecretRows.length,
+      newSecretName:s.newSecretName, newSecretVal:s.newSecretVal, onNewSecretName:(e)=>this.onNewSecretName(e), onNewSecretVal:(e)=>this.onNewSecretVal(e), addSecret:()=>this.addSecret(envSel.id), saveEnv:()=>this.saveEnv(),
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,82 @@
+// ---------------------------------------------------------------------------
+// App-level SCSS helpers for the view layer. Emit no CSS on their own — `@use`
+// from any view/component module:  `@use "../../../styles/mixins" as *;`
+// All values come from the @varys/ui token contract (var(--…)).
+// ---------------------------------------------------------------------------
+@use "sass:map";
+
+$breakpoints: (
+  "sm": 640px,
+  "md": 768px,
+  "lg": 1024px,
+  "xl": 1280px,
+);
+
+/// Media query at or above a named breakpoint.
+@mixin mq($name) {
+  @media (min-width: map.get($breakpoints, $name)) {
+    @content;
+  }
+}
+
+/// Max-width query below a named breakpoint.
+@mixin mq-down($name) {
+  @media (max-width: (map.get($breakpoints, $name) - 1px)) {
+    @content;
+  }
+}
+
+/// The Nexus card surface: white, soft border + shadow, large radius.
+@mixin card($padding: var(--space-24)) {
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
+  padding: $padding;
+}
+
+/// Card surface with no padding (for tables / lists that bleed to the edge).
+@mixin card-flush {
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+/// Uppercase section / overline label.
+@mixin overline {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+  color: var(--color-text-subtle);
+}
+
+/// Single-line ellipsis truncation.
+@mixin truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/// Brand focus ring on keyboard focus.
+@mixin focus-ring {
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--shadow-focus);
+  }
+}
+
+/// The muted icon square used in card headers / KPI cards.
+@mixin icon-square($size: 32px, $font: 18px) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: $size;
+  height: $size;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-subtle);
+  color: var(--color-text-muted);
+  font-size: $font;
+}

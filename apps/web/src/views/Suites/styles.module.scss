@@ -1,0 +1,63 @@
+@use "../../styles/mixins" as *;
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-20);
+}
+
+.newTile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-8);
+  min-height: 120px;
+  border: 1.5px dashed var(--color-border-strong);
+  border-radius: var(--radius-xl);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-family: var(--font-text);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-standard);
+
+  &:hover {
+    background: var(--color-bg-subtle);
+    border-color: var(--color-primary);
+    color: var(--color-primary);
+  }
+}
+
+.newInline {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-8);
+  height: 38px;
+  padding: 0 var(--space-16);
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--color-primary);
+  color: var(--color-primary-fg);
+  font-family: var(--font-text);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+
+  &:hover {
+    background: var(--color-primary-hover);
+  }
+}
+
+@include mq-down("lg") {
+  .grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@include mq-down("sm") {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -10,6 +10,7 @@ import {
   deleteEnvironment,
   deleteFolder,
   deleteSuite,
+  fetchDashboard,
   fetchEnvironments,
   fetchFolders,
   fetchNeedsReview,
@@ -38,6 +39,21 @@ import {
  *  after an approve/reject decision. */
 export function runQueryKey(runId: string) {
   return ["run", runId] as const;
+}
+
+/** Key for the dashboard read-model. */
+export function dashboardQueryKey() {
+  return ["dashboard"] as const;
+}
+
+/** The dashboard read-model (KPI summary + recent-runs feed). Polled so completing
+ *  runs reflect in the KPIs and feed without a manual refresh. */
+export function useDashboard() {
+  return useQuery({
+    queryKey: dashboardQueryKey(),
+    queryFn: fetchDashboard,
+    refetchInterval: 5000,
+  });
 }
 
 /** Key for the needs-review list (Issue 4); invalidated after a decision so a

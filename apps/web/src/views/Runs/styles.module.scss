@@ -1,0 +1,116 @@
+@use "../../styles/mixins" as *;
+
+.card {
+  @include card-flush;
+}
+
+.loading {
+  @include card(var(--space-16));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  padding: var(--space-16) var(--space-20);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+}
+
+.count {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.scroll {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 680px;
+
+  thead tr {
+    background: var(--color-bg-subtle);
+  }
+
+  th {
+    text-align: left;
+    padding: var(--space-10) var(--space-12);
+    @include overline;
+  }
+}
+
+.thLeft {
+  padding-left: var(--space-20) !important;
+}
+.thRight {
+  text-align: right !important;
+  padding-right: var(--space-20) !important;
+}
+
+.row {
+  border-top: 1px solid var(--color-border);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-standard);
+
+  &:hover {
+    background: var(--color-bg-subtle);
+  }
+  &:focus-visible {
+    outline: none;
+    box-shadow: inset var(--shadow-focus);
+  }
+
+  td {
+    padding: var(--space-12);
+  }
+}
+
+.tdTest {
+  padding-left: var(--space-20) !important;
+}
+
+.testName {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-strong);
+}
+
+.error {
+  margin-top: 3px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-danger-fg);
+  max-width: 360px;
+  @include truncate;
+}
+
+.env {
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+  text-transform: capitalize;
+}
+
+.when {
+  text-align: right;
+  padding-right: var(--space-20) !important;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}

@@ -1,0 +1,20 @@
+@use "../../styles/mixins" as *;
+
+.layout {
+  display: grid;
+  grid-template-columns: 380px 1fr;
+  gap: var(--space-20);
+  align-items: start;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+}
+
+@include mq-down("lg") {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+}

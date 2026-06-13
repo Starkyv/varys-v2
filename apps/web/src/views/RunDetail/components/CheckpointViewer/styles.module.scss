@@ -1,0 +1,114 @@
+@use "../../../../styles/mixins" as *;
+
+.card {
+  @include card-flush;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  flex-wrap: wrap;
+  padding: var(--space-16) var(--space-20);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.name {
+  font-family: var(--font-display);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+}
+
+.capture {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 var(--space-8);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-inset);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  font-family: var(--font-mono);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.sliderRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  padding: var(--space-12) var(--space-20) 0;
+}
+
+.slider {
+  flex: 1;
+  accent-color: var(--color-primary);
+}
+
+.sliderEnd {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  min-width: 52px;
+
+  &:last-child {
+    text-align: right;
+  }
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.review {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+  padding: var(--space-20);
+}
+
+.verdict {
+  display: flex;
+  align-items: center;
+  gap: var(--space-16);
+  flex-wrap: wrap;
+  padding: var(--space-12) var(--space-16);
+  border-radius: var(--radius-lg);
+}
+
+.verdictInfo {
+  background: var(--color-info-soft);
+}
+.verdictSuccess {
+  background: var(--color-success-soft);
+}
+.verdictDanger {
+  background: var(--color-danger-soft);
+}
+
+.verdictLabel {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+
+  .verdictInfo & {
+    color: var(--color-info-fg);
+  }
+  .verdictSuccess & {
+    color: var(--color-success-fg);
+  }
+  .verdictDanger & {
+    color: var(--color-danger-fg);
+  }
+}
+
+.verdictScore {
+  margin-left: auto;
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+
+  .mono {
+    color: var(--color-text-strong);
+  }
+}

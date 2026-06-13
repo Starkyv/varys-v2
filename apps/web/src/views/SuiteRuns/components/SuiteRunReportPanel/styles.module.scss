@@ -1,0 +1,144 @@
+@use "../../../../styles/mixins" as *;
+
+.card {
+  @include card-flush;
+}
+
+.head {
+  padding: var(--space-20);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.headTop {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  margin-bottom: var(--space-16);
+}
+
+.headText {
+  flex: 1;
+  min-width: 0;
+}
+
+.name {
+  font-family: var(--font-display);
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-strong);
+  @include truncate;
+}
+
+.sub {
+  margin-top: 2px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  text-transform: capitalize;
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: var(--space-8);
+}
+
+.tile {
+  text-align: center;
+  padding: var(--space-10) var(--space-6);
+  border-radius: var(--radius-md);
+}
+
+.tileValue {
+  font-family: var(--font-display);
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
+}
+
+.tileLabel {
+  font-size: var(--font-size-xs);
+}
+
+.passed {
+  background: var(--color-success-soft);
+  .tileValue,
+  .tileLabel {
+    color: var(--color-success-fg);
+  }
+}
+.review {
+  background: var(--color-warning-soft);
+  .tileValue,
+  .tileLabel {
+    color: var(--color-warning-fg);
+  }
+}
+.failed {
+  background: var(--color-danger-soft);
+  .tileValue,
+  .tileLabel {
+    color: var(--color-danger-fg);
+  }
+}
+.neutral {
+  background: var(--color-bg-inset);
+  .tileValue {
+    color: var(--color-text);
+  }
+  .tileLabel {
+    color: var(--color-text-muted);
+  }
+}
+.neutralMuted {
+  background: var(--color-bg-inset);
+  .tileValue {
+    color: var(--color-text-muted);
+  }
+  .tileLabel {
+    color: var(--color-text-subtle);
+  }
+}
+
+.children {
+  display: flex;
+  flex-direction: column;
+}
+
+.child {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  padding: var(--space-12) var(--space-20);
+  border: none;
+  border-bottom: 1px solid var(--color-border);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  font-family: var(--font-text);
+
+  @include focus-ring;
+
+  &:last-child {
+    border-bottom: none;
+  }
+  &:hover {
+    background: var(--color-bg-subtle);
+  }
+}
+
+.childName {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-strong);
+  @include truncate;
+}
+
+.childEnv {
+  flex: 0 0 auto;
+  width: 80px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  text-transform: capitalize;
+}

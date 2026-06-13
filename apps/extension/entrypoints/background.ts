@@ -80,9 +80,26 @@ async function save(
 }
 
 export default defineBackground(() => {
-  browser.action.onClicked.addListener((tab) => {
-    if (tab.id != null) {
-      void browser.tabs.sendMessage(tab.id, { type: "varys:toggle" });
+  browser.action.onClicked.addListener(async (tab) => {
+    const tabId = tab.id;
+    if (tabId == null) return;
+    try {
+      // The common path: a content script is already running on this tab.
+      await browser.tabs.sendMessage(tabId, { type: "varys:toggle" });
+    } catch {
+      // No receiving end — the content script isn't on this tab (e.g. a tab that
+      // was open before the extension loaded/updated). Inject it on demand, then
+      // toggle. Restricted pages (chrome://, the Web Store, the new-tab page) will
+      // reject injection too; there's nothing to toggle there, so ignore it.
+      try {
+        await browser.scripting.executeScript({
+          target: { tabId },
+          files: ["content-scripts/content.js"],
+        });
+        await browser.tabs.sendMessage(tabId, { type: "varys:toggle" });
+      } catch {
+        /* page doesn't allow content scripts — nothing to do */
+      }
     }
   });
 
@@ -114,7 +131,17 @@ export default defineBackground(() => {
           if (step.type === "navigate" && s.steps.length > 0) {
             return { result: { ok: true } };
           }
-          return { next: { ...s, steps: [...s.steps, step] }, result: { ok: true } };
+          // Name screenshot checkpoints authoritatively from the canonical store. The
+          // content script derives names from a client-side counter it rebuilds on each
+          // page load via best-effort messaging — so across a fast navigation the next
+          // page can read a stale count and restart numbering, producing colliding names
+          // (screenshot-1, screenshot-1, …). Numbering here, where the full recording
+          // lives, guarantees every checkpoint name is unique and sequential.
+          const stored =
+            step.type === "screenshot"
+              ? { ...step, name: `screenshot-${s.steps.filter((x) => x.type === "screenshot").length + 1}` }
+              : step;
+          return { next: { ...s, steps: [...s.steps, stored] }, result: { ok: true } };
         });
       case "varys:replace-last-type":
         // One-tap Variable/Static flip: rewrite the most recent `type` step with the

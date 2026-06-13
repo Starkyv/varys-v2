@@ -1,0 +1,35 @@
+import type { SuiteSummary } from "@varys/review-contract";
+import { Button, Pencil, Play, Squares } from "@varys/ui";
+import styles from "./styles.module.scss";
+
+export function SuiteCard({
+  suite,
+  onRun,
+  onEdit,
+}: {
+  suite: SuiteSummary;
+  onRun: () => void;
+  onEdit: () => void;
+}) {
+  return (
+    <div className={styles.card}>
+      <div className={styles.top}>
+        <span className={styles.icon}>
+          <Squares size={20} />
+        </span>
+        <div className={styles.text}>
+          <div className={styles.name}>{suite.name}</div>
+          <div className={styles.count}>{suite.testCount} tests</div>
+        </div>
+      </div>
+      <div className={styles.actions}>
+        <Button variant="primary" size="sm" fullWidth iconLeft={<Play size={14} />} onClick={onRun}>
+          Run
+        </Button>
+        <Button variant="secondary" size="sm" iconLeft={<Pencil size={14} />} onClick={onEdit}>
+          Edit
+        </Button>
+      </div>
+    </div>
+  );
+}

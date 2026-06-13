@@ -1,0 +1,106 @@
+// ---------------------------------------------------------------------------
+// Shared SCSS mixins & functions. Emits NO CSS on its own — safe to `@use` from
+// any component stylesheet:  `@use "../../foundations/mixins" as *;`
+// ---------------------------------------------------------------------------
+@use "sass:map";
+
+// Breakpoints (mirror of tokens/breakpoints.ts). min-width, mobile-first.
+$breakpoints: (
+  "xs": 480px,
+  "sm": 640px,
+  "md": 768px,
+  "lg": 1024px,
+  "xl": 1280px,
+  "2xl": 1536px,
+);
+
+/// Media query at or above a named breakpoint.
+/// @example  @include mq("lg") { ... }
+@mixin mq($name) {
+  @if not map.has-key($breakpoints, $name) {
+    @error "Unknown breakpoint `#{$name}`. Valid: #{map.keys($breakpoints)}.";
+  }
+  @media (min-width: map.get($breakpoints, $name)) {
+    @content;
+  }
+}
+
+/// Brand focus ring on keyboard focus. Apply to interactive elements.
+@mixin focus-ring {
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--shadow-focus);
+  }
+}
+
+/// Single-line ellipsis truncation.
+@mixin truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/// Accessibly hidden (present for screen readers, invisible on screen).
+@mixin visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/// The dashboard card surface: white, soft border + shadow, large radius.
+@mixin card($padding: var(--space-24)) {
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
+  padding: $padding;
+}
+
+/// Apply a composite text role (mirror of typography.ts `textStyle`).
+@mixin text($role) {
+  @if $role == "displayLg" {
+    font-size: var(--font-size-3xl);
+    line-height: var(--line-height-tight);
+    font-weight: var(--font-weight-bold);
+    letter-spacing: var(--letter-spacing-tight);
+  } @else if $role == "h1" {
+    font-size: var(--font-size-2xl);
+    line-height: var(--line-height-tight);
+    font-weight: var(--font-weight-bold);
+    letter-spacing: var(--letter-spacing-tight);
+  } @else if $role == "h2" {
+    font-size: var(--font-size-xl);
+    line-height: var(--line-height-snug);
+    font-weight: var(--font-weight-semibold);
+  } @else if $role == "h3" {
+    font-size: var(--font-size-md);
+    line-height: var(--line-height-snug);
+    font-weight: var(--font-weight-semibold);
+  } @else if $role == "body" {
+    font-size: var(--font-size-base);
+    line-height: var(--line-height-normal);
+    font-weight: var(--font-weight-regular);
+  } @else if $role == "label" {
+    font-size: var(--font-size-base);
+    line-height: var(--line-height-snug);
+    font-weight: var(--font-weight-medium);
+  } @else if $role == "caption" {
+    font-size: var(--font-size-xs);
+    line-height: var(--line-height-snug);
+    font-weight: var(--font-weight-regular);
+  } @else if $role == "overline" {
+    font-size: var(--font-size-xs);
+    line-height: var(--line-height-snug);
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: var(--letter-spacing-wide);
+    text-transform: uppercase;
+  } @else {
+    @error "Unknown text role `#{$role}`.";
+  }
+}

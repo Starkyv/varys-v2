@@ -1,0 +1,67 @@
+import { AlertTriangle, Button, Modal } from "@varys/ui";
+import { useId } from "react";
+import styles from "./styles.module.scss";
+
+/**
+ * The irreversible-approve confirmation — the sole guard on the product's only
+ * unrecoverable action (replacing a golden baseline). Serves both a single
+ * checkpoint (`name`) and the run-level bulk approve (`count`).
+ */
+export function ApproveDialog({
+  open,
+  onClose,
+  onConfirm,
+  name,
+  count,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+  name?: string;
+  count?: number;
+}) {
+  const titleId = useId();
+  const isAll = count != null;
+  return (
+    <Modal open={open} onClose={onClose} width={420} labelledBy={titleId}>
+      <div className={styles.body}>
+        <span className={styles.icon}>
+          <AlertTriangle size={22} />
+        </span>
+        <div>
+          <div id={titleId} className={styles.title}>
+            {isAll ? "Approve all in run?" : "Replace baseline?"}
+          </div>
+          <p className={styles.text}>
+            {isAll ? (
+              <>
+                Approving permanently sets or replaces the golden baseline for every one of the{" "}
+                <strong>{count}</strong> checkpoints that need review in this run.{" "}
+              </>
+            ) : (
+              <>
+                Approving <strong>{name}</strong> permanently replaces the golden baseline for this
+                checkpoint &amp; environment.{" "}
+              </>
+            )}
+            <strong className={styles.warn}>This cannot be undone.</strong>
+          </p>
+        </div>
+      </div>
+      <div className={styles.actions}>
+        <Button variant="secondary" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button
+          variant="danger"
+          onClick={() => {
+            onConfirm();
+            onClose();
+          }}
+        >
+          {isAll ? "Approve all" : "Approve & replace"}
+        </Button>
+      </div>
+    </Modal>
+  );
+}

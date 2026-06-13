@@ -1,0 +1,77 @@
+@use "../../styles/mixins" as *;
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-16);
+  margin-bottom: var(--space-20);
+}
+
+.titleBlock {
+  flex: 1;
+  min-width: 0;
+}
+
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+}
+
+.testName {
+  font-family: var(--font-display);
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-strong);
+}
+
+.meta {
+  margin-top: 2px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.env {
+  text-transform: capitalize;
+}
+
+/* --- Unified two-pane timeline layout --- */
+.timelineGrid {
+  display: grid;
+  grid-template-columns: minmax(440px, 0.9fr) minmax(0, 1.1fr);
+  gap: var(--space-24);
+  align-items: start;
+}
+
+.sticky {
+  position: sticky;
+  top: var(--space-8);
+  min-width: 0;
+}
+
+.loadingGrid {
+  display: grid;
+  grid-template-columns: minmax(440px, 0.9fr) minmax(0, 1.1fr);
+  gap: var(--space-24);
+  margin-top: var(--space-20);
+}
+
+.notice {
+  @include card();
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-base);
+}
+
+@include mq-down("lg") {
+  .timelineGrid,
+  .loadingGrid {
+    grid-template-columns: 1fr;
+  }
+
+  // On a single column the rail shouldn't trap scroll, and the review pane
+  // should flow beneath it rather than stick.
+  .sticky {
+    position: static;
+  }
+}

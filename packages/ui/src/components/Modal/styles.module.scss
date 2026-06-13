@@ -1,0 +1,136 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-24);
+  background: rgba(16, 19, 34, 0.42);
+  backdrop-filter: blur(2px);
+}
+
+.panel {
+  max-width: 100%;
+  max-height: calc(100vh - var(--space-48));
+  overflow-y: auto;
+  background: var(--color-bg-surface);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+
+  &:focus {
+    outline: none;
+  }
+}
+
+/* --- Header --- */
+.header {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-12);
+  padding: var(--space-24) var(--space-24) var(--space-16);
+}
+
+.headerIcon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  font-size: 18px;
+}
+
+.headerText {
+  flex: 1;
+  min-width: 0;
+}
+
+.headerTitle {
+  font-family: var(--font-display);
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+}
+
+.headerSubtitle {
+  margin-top: 2px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+/* --- Body --- */
+.body {
+  padding: 0 var(--space-24) var(--space-24);
+}
+
+/* --- Footer --- */
+.footer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  padding: var(--space-16) var(--space-24);
+  background: var(--color-bg-subtle);
+  border-top: 1px solid var(--color-border);
+}
+
+.footerLeading {
+  flex: 1;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.footerActions {
+  margin-left: auto;
+  display: flex;
+  gap: var(--space-12);
+}
+
+/* --- Animation --- */
+.backdropIn {
+  animation: backdrop-in var(--duration-base) var(--ease-standard);
+}
+.backdropOut {
+  animation: backdrop-out var(--duration-fast) var(--ease-standard) forwards;
+}
+.panelIn {
+  animation: panel-in var(--duration-base) var(--ease-emphasized);
+}
+.panelOut {
+  animation: panel-out var(--duration-fast) var(--ease-standard) forwards;
+}
+
+@keyframes backdrop-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes backdrop-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+}
+@keyframes panel-out {
+  to {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .backdropIn,
+  .backdropOut,
+  .panelIn,
+  .panelOut {
+    animation-duration: 1ms;
+  }
+}

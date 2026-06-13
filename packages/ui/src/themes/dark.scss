@@ -1,0 +1,46 @@
+// Dark theme — re-points the semantic aliases against a dark cool-grey surface set.
+// Scaffolded with sensible inversions (no dark mockups to pixel-match yet); refine
+// when a dark design exists. Applied via `[data-theme="dark"]` on <html> or any
+// subtree (set it with the `useTheme` hook).
+@use "./tokens";
+
+[data-theme="dark"] {
+  // Surfaces — near-black navy, lifting one step per elevation.
+  --color-bg-page: #0d0f17;
+  --color-bg-surface: #161925;
+  --color-bg-subtle: #1d2130;
+  --color-bg-inset: #11131d;
+
+  // Borders
+  --color-border: #272c3a;
+  --color-border-strong: #353b4d;
+
+  // Text — inverted ramp.
+  --color-text-strong: #f4f6fa;
+  --color-text: #c4c9d4;
+  --color-text-muted: #8a909e;
+  --color-text-subtle: #646b7a;
+  --color-text-on-primary: #ffffff;
+
+  // Primary — lift to the 400 step so it reads on dark surfaces.
+  --color-primary: var(--color-brand-400);
+  --color-primary-hover: #9a8eff;
+  --color-primary-active: var(--color-brand-300);
+  --color-primary-soft: rgba(136, 124, 253, 0.16);
+  --color-primary-fg: #0d0f17;
+
+  // Status — soft backgrounds become low-alpha tints on dark.
+  --color-success-soft: rgba(14, 164, 127, 0.16);
+  --color-success-fg: #3dd6b0;
+  --color-warning-soft: rgba(245, 165, 36, 0.16);
+  --color-warning-fg: #f7bf5e;
+  --color-danger-soft: rgba(240, 68, 94, 0.16);
+  --color-danger-fg: #ff7088;
+  --color-info-soft: rgba(72, 150, 254, 0.16);
+  --color-info-fg: #7eb4ff;
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.35), 0 4px 12px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.55);
+}

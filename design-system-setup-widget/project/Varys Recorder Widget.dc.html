@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #EEF0F4; }
+    input::placeholder { color: #A0A6B2; }
+    @keyframes varysPulse { 0% { box-shadow: 0 0 0 0 rgba(240,68,94,0.5); } 70% { box-shadow: 0 0 0 7px rgba(240,68,94,0); } 100% { box-shadow: 0 0 0 0 rgba(240,68,94,0); } }
+    @keyframes varysToast { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+  </style>
+</helmet>
+<div style="position: relative; width: 100%; min-height: 100vh; overflow: hidden; background: #EEF0F4; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, system-ui, sans-serif;">
+
+  <!-- Faux page under test -->
+  <div style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 56px;">
+    <div style="width: 100%; max-width: 1000px; height: 600px; background: #FFFFFF; border: 1px solid #E7EAEF; border-radius: 14px; box-shadow: 0 2px 4px rgba(16,24,40,0.05), 0 4px 12px rgba(16,24,40,0.07); overflow: hidden; display: flex; flex-direction: column;">
+      <div style="height: 46px; flex: none; border-bottom: 1px solid #EEF0F4; display: flex; align-items: center; gap: 7px; padding: 0 16px;">
+        <span style="width: 11px; height: 11px; border-radius: 9999px; background: #E7EAEF;"></span>
+        <span style="width: 11px; height: 11px; border-radius: 9999px; background: #E7EAEF;"></span>
+        <span style="width: 11px; height: 11px; border-radius: 9999px; background: #E7EAEF;"></span>
+        <div style="margin-left: 14px; height: 24px; flex: 1; max-width: 420px; border-radius: 9999px; background: #F6F7F9; border: 1px solid #EEF0F4;"></div>
+      </div>
+      <div style="flex: 1; display: flex; align-items: center; justify-content: center; background-image: repeating-linear-gradient(45deg, #FAFBFC 0, #FAFBFC 11px, #F4F6F9 11px, #F4F6F9 22px);">
+        <div style="font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.1em; color: #A0A6B2; text-transform: uppercase;">viewport — page under test</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Floating recorder bar -->
+  <sc-if value="{{ open }}" hint-placeholder-val="{{ true }}">
+    <div style="position: absolute; left: 50%; top: 0; transform: {{ widgetTransform }}; z-index: 60;">
+      <div style="display: flex; align-items: center; background: #FFFFFF; border: 1px solid #E7EAEF; border-radius: 16px; box-shadow: 0 10px 30px rgba(16,24,40,0.14), 0 2px 6px rgba(16,24,40,0.06); padding: 9px 10px;">
+
+        <!-- Grip + brand (drag handle) -->
+        <div onPointerDown="{{ onGripDown }}" style="display: flex; align-items: center; gap: 9px; padding: 4px 6px 4px 4px; cursor: {{ gripCursor }};">
+          <div style="display: grid; grid-template-columns: repeat(2, 3px); grid-auto-rows: 3px; gap: 3px;">
+            <span style="background: #C7CCD6; border-radius: 9999px;"></span>
+            <span style="background: #C7CCD6; border-radius: 9999px;"></span>
+            <span style="background: #C7CCD6; border-radius: 9999px;"></span>
+            <span style="background: #C7CCD6; border-radius: 9999px;"></span>
+            <span style="background: #C7CCD6; border-radius: 9999px;"></span>
+            <span style="background: #C7CCD6; border-radius: 9999px;"></span>
+          </div>
+          <div style="width: 30px; height: 30px; border-radius: 8px; background: {{ primary }}; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 16px; flex: none;">V</div>
+          <div style="display: flex; flex-direction: column; gap: 3px;">
+            <span style="font-size: 13px; font-weight: 600; color: #101322; line-height: 1;">Varys</span>
+            <span style="display: flex; align-items: center; gap: 5px;">
+              <span style="{{ statusDotStyle }}"></span>
+              <span style="font-size: 11px; color: #8A909E; line-height: 1; white-space: nowrap;">{{ statusText }}</span>
+            </span>
+          </div>
+        </div>
+
+        <div style="width: 1px; height: 30px; background: #EEF0F4; margin: 0 9px;"></div>
+
+        <!-- Record toggle -->
+        <button onClick="{{ onToggleRecord }}" style="{{ recordBtnStyle }}" style-hover="filter: brightness(0.96);">
+          <span style="{{ recordIconStyle }}"></span>
+          <span>{{ recordBtnLabel }}</span>
+        </button>
+
+        <!-- Mode segmented control -->
+        <div style="display: flex; gap: 2px; background: #F6F7F9; border: 1px solid #EEF0F4; border-radius: 10px; padding: 3px; margin-left: 9px;">
+          <button onClick="{{ onModeElement }}" style="{{ segElementStyle }}">Element</button>
+          <button onClick="{{ onModeRegion }}" style="{{ segRegionStyle }}">Region</button>
+          <button onClick="{{ onModeFull }}" style="{{ segFullStyle }}">Full page</button>
+        </div>
+
+        <!-- Capture -->
+        <button onClick="{{ onCapture }}" disabled="{{ captureDisabled }}" style="{{ captureBtnStyle }}" style-hover="background: #F6F7F9;" title="{{ captureHint }}">
+          <span style="width: 15px; height: 15px; border-radius: 9999px; border: 1.6px solid currentColor; display: inline-flex; align-items: center; justify-content: center; flex: none;">
+            <span style="width: 5px; height: 5px; border-radius: 9999px; background: currentColor;"></span>
+          </span>
+          <span>Capture</span>
+        </button>
+
+        <div style="width: 1px; height: 30px; background: #EEF0F4; margin: 0 9px;"></div>
+
+        <!-- Test name -->
+        <input value="{{ testName }}" onChange="{{ onName }}" placeholder="Test name" style="height: 36px; width: 150px; padding: 0 11px; border-radius: 9px; border: 1px solid #E7EAEF; background: #fff; font-size: 13px; font-family: inherit; color: #101322; outline: none;" style-focus="border-color: #5347CE; box-shadow: 0 0 0 3px rgba(83,71,206,0.16);" />
+
+        <!-- Save -->
+        <button onClick="{{ onSave }}" disabled="{{ saveDisabled }}" style="{{ saveBtnStyle }}" style-hover="filter: brightness(1.12);">Save</button>
+
+        <!-- Clear -->
+        <button onClick="{{ onClear }}" disabled="{{ clearDisabled }}" style="{{ clearBtnStyle }}">Clear</button>
+
+        <div style="width: 1px; height: 30px; background: #EEF0F4; margin: 0 7px;"></div>
+
+        <!-- Close -->
+        <button onClick="{{ onClose }}" style="width: 30px; height: 30px; border: none; background: transparent; border-radius: 8px; color: #8A909E; font-size: 19px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; font-family: inherit;" style-hover="background: #F6F7F9; color: #101322;" title="Hide">×</button>
+      </div>
+
+      <!-- Toast -->
+      <sc-if value="{{ flash }}" hint-placeholder-val="">
+        <div style="position: absolute; top: 100%; left: 16px; margin-top: 9px; display: inline-flex; align-items: center; gap: 7px; background: #101322; color: #fff; font-size: 12px; font-weight: 500; padding: 7px 12px; border-radius: 9px; box-shadow: 0 6px 18px rgba(16,24,40,0.2); animation: varysToast 0.18s ease-out; white-space: nowrap;">
+          <span style="width: 6px; height: 6px; border-radius: 9999px; background: {{ primary }};"></span>
+          {{ flash }}
+        </div>
+      </sc-if>
+    </div>
+  </sc-if>
+
+  <!-- Collapsed pill -->
+  <sc-if value="{{ closed }}" hint-placeholder-val="{{ false }}">
+    <button onClick="{{ onReopen }}" style="position: absolute; left: 50%; top: 0; transform: {{ widgetTransform }}; z-index: 60; width: 54px; height: 54px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.18); background: {{ primary }}; color: #fff; font-weight: 700; font-size: 22px; cursor: pointer; box-shadow: 0 10px 30px rgba(16,24,40,0.2); font-family: inherit;" style-hover="filter: brightness(0.96);">V</button>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;accent&quot;: {&quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;violet&quot;, &quot;blue&quot;, &quot;teal&quot;], &quot;default&quot;: &quot;violet&quot;, &quot;tsType&quot;: &quot;\&quot;violet\&quot; | \&quot;blue\&quot; | \&quot;teal\&quot;&quot;}}">
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    let pos = { x: 0, y: 56 };
+    try { const s = localStorage.getItem('varys_widget_pos'); if (s) pos = JSON.parse(s); } catch (_) {}
+    this.state = { recording: false, mode: 'element', testName: '', shots: 0, pos, dragging: false, closed: false, flash: '' };
+    this.onGripDown = this.onGripDown.bind(this);
+  }
+
+  accent() {
+    const map = {
+      violet: { base: '#5347CE', soft: '#EEECFB' },
+      blue: { base: '#1B6FD6', soft: '#E8F1FF' },
+      teal: { base: '#0FA6A5', soft: '#E2F7F5' },
+    };
+    return map[this.props.accent] || map.violet;
+  }
+
+  flash(msg) {
+    this.setState({ flash: msg });
+    clearTimeout(this._ft);
+    this._ft = setTimeout(() => this.setState({ flash: '' }), 2200);
+  }
+
+  onGripDown(e) {
+    if (e.button !== undefined && e.button !== 0) return;
+    e.preventDefault();
+    const sx = e.clientX, sy = e.clientY;
+    const o = { x: this.state.pos.x, y: this.state.pos.y };
+    const move = (ev) => this.setState({ dragging: true, pos: { x: o.x + (ev.clientX - sx), y: o.y + (ev.clientY - sy) } });
+    const up = () => {
+      document.removeEventListener('pointermove', move);
+      document.removeEventListener('pointerup', up);
+      this.setState({ dragging: false });
+      try { localStorage.setItem('varys_widget_pos', JSON.stringify(this.state.pos)); } catch (_) {}
+    };
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', up);
+  }
+
+  renderVals() {
+    const a = this.accent();
+    const { recording, mode, testName, shots, dragging, closed, flash, pos } = this.state;
+    const nameOk = testName.trim().length > 0;
+
+    const statusText = recording ? 'Recording…' : (shots > 0 ? shots + ' captured' : 'Idle');
+    const statusDotStyle = {
+      display: 'inline-block', width: '8px', height: '8px', borderRadius: '9999px',
+      background: recording ? '#F0445E' : '#A0A6B2',
+      animation: recording ? 'varysPulse 1.4s ease-out infinite' : 'none',
+    };
+
+    const recordBtnStyle = {
+      display: 'inline-flex', alignItems: 'center', gap: '8px', height: '36px', padding: '0 15px',
+      border: 'none', borderRadius: '9px', fontSize: '13px', fontWeight: 600, fontFamily: 'inherit',
+      color: '#fff', cursor: 'pointer', whiteSpace: 'nowrap',
+      background: recording ? '#F0445E' : a.base,
+    };
+    const recordIconStyle = recording
+      ? { width: '9px', height: '9px', borderRadius: '2px', background: '#fff', flex: 'none' }
+      : { width: '10px', height: '10px', borderRadius: '9999px', background: '#fff', flex: 'none' };
+
+    const seg = (key) => ({
+      height: '28px', padding: '0 13px', border: 'none', borderRadius: '7px', cursor: 'pointer',
+      fontSize: '12.5px', fontWeight: 500, fontFamily: 'inherit', whiteSpace: 'nowrap',
+      background: mode === key ? a.base : 'transparent',
+      color: mode === key ? '#fff' : '#454B58',
+      boxShadow: mode === key ? '0 1px 2px rgba(16,24,40,0.14)' : 'none',
+    });
+
+    const captureDisabled = !recording;
+    const captureBtnStyle = {
+      display: 'inline-flex', alignItems: 'center', gap: '8px', height: '36px', padding: '0 13px',
+      borderRadius: '9px', border: '1px solid #E7EAEF', background: '#fff', fontSize: '13px',
+      fontWeight: 500, fontFamily: 'inherit', whiteSpace: 'nowrap', marginLeft: '9px',
+      color: captureDisabled ? '#C7CCD6' : a.base,
+      cursor: captureDisabled ? 'not-allowed' : 'pointer',
+    };
+
+    const saveDisabled = !(nameOk && shots > 0);
+    const saveBtnStyle = {
+      height: '36px', padding: '0 15px', border: 'none', borderRadius: '9px', fontSize: '13px',
+      fontWeight: 600, fontFamily: 'inherit', marginLeft: '9px', whiteSpace: 'nowrap',
+      background: saveDisabled ? '#F1F2F5' : '#101322',
+      color: saveDisabled ? '#C7CCD6' : '#fff',
+      cursor: saveDisabled ? 'not-allowed' : 'pointer',
+    };
+
+    const clearDisabled = !(recording || shots > 0 || nameOk);
+    const clearBtnStyle = {
+      height: '36px', padding: '0 12px', borderRadius: '9px', border: '1px solid transparent',
+      background: 'transparent', fontSize: '13px', fontWeight: 500, fontFamily: 'inherit',
+      marginLeft: '2px', whiteSpace: 'nowrap',
+      color: clearDisabled ? '#C7CCD6' : '#D32F49',
+      cursor: clearDisabled ? 'not-allowed' : 'pointer',
+    };
+
+    return {
+      primary: a.base,
+      open: !closed,
+      closed,
+      flash,
+      widgetTransform: 'translate(calc(-50% + ' + pos.x + 'px), ' + pos.y + 'px)',
+      gripCursor: dragging ? 'grabbing' : 'grab',
+      onGripDown: this.onGripDown,
+
+      statusText,
+      statusDotStyle,
+
+      recordBtnStyle,
+      recordIconStyle,
+      recordBtnLabel: recording ? 'Stop' : 'Start',
+      onToggleRecord: () => {
+        const next = !recording;
+        this.setState({ recording: next });
+        this.flash(next ? 'Recording started' : 'Recording paused');
+      },
+
+      segElementStyle: seg('element'),
+      segRegionStyle: seg('region'),
+      segFullStyle: seg('full'),
+      onModeElement: () => this.setState({ mode: 'element' }),
+      onModeRegion: () => this.setState({ mode: 'region' }),
+      onModeFull: () => this.setState({ mode: 'full' }),
+
+      captureDisabled,
+      captureBtnStyle,
+      captureHint: recording ? 'Snapshot the current ' + mode : 'Start recording to capture',
+      onCapture: () => {
+        if (!this.state.recording) return;
+        this.setState((s) => ({ shots: s.shots + 1 }));
+        this.flash('Snapshot captured');
+      },
+
+      testName,
+      onName: (e) => this.setState({ testName: e.target.value }),
+
+      saveDisabled,
+      saveBtnStyle,
+      onSave: () => {
+        if (saveDisabled) return;
+        this.flash('Saved “' + testName.trim() + '” · ' + shots + ' shots');
+        this.setState({ recording: false, shots: 0 });
+      },
+
+      clearDisabled,
+      clearBtnStyle,
+      onClear: () => {
+        if (clearDisabled) return;
+        this.setState({ recording: false, shots: 0, testName: '' });
+        this.flash('Recording cleared');
+      },
+
+      onClose: () => this.setState({ closed: true }),
+      onReopen: () => this.setState({ closed: false }),
+    };
+  }
+}
+</script>
+</body>
+</html>

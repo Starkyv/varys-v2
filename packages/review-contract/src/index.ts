@@ -269,3 +269,105 @@ export interface RunView {
   timeline: StepRun[];
   checkpoints: CheckpointView[];
 }
+
+/**
+ * The KPI summary strip on the run dashboard — headline figures, each with a delta
+ * against the prior comparable window. Everything is computed server-side (derived
+ * on read from runs/run_results/tests); the web layer only formats and labels it,
+ * never recomputes. (Slice 7 — Run dashboard.)
+ */
+export interface DashboardSummary {
+  /** Total saved tests (recordings). */
+  totalTests: number;
+  /** Distinct environments that have at least one run ("across N environments"). */
+  environmentsCount: number;
+  /** Tests created in the last 7 days (the total-tests delta). */
+  totalTestsDelta: number;
+  /** Pass rate over the last 7 days: `passed` ÷ finished (`passed`|`needs_review`|
+   *  `failed`); `0` when there are no finished runs in the window. */
+  passRate: number;
+  /** Signed percentage-point change in pass rate vs the prior 7-day window. */
+  passRateDeltaPct: number;
+  /** Checkpoints currently awaiting a decision (`pending-baseline`|`diff`, unresolved). */
+  needsReview: number;
+  /** Of those pending checkpoints, how many arrived in the last 7 days. */
+  needsReviewDelta: number;
+  /** Runs that failed in the last 24 hours. */
+  failures24h: number;
+  /** Signed change vs the prior 24-hour window (current − prior). */
+  failures24hDelta: number;
+}
+
+/**
+ * A test × environment matrix cell's derived status. `none` = the pairing has never
+ * run. Otherwise the latest run for that pairing, mapped: failed/running/passed
+ * directly, and a `needs_review` run split into `needs_review` (a diff to judge) vs
+ * `pending-baseline` (a first capture to approve) by its checkpoints.
+ */
+export type MatrixCellStatus =
+  | "passed"
+  | "needs_review"
+  | "pending-baseline"
+  | "failed"
+  | "running"
+  | "none";
+
+/** One cell of the dashboard matrix: the latest run's status for a (test, env). */
+export interface MatrixCell {
+  /** Environment name this cell is for (matches a `DashboardMatrix.environments` entry). */
+  environment: string;
+  status: MatrixCellStatus;
+  /** The latest run to open on click; null when the pairing has never run (`none`). */
+  runId: string | null;
+}
+
+/** One matrix row: a test and its per-environment cells (aligned to the column order). */
+export interface MatrixRow {
+  testId: string;
+  testName: string;
+  /** One cell per environment, in `DashboardMatrix.environments` order. */
+  cells: MatrixCell[];
+}
+
+/**
+ * The hero test × environment status matrix — one cell per (test, environment),
+ * each the latest run's outcome. Columns are the environments that have any run
+ * ("default" for env-less runs); rows are the tests that have any run.
+ */
+export interface DashboardMatrix {
+  /** Column order — environment names that have at least one run. */
+  environments: string[];
+  rows: MatrixRow[];
+}
+
+/**
+ * One checkpoint's diff-score trend over the last 14 days — the data behind a
+ * dashboard sparkline. The series is the per-run mismatch ratio in run order, so a
+ * checkpoint drifting toward its threshold stands out before it fails.
+ */
+export interface CheckpointTrend {
+  checkpointName: string;
+  /** The owning test (the same checkpoint name can exist in different tests). */
+  testName: string;
+  /** Diff scores (mismatch ratio in [0,1]) over the last 14 days, oldest→newest. */
+  points: number[];
+  /** The most recent diff score in the series. */
+  latestScore: number;
+  /** Severity band of the latest score (danger ≥ 5%, warning ≥ 1%, else success). */
+  tone: "success" | "warning" | "danger";
+}
+
+/**
+ * The run dashboard read-model — assembled derive-on-read from runs/run_results/
+ * tests/environments (no stored aggregate, no new table): the KPI summary, the test
+ * × environment status matrix, the recent-runs activity feed, and the per-checkpoint
+ * diff-trend sparklines.
+ */
+export interface DashboardView {
+  summary: DashboardSummary;
+  matrix: DashboardMatrix;
+  /** Newest standalone runs (suite-run children excluded, as in the Runs history). */
+  recentRuns: RunSummary[];
+  /** The most-relevant checkpoint diff trends (worst latest score first). */
+  trends: CheckpointTrend[];
+}

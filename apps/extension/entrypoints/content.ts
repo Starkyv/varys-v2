@@ -47,16 +47,36 @@ export default defineContentScript({
     let guardBanner: HTMLElement | null = null;
 
     let host: HTMLElement | null = null;
+    let wrapEl: HTMLElement;
+    let panelEl: HTMLElement;
     let statusEl: HTMLElement;
-    let resultEl: HTMLElement;
     let confirmEl: HTMLElement;
     let startBtn: HTMLButtonElement;
+    let recLabelEl: HTMLElement;
     let shotBtn: HTMLButtonElement;
     let nameEl: HTMLInputElement;
     let saveBtn: HTMLButtonElement;
     let cancelBtn: HTMLButtonElement;
     let modeBtns: Record<CaptureMode, HTMLButtonElement>;
-    let highlighted: HTMLElement | null = null;
+    let toastEl: HTMLElement | null = null;
+    let toastMsgEl: HTMLElement;
+    let collapsed = false;
+    let flashTimer: ReturnType<typeof setTimeout> | undefined;
+
+    /** Transient confirmation toast under the bar (replaces the old result line). */
+    const flash = (msg: string) => {
+      if (!toastEl) return;
+      if (!msg) {
+        toastEl.classList.remove("show");
+        return;
+      }
+      toastMsgEl.textContent = msg;
+      toastEl.classList.add("show");
+      clearTimeout(flashTimer);
+      flashTimer = setTimeout(() => toastEl?.classList.remove("show"), 2200);
+    };
+    let highlightBox: HTMLElement | null = null;
+    let highlightLabel: HTMLElement | null = null;
     let regionBox: HTMLElement | null = null;
     let regionStart: { x: number; y: number } | null = null;
 
@@ -81,8 +101,12 @@ export default defineContentScript({
     // the local display mirrors in step. This is the single place counts advance.
     const shipStep: OnStep = (s) => {
       totalSteps += 1;
-      if (s.type === "screenshot") screenshots += 1;
-      void browser.runtime.sendMessage({ type: "varys:step", step: s });
+      if (s.type === "screenshot") {
+        screenshots += 1;
+        flash("Snapshot captured");
+        render();
+      }
+      void browser.runtime.sendMessage({ type: "varys:step", step: s }).catch(() => {});
     };
 
     const beginPageRecording = () => {
@@ -123,7 +147,7 @@ export default defineContentScript({
       const name = variableNameFor(lastTyped.el);
       const value = kind === "variable" ? `{{${name}}}` : lastTyped.raw;
       const step = { type: "type" as const, target: captureFingerprint(lastTyped.el), value };
-      void browser.runtime.sendMessage({ type: "varys:replace-last-type", step });
+      void browser.runtime.sendMessage({ type: "varys:replace-last-type", step }).catch(() => {});
       if (kind === "variable") knownVars.set(name, lastTyped.raw);
       else knownVars.delete(name);
       lastTyped = { ...lastTyped, kind };
@@ -178,16 +202,14 @@ export default defineContentScript({
     ) => {
       guardBanner?.remove();
       guardBanner = document.createElement("div");
-      guardBanner.style.cssText =
-        "position: fixed; z-index: 2147483647; top: 16px; left: 50%; transform: translateX(-50%);" +
-        " background: #7a2e0e; color: #fff; padding: 10px 14px; border-radius: 8px; font: 12px system-ui;" +
-        " display: flex; gap: 8px; align-items: center; max-width: 90vw; flex-wrap: wrap;" +
-        " box-shadow: 0 4px 16px rgba(0,0,0,.3);";
+      guardBanner.style.cssText = BANNER_CARD;
       guardBanner.innerHTML =
-        `<span>⚠︎ Locator leans on the text “${escapeHtml(hit.value)}”, which varies by environment.</span>` +
-        `<button class="g-bind" style="font:inherit;cursor:pointer">Bind to {{${escapeHtml(hit.variable)}}}</button>` +
-        `<button class="g-struct" style="font:inherit;cursor:pointer">Use structural locator</button>` +
-        `<button class="g-keep" style="font:inherit;cursor:pointer">Keep as-is</button>`;
+        `<span style="display:inline-flex;align-items:center;gap:7px;color:#454B58;">` +
+        `<span style="display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:6px;background:#FEF3DA;color:#B5710F;flex:none;">⚠</span>` +
+        `Locator leans on the text “${escapeHtml(hit.value)}”, which varies by environment.</span>` +
+        `<button class="g-bind" style="${BTN_PRIMARY}">Bind to {{${escapeHtml(hit.variable)}}}</button>` +
+        `<button class="g-struct" style="${BTN_SECONDARY}">Use structural locator</button>` +
+        `<button class="g-keep" style="${BTN_GHOST}">Keep as-is</button>`;
       const finish = (remedy: "bind" | "structural" | "keep") => {
         guardBanner?.remove();
         guardBanner = null;
@@ -207,22 +229,85 @@ export default defineContentScript({
     };
 
     // --- element picking --------------------------------------------------------
-    const clearHighlight = () => {
-      if (highlighted) {
-        highlighted.style.outline = highlighted.dataset.varysOutline ?? "";
-        highlighted.style.outlineOffset = "";
+    // A modern, minimalist hover highlight: a floating rounded violet outline that
+    // tracks the element under the cursor (never mutates the page's own styles), plus
+    // a small tag-name label — like a design-tool inspector.
+    const FONT_STACK =
+      "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, system-ui, sans-serif";
+    // Inline button styles for the page-level banners (guard / mask), matching the
+    // recorder bar. Inline so they win over any page CSS in the host document.
+    const BANNER_CARD =
+      "position: fixed; z-index: 2147483647; top: 16px; left: 50%; transform: translateX(-50%);" +
+      ` background: #FFFFFF; color: #101322; padding: 9px 11px; border-radius: 12px; font: 13px/1.4 ${FONT_STACK};` +
+      " display: flex; gap: 8px; align-items: center; flex-wrap: wrap; max-width: 90vw; box-sizing: border-box;" +
+      " border: 1px solid #E7EAEF; box-shadow: 0 10px 30px rgba(16,24,40,0.14), 0 2px 6px rgba(16,24,40,0.06);";
+    const BTN_PRIMARY = `height:32px;padding:0 13px;border:none;border-radius:8px;background:#5347CE;color:#fff;font-family:${FONT_STACK};font-size:12.5px;font-weight:600;cursor:pointer;`;
+    const BTN_SECONDARY = `height:32px;padding:0 12px;border:1px solid #E7EAEF;border-radius:8px;background:#fff;color:#454B58;font-family:${FONT_STACK};font-size:12.5px;font-weight:500;cursor:pointer;`;
+    const BTN_GHOST = `height:32px;padding:0 12px;border:1px solid transparent;border-radius:8px;background:transparent;color:#8A909E;font-family:${FONT_STACK};font-size:12.5px;font-weight:500;cursor:pointer;`;
+    const BTN_DANGER = `height:32px;padding:0 12px;border:1px solid transparent;border-radius:8px;background:transparent;color:#D32F49;font-family:${FONT_STACK};font-size:12.5px;font-weight:500;cursor:pointer;`;
+
+    /** A compact selector-ish descriptor: tag + #id + first class(es). */
+    const describeEl = (el: Element): string => {
+      const tag = el.tagName.toLowerCase();
+      const id = el.id ? `#${el.id}` : "";
+      let cls = "";
+      if (typeof el.className === "string" && el.className.trim()) {
+        cls = `.${el.className.trim().split(/\s+/).slice(0, 2).join(".")}`;
       }
-      highlighted = null;
+      return `${tag}${id}${cls}`.slice(0, 64);
+    };
+
+    const ensureHighlight = () => {
+      if (!highlightBox) {
+        const el = document.createElement("div");
+        el.style.cssText =
+          "position: fixed; z-index: 2147483640; pointer-events: none;" +
+          " border: 1.5px solid #5347CE; border-radius: 7px;" +
+          " background: rgba(83,71,206,0.07); box-shadow: 0 0 0 1px rgba(255,255,255,0.55) inset;";
+        document.documentElement.appendChild(el);
+        highlightBox = el;
+        // Enable smooth tracking only after the first placement, so it snaps onto the
+        // first element instead of sliding in from the corner.
+        requestAnimationFrame(() => {
+          el.style.transition = "top .07s ease, left .07s ease, width .07s ease, height .07s ease";
+        });
+      }
+      if (!highlightLabel) {
+        highlightLabel = document.createElement("div");
+        highlightLabel.style.cssText =
+          "position: fixed; z-index: 2147483641; pointer-events: none; box-sizing: border-box;" +
+          ` background: #5347CE; color: #fff; font: 600 11px/1.4 ${FONT_STACK};` +
+          " padding: 3px 8px; border-radius: 6px; box-shadow: 0 2px 8px rgba(16,24,40,0.18);" +
+          " white-space: nowrap; max-width: 60vw; overflow: hidden; text-overflow: ellipsis;";
+        document.documentElement.appendChild(highlightLabel);
+      }
     };
 
     const onHover = (e: MouseEvent) => {
       if (isOverlay(e)) return;
-      clearHighlight();
       const el = e.target as HTMLElement;
-      el.dataset.varysOutline = el.style.outline;
-      el.style.outline = "2px solid #1f6feb";
-      el.style.outlineOffset = "-2px";
-      highlighted = el;
+      if (!el || el === highlightBox || el === highlightLabel) return;
+      ensureHighlight();
+      const r = el.getBoundingClientRect();
+      const box = highlightBox as HTMLElement;
+      box.style.left = `${r.left}px`;
+      box.style.top = `${r.top}px`;
+      box.style.width = `${r.width}px`;
+      box.style.height = `${r.height}px`;
+      const label = highlightLabel as HTMLElement;
+      label.innerHTML =
+        `<span>${escapeHtml(describeEl(el))}</span>` +
+        `<span style="opacity:.62; margin-left:7px">${Math.round(r.width)} × ${Math.round(r.height)}</span>`;
+      // Sit the label just above the box; tuck it inside the top edge when there's no room.
+      label.style.left = `${Math.max(4, Math.min(r.left, window.innerWidth - 4))}px`;
+      label.style.top = `${r.top > 26 ? r.top - 24 : r.top + 4}px`;
+    };
+
+    const clearHighlight = () => {
+      highlightBox?.remove();
+      highlightBox = null;
+      highlightLabel?.remove();
+      highlightLabel = null;
     };
 
     const onPick = (e: MouseEvent) => {
@@ -257,8 +342,9 @@ export default defineContentScript({
       regionStart = { x: e.clientX, y: e.clientY };
       regionBox = document.createElement("div");
       regionBox.style.cssText =
-        "position: fixed; z-index: 2147483646; border: 2px dashed #1f6feb;" +
-        " background: rgba(31,111,235,.12); pointer-events: none;";
+        "position: fixed; z-index: 2147483646; border: 1.5px solid #5347CE; border-radius: 7px;" +
+        " background: rgba(83,71,206,0.10); box-shadow: 0 0 0 1px rgba(255,255,255,0.5) inset;" +
+        " pointer-events: none;";
       document.documentElement.appendChild(regionBox);
       positionRegionBox(e.clientX, e.clientY);
     };
@@ -357,28 +443,26 @@ export default defineContentScript({
       maskLayer = document.createElement("div");
       maskLayer.style.cssText =
         `position: fixed; z-index: 2147483646; left:${boxV.left}px; top:${boxV.top}px;` +
-        ` width:${boxV.width}px; height:${boxV.height}px; cursor: crosshair;` +
-        " outline: 2px solid #1f6feb; background: rgba(31,111,235,.04);";
+        ` width:${boxV.width}px; height:${boxV.height}px; cursor: crosshair; border-radius: 8px;` +
+        " box-shadow: 0 0 0 1.5px #5347CE, 0 8px 30px rgba(16,24,40,0.10); background: rgba(83,71,206,0.04);";
       maskLayer.addEventListener("mousedown", onMaskDown, true);
       maskLayer.addEventListener("mousemove", onMaskMove, true);
       maskLayer.addEventListener("mouseup", onMaskUp, true);
       document.documentElement.appendChild(maskLayer);
 
       maskBanner = document.createElement("div");
-      maskBanner.style.cssText =
-        "position: fixed; z-index: 2147483647; top: 16px; left: 50%; transform: translateX(-50%);" +
-        ` background: ${what.weak ? "#7a2e0e" : "#111"}; color: #fff; padding: 8px 12px;` +
-        " border-radius: 8px; font: 12px system-ui; display: flex; gap: 8px; align-items: center;" +
-        " flex-wrap: wrap; max-width: 90vw; box-shadow: 0 4px 16px rgba(0,0,0,.3);";
+      maskBanner.style.cssText = BANNER_CARD;
       maskBanner.innerHTML =
         // Weak-fingerprint warning (own line): no durable anchor → likely unmatchable later.
         (what.weak
-          ? `<span style="flex-basis:100%">⚠︎ Weak selector — no stable id / role / test-id. This element may not be found on later runs; re-pick a stabler element (or add a data-testid), or capture anyway.</span>`
+          ? `<span style="flex-basis:100%;display:inline-flex;align-items:flex-start;gap:7px;color:#454B58;line-height:1.45;">` +
+            `<span style="display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:6px;background:#FEF3DA;color:#B5710F;flex:none;">⚠</span>` +
+            `Weak selector — no stable id / role / test-id. This element may not be found on later runs; re-pick a stabler element (or add a data-testid), or capture anyway.</span>`
           : "") +
-        `<span class="hint">Drag to mask volatile areas (<span class="n">0</span>), then Done</span>` +
-        `<button class="clear" style="font:inherit;cursor:pointer">Clear</button>` +
-        `<button class="done" style="font:inherit;cursor:pointer">Done</button>` +
-        `<button class="cancel" style="font:inherit;cursor:pointer">Cancel</button>`;
+        `<span class="hint" style="color:#454B58;">Drag to mask volatile areas (<span class="n" style="font-weight:600;color:#101322;">0</span>), then Done</span>` +
+        `<button class="clear" style="${BTN_SECONDARY}">Clear</button>` +
+        `<button class="done" style="${BTN_PRIMARY}">Done</button>` +
+        `<button class="cancel" style="${BTN_GHOST}">Cancel</button>`;
       (maskBanner.querySelector(".clear") as HTMLElement).addEventListener("click", clearPendingMasks);
       (maskBanner.querySelector(".done") as HTMLElement).addEventListener("click", () => finishMasking(true));
       (maskBanner.querySelector(".cancel") as HTMLElement).addEventListener("click", () => finishMasking(false));
@@ -408,7 +492,7 @@ export default defineContentScript({
       maskStart = { x: e.clientX - r.left, y: e.clientY - r.top };
       maskDraftEl = document.createElement("div");
       maskDraftEl.style.cssText =
-        "position: absolute; border: 1px dashed #1f6feb; background: rgba(31,111,235,.25); pointer-events: none;";
+        "position: absolute; border: 1.5px dashed #5347CE; background: rgba(83,71,206,0.18); border-radius: 4px; pointer-events: none;";
       maskLayer.appendChild(maskDraftEl);
     };
 
@@ -455,7 +539,7 @@ export default defineContentScript({
         box.className = "varys-mask";
         box.style.cssText =
           `position: absolute; left:${lx}px; top:${ly}px; width:${w}px; height:${h}px;` +
-          " border: 1px solid #1f6feb; background: rgba(31,111,235,.3); pointer-events: none;";
+          " border: 1.5px solid #5347CE; background: rgba(83,71,206,0.26); border-radius: 4px; pointer-events: none;";
         maskLayer.appendChild(box);
         updateMaskCount();
       }
@@ -504,7 +588,6 @@ export default defineContentScript({
 
     // --- recording controls -----------------------------------------------------
     const start = async () => {
-      resultEl.textContent = "";
       screenshots = 0;
       totalSteps = 0;
       lastTyped = null;
@@ -523,6 +606,7 @@ export default defineContentScript({
       recording = true;
       beginPageRecording();
       render();
+      flash("Recording started");
     };
 
     const stop = () => {
@@ -535,8 +619,9 @@ export default defineContentScript({
       guardBanner = null;
       stopBusy();
       recording = false;
-      void browser.runtime.sendMessage({ type: "varys:stop" });
+      void browser.runtime.sendMessage({ type: "varys:stop" }).catch(() => {});
       render();
+      flash("Recording paused");
     };
 
     /** Tear down the live recording and wipe the store — back to a clean slate.
@@ -553,7 +638,7 @@ export default defineContentScript({
       screenshots = 0;
       lastTyped = null;
       knownVars.clear();
-      void browser.runtime.sendMessage({ type: "varys:clear" });
+      void browser.runtime.sendMessage({ type: "varys:clear" }).catch(() => {});
     };
 
     /** Discard the current recording (in-progress or stopped-but-unsaved) and reset
@@ -563,29 +648,30 @@ export default defineContentScript({
         return;
       }
       discard();
-      resultEl.textContent = "";
       render();
+      flash("Recording cleared");
     };
 
     const save = async () => {
       const name = nameEl.value.trim();
       if (!name) {
         // A name is required before saving — surface it and focus the field.
-        resultEl.textContent = "Enter a test name before saving.";
+        flash("Enter a test name first");
         nameEl.focus();
         return;
       }
-      resultEl.textContent = "Saving…";
+      const shotCount = screenshots; // discard() resets this before we report it
+      flash("Saving…");
       // biome-ignore lint/suspicious/noExplicitAny: cross-context message response
       const res: any = await browser.runtime.sendMessage({ type: "varys:save", name });
       if (res?.ok) {
         // Saved → clear the recording so it doesn't linger into the next session.
         discard();
         nameEl.value = "";
-        resultEl.textContent = `Saved ✓  test ${res.id ?? ""}`;
         render();
+        flash(`Saved “${name}” · ${shotCount} shot${shotCount === 1 ? "" : "s"}`);
       } else {
-        resultEl.textContent = `Save failed: ${res?.error ?? `HTTP ${res?.status}`}`;
+        flash(`Save failed: ${res?.error ?? `HTTP ${res?.status}`}`);
       }
     };
 
@@ -596,119 +682,250 @@ export default defineContentScript({
     };
 
     // --- overlay UI -------------------------------------------------------------
-    const captureLabel = (): string =>
-      mode === "fullpage"
-        ? "📷 Capture full page"
-        : mode === "region"
-          ? "📷 Draw a region"
-          : "📷 Capture an element";
-
     const render = () => {
       if (!host) return;
-      startBtn.textContent = recording ? "■ Stop recording" : "● Start recording";
+      // Record toggle: violet "Start" (round dot) ↔ red "Stop" (square) via class.
+      panelEl.classList.toggle("is-recording", recording);
+      recLabelEl.textContent = recording ? "Stop" : "Start";
       shotBtn.disabled = !recording || busy;
-      shotBtn.textContent = captureLabel();
+      shotBtn.title = recording ? `Capture the current ${mode}` : "Start recording to capture";
       // Save requires both recorded steps and a non-empty test name.
       saveBtn.disabled = totalSteps === 0 || nameEl.value.trim() === "";
-      // Discard the current recording: "Cancel" while live, "Clear" once stopped.
-      cancelBtn.textContent = recording ? "✕ Cancel recording" : "✕ Clear recording";
+      // Discard the current recording (in-progress or stopped-but-unsaved).
       cancelBtn.disabled = busy || (!recording && totalSteps === 0);
       for (const m of ["element", "region", "fullpage"] as CaptureMode[]) {
         modeBtns[m].setAttribute("aria-pressed", String(mode === m));
         modeBtns[m].disabled = busy;
       }
       statusEl.textContent = masking
-        ? "Draw masks over volatile areas · Done to capture · Esc to skip"
+        ? "Draw masks · Done to capture · Esc to skip"
         : busy
           ? mode === "region"
-            ? "Drag a rectangle on the page · Esc to cancel"
-            : "Click an element to screenshot · Esc to cancel"
+            ? "Drag a rectangle · Esc to cancel"
+            : "Click an element · Esc to cancel"
           : recording
-            ? `Recording · ${totalSteps} actions · ${screenshots} screenshot${screenshots === 1 ? "" : "s"}`
-            : "Idle. Press Start, then use the page — recording continues across logins. Pick a mode and 📷 to snapshot whenever.";
+            ? `Recording… · ${screenshots} shot${screenshots === 1 ? "" : "s"}`
+            : screenshots > 0
+              ? `${screenshots} captured`
+              : "Idle";
       renderConfirm();
     };
 
     const mount = () => {
+      // Drop any orphaned host left by a previous (now-dead) content-script context
+      // — e.g. after the extension was reloaded and a fresh script was injected.
+      document.getElementById("varys-recorder-overlay")?.remove();
       host = document.createElement("div");
       host.id = "varys-recorder-overlay";
-      host.style.cssText =
-        "all: initial; position: fixed; z-index: 2147483647; bottom: 16px; right: 16px;";
+      host.style.cssText = "all: initial; position: fixed; top: 0; left: 0; z-index: 2147483647;";
       const shadow = host.attachShadow({ mode: "open" });
       shadow.innerHTML = `
         <style>
-          .panel { font-family: system-ui, -apple-system, sans-serif; width: 256px; background: #fff;
-                   color: #111; border: 1px solid #d0d7de; border-radius: 10px;
-                   box-shadow: 0 6px 24px rgba(0,0,0,.18); padding: 12px; }
-          .row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-          .title { font-weight: 600; font-size: 13px; }
-          .close { cursor: pointer; border: 0; background: none; font-size: 18px; line-height: 1; color: #666; }
-          .status { font-size: 11px; color: #555; margin: 0 0 10px; min-height: 30px; }
-          .result { font-size: 11px; color: #1a7f37; margin: 8px 0 0; min-height: 14px; }
-          .modes { display: flex; gap: 0; margin: 0 0 8px; border: 1px solid #d0d7de;
-                   border-radius: 6px; overflow: hidden; }
-          .modes button { flex: 1; border: 0; background: #fff; padding: 6px 4px; font: inherit;
-                          font-size: 11px; cursor: pointer; }
-          .modes button + button { border-left: 1px solid #d0d7de; }
-          .modes button[aria-pressed="true"] { background: #1f6feb; color: #fff; }
-          .modes button:disabled { opacity: .5; cursor: default; }
-          button.action { display: block; width: 100%; margin: 4px 0; padding: 8px; border-radius: 6px;
-                          border: 1px solid #d0d7de; background: #f6f8fa; font: inherit; font-size: 12px;
-                          cursor: pointer; }
-          button.action:disabled { opacity: .5; cursor: default; }
-          .start { background: #1f6feb; color: #fff; border-color: #1f6feb; }
-          .cancel { color: #b00020; border-color: #f0c0c0; }
-          .confirm { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 6px 0 0;
-                     font-size: 11px; }
-          .confirm:empty { margin: 0; }
-          .clabel { color: #555; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
-          .cbtn { border: 1px solid #d0d7de; background: #fff; border-radius: 6px; padding: 3px 8px;
-                  font: inherit; font-size: 11px; cursor: pointer; }
-          .cbtn[aria-pressed="true"] { background: #1f6feb; color: #fff; border-color: #1f6feb; }
-          .namelabel { display: block; font-size: 11px; color: #555; margin: 8px 0 0; }
-          .name { display: block; width: 100%; box-sizing: border-box; margin-top: 4px; padding: 6px 8px;
-                  border: 1px solid #d0d7de; border-radius: 6px; font: inherit; font-size: 12px; }
+          * { box-sizing: border-box; }
+          button, input { font-family: inherit; }
+          .wrap { position: fixed; left: 50%; top: 0; z-index: 2147483647;
+                  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, system-ui, sans-serif; }
+
+          .bar { display: inline-flex; align-items: center; background: #FFFFFF; border: 1px solid #E7EAEF;
+                 border-radius: 16px; padding: 9px 10px; white-space: nowrap;
+                 box-shadow: 0 10px 30px rgba(16,24,40,0.14), 0 2px 6px rgba(16,24,40,0.06); }
+          .wrap.collapsed .bar, .wrap.collapsed .confirm, .wrap.collapsed .toast { display: none; }
+
+          /* Grip + brand (drag handle) */
+          .grip { display: flex; align-items: center; gap: 9px; padding: 4px 6px 4px 4px; cursor: grab; touch-action: none; }
+          .dots { display: grid; grid-template-columns: repeat(2, 3px); grid-auto-rows: 3px; gap: 3px; }
+          .dots span { background: #C7CCD6; border-radius: 9999px; }
+          .logo { width: 30px; height: 30px; border-radius: 8px; background: #5347CE; display: flex; align-items: center;
+                  justify-content: center; color: #fff; font-weight: 700; font-size: 16px; flex: none; }
+          .brand { display: flex; flex-direction: column; gap: 3px; }
+          .bname { font-size: 13px; font-weight: 600; color: #101322; line-height: 1; }
+          .statusline { display: flex; align-items: center; gap: 5px; }
+          .dot { display: inline-block; width: 8px; height: 8px; border-radius: 9999px; background: #A0A6B2; flex: none; }
+          .status { font-size: 11px; color: #8A909E; line-height: 1; white-space: nowrap; }
+
+          .sep { width: 1px; height: 30px; background: #EEF0F4; margin: 0 9px; flex: none; }
+          .sep.tight { margin: 0 7px; }
+
+          /* Record toggle */
+          .record { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 15px; border: none;
+                    border-radius: 9px; font-size: 13px; font-weight: 600; color: #fff; cursor: pointer;
+                    white-space: nowrap; background: #5347CE; }
+          .record:hover { filter: brightness(0.96); }
+          .rec-icon { width: 10px; height: 10px; border-radius: 9999px; background: #fff; flex: none; }
+
+          /* Mode segmented control */
+          .seg { display: flex; gap: 2px; background: #F6F7F9; border: 1px solid #EEF0F4; border-radius: 10px;
+                 padding: 3px; margin-left: 9px; }
+          .seg button { height: 28px; padding: 0 13px; border: none; border-radius: 7px; cursor: pointer;
+                        font-size: 12.5px; font-weight: 500; white-space: nowrap; background: transparent; color: #454B58; }
+          .seg button[aria-pressed="true"] { background: #5347CE; color: #fff; box-shadow: 0 1px 2px rgba(16,24,40,0.14); }
+          .seg button:disabled { opacity: .55; cursor: default; }
+
+          /* Capture */
+          .capture { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 13px; border-radius: 9px;
+                     border: 1px solid #E7EAEF; background: #fff; font-size: 13px; font-weight: 500; white-space: nowrap;
+                     margin-left: 9px; color: #5347CE; cursor: pointer; }
+          .capture:hover:not(:disabled) { background: #F6F7F9; }
+          .capture:disabled { color: #C7CCD6; cursor: not-allowed; }
+          .cap-ring { width: 15px; height: 15px; border-radius: 9999px; border: 1.6px solid currentColor; display: inline-flex;
+                      align-items: center; justify-content: center; flex: none; }
+          .cap-dot { width: 5px; height: 5px; border-radius: 9999px; background: currentColor; }
+
+          /* Test name */
+          .name { height: 36px; width: 150px; padding: 0 11px; border-radius: 9px; border: 1px solid #E7EAEF; background: #fff;
+                  font-size: 13px; color: #101322; outline: none; }
+          .name::placeholder { color: #A0A6B2; }
+          .name:focus { border-color: #5347CE; box-shadow: 0 0 0 3px rgba(83,71,206,0.16); }
+
+          /* Save */
+          .save { height: 36px; padding: 0 15px; border: none; border-radius: 9px; font-size: 13px; font-weight: 600;
+                  margin-left: 9px; white-space: nowrap; background: #101322; color: #fff; cursor: pointer; }
+          .save:hover:not(:disabled) { filter: brightness(1.12); }
+          .save:disabled { background: #F1F2F5; color: #C7CCD6; cursor: not-allowed; }
+
+          /* Clear */
+          .clear { height: 36px; padding: 0 12px; border-radius: 9px; border: 1px solid transparent; background: transparent;
+                   font-size: 13px; font-weight: 500; margin-left: 2px; white-space: nowrap; color: #D32F49; cursor: pointer; }
+          .clear:hover:not(:disabled) { background: #FDE7EB; }
+          .clear:disabled { color: #C7CCD6; cursor: not-allowed; }
+
+          /* Close */
+          .close { width: 30px; height: 30px; border: none; background: transparent; border-radius: 8px; color: #8A909E;
+                   font-size: 19px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+          .close:hover { background: #F6F7F9; color: #101322; }
+
+          /* Recording state */
+          .bar.is-recording .record { background: #F0445E; }
+          .bar.is-recording .rec-icon { width: 9px; height: 9px; border-radius: 2px; }
+          .bar.is-recording .dot { background: #F0445E; animation: varysPulse 1.4s ease-out infinite; }
+
+          /* Per-capture locator confirm popover */
+          .confirm { position: absolute; top: 100%; left: 16px; margin-top: 9px; display: inline-flex; align-items: center;
+                     gap: 7px; background: #fff; border: 1px solid #E7EAEF; border-radius: 10px; padding: 7px 11px;
+                     box-shadow: 0 6px 18px rgba(16,24,40,0.12); font-size: 12px; max-width: 460px; }
+          .confirm:empty { display: none; }
+          .clabel { color: #454B58; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          .cbtn { border: 1px solid #E7EAEF; background: #fff; border-radius: 7px; padding: 4px 10px; font: inherit;
+                  font-size: 12px; cursor: pointer; color: #454B58; }
+          .cbtn[aria-pressed="true"] { background: #5347CE; color: #fff; border-color: #5347CE; }
+
+          /* Toast */
+          .toast { position: absolute; top: 100%; right: 16px; margin-top: 9px; display: none; align-items: center; gap: 7px;
+                   background: #101322; color: #fff; font-size: 12px; font-weight: 500; padding: 7px 12px; border-radius: 9px;
+                   box-shadow: 0 6px 18px rgba(16,24,40,0.2); white-space: nowrap; }
+          .toast.show { display: inline-flex; animation: varysToast 0.18s ease-out; }
+          .toast-dot { width: 6px; height: 6px; border-radius: 9999px; background: #5347CE; flex: none; }
+
+          /* Collapsed pill */
+          .pill { display: none; width: 54px; height: 54px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.18);
+                  background: #5347CE; color: #fff; font-weight: 700; font-size: 22px; cursor: pointer;
+                  align-items: center; justify-content: center; box-shadow: 0 10px 30px rgba(16,24,40,0.2); }
+          .wrap.collapsed .pill { display: flex; }
+          .pill:hover { filter: brightness(0.96); }
+
+          @keyframes varysPulse { 0% { box-shadow: 0 0 0 0 rgba(240,68,94,0.5); } 70% { box-shadow: 0 0 0 7px rgba(240,68,94,0); } 100% { box-shadow: 0 0 0 0 rgba(240,68,94,0); } }
+          @keyframes varysToast { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
         </style>
-        <div class="panel">
-          <div class="row">
-            <span class="title">Varys recorder</span>
+        <div class="wrap">
+          <div class="bar">
+            <div class="grip" title="Drag to move">
+              <div class="dots"><span></span><span></span><span></span><span></span><span></span><span></span></div>
+              <div class="logo">V</div>
+              <div class="brand">
+                <span class="bname">Varys</span>
+                <span class="statusline"><span class="dot"></span><span class="status"></span></span>
+              </div>
+            </div>
+            <div class="sep"></div>
+            <button class="record start"><span class="rec-icon"></span><span class="rec-label">Start</span></button>
+            <div class="seg modes">
+              <button class="m-element" aria-pressed="true">Element</button>
+              <button class="m-region" aria-pressed="false">Region</button>
+              <button class="m-fullpage" aria-pressed="false">Full page</button>
+            </div>
+            <button class="capture shot"><span class="cap-ring"><span class="cap-dot"></span></span><span>Capture</span></button>
+            <div class="sep"></div>
+            <input class="name" type="text" placeholder="Test name" />
+            <button class="save">Save</button>
+            <button class="clear cancel">Clear</button>
+            <div class="sep tight"></div>
             <button class="close" title="Hide">×</button>
           </div>
-          <p class="status"></p>
-          <button class="action start">● Start recording</button>
-          <div class="modes">
-            <button class="m-element" aria-pressed="true">Element</button>
-            <button class="m-region" aria-pressed="false">Region</button>
-            <button class="m-fullpage" aria-pressed="false">Full page</button>
-          </div>
-          <button class="action shot">📷 Capture an element</button>
           <div class="confirm"></div>
-          <label class="namelabel">Test name
-            <input class="name" type="text" placeholder="e.g. Login + briefs" />
-          </label>
-          <button class="action save">Save test</button>
-          <button class="action cancel">✕ Clear recording</button>
-          <p class="result"></p>
+          <div class="toast"><span class="toast-dot"></span><span class="toast-msg"></span></div>
+          <button class="pill" title="Open Varys recorder">V</button>
         </div>`;
       document.documentElement.appendChild(host);
 
+      wrapEl = shadow.querySelector(".wrap") as HTMLElement;
+      panelEl = shadow.querySelector(".bar") as HTMLElement;
+      const gripEl = shadow.querySelector(".grip") as HTMLElement;
       statusEl = shadow.querySelector(".status") as HTMLElement;
-      resultEl = shadow.querySelector(".result") as HTMLElement;
       confirmEl = shadow.querySelector(".confirm") as HTMLElement;
       startBtn = shadow.querySelector(".start") as HTMLButtonElement;
+      recLabelEl = shadow.querySelector(".rec-label") as HTMLElement;
       shotBtn = shadow.querySelector(".shot") as HTMLButtonElement;
       nameEl = shadow.querySelector(".name") as HTMLInputElement;
       saveBtn = shadow.querySelector(".save") as HTMLButtonElement;
       cancelBtn = shadow.querySelector(".cancel") as HTMLButtonElement;
+      toastEl = shadow.querySelector(".toast") as HTMLElement;
+      toastMsgEl = shadow.querySelector(".toast-msg") as HTMLElement;
+      const pillEl = shadow.querySelector(".pill") as HTMLButtonElement;
       modeBtns = {
         element: shadow.querySelector(".m-element") as HTMLButtonElement,
         region: shadow.querySelector(".m-region") as HTMLButtonElement,
         fullpage: shadow.querySelector(".m-fullpage") as HTMLButtonElement,
       };
 
-      (shadow.querySelector(".close") as HTMLElement).addEventListener("click", () => {
-        if (host) host.style.display = "none";
+      // --- drag (grip handle), with position persisted across reloads ----------
+      let pos = { x: 0, y: 16 };
+      try {
+        const saved = localStorage.getItem("varys_widget_pos");
+        if (saved) pos = JSON.parse(saved);
+      } catch {
+        /* ignore */
+      }
+      const applyPos = () => {
+        wrapEl.style.transform = `translate(calc(-50% + ${pos.x}px), ${pos.y}px)`;
+      };
+      gripEl.addEventListener("pointerdown", (e: PointerEvent) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        const sx = e.clientX;
+        const sy = e.clientY;
+        const ox = pos.x;
+        const oy = pos.y;
+        gripEl.style.cursor = "grabbing";
+        const move = (ev: PointerEvent) => {
+          pos = { x: ox + (ev.clientX - sx), y: oy + (ev.clientY - sy) };
+          applyPos();
+        };
+        const up = () => {
+          document.removeEventListener("pointermove", move);
+          document.removeEventListener("pointerup", up);
+          gripEl.style.cursor = "grab";
+          try {
+            localStorage.setItem("varys_widget_pos", JSON.stringify(pos));
+          } catch {
+            /* ignore */
+          }
+        };
+        document.addEventListener("pointermove", move);
+        document.addEventListener("pointerup", up);
       });
+      applyPos();
+
+      // --- collapse to pill ----------------------------------------------------
+      const applyCollapsed = () => wrapEl.classList.toggle("collapsed", collapsed);
+      (shadow.querySelector(".close") as HTMLElement).addEventListener("click", () => {
+        collapsed = true;
+        applyCollapsed();
+      });
+      pillEl.addEventListener("click", () => {
+        collapsed = false;
+        applyCollapsed();
+      });
+
       startBtn.addEventListener("click", () => (recording ? stop() : void start()));
       shotBtn.addEventListener("click", () => capture());
       // Re-render on input so Save enables/disables as the name field fills/empties.
@@ -746,7 +963,7 @@ export default defineContentScript({
     // up capturing this page, seeding the counters so names/totals continue. This
     // is what makes the recording (and the panel) survive a login navigation.
     void (async () => {
-      const st = (await browser.runtime.sendMessage({ type: "varys:state" })) as {
+      const st = (await browser.runtime.sendMessage({ type: "varys:state" }).catch(() => null)) as {
         recording?: boolean;
         stepCount?: number;
         screenshots?: number;

@@ -1,0 +1,17 @@
+// Example brand theme — "Globex". A green-forward brand; same override pattern as
+// acme.scss. Apply with `data-brand="globex"`.
+
+[data-brand="globex"] {
+  --color-brand-50: #e7f6ee;
+  --color-brand-100: #c4e9d3;
+  --color-brand-200: #8fd4a9;
+  --color-brand-300: #5abe7f;
+  --color-brand-400: #2fa860;
+  --color-brand-500: #178f4a; // Globex green
+  --color-brand-600: #11763d;
+  --color-brand-700: #0d5d30;
+  --color-brand-800: #094423;
+  --color-brand-900: #062c17;
+
+  --color-focus-ring: rgba(23, 143, 74, 0.32);
+}

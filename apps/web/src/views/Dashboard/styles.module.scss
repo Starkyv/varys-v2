@@ -1,0 +1,55 @@
+@use "../../styles/mixins" as *;
+
+.dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-20);
+}
+
+.kpiGrid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-20);
+}
+
+/* When the metrics read-model fails, the error spans the whole KPI row (the matrix,
+   alerts and trend widgets below stay visible — one failing section, not a blank page). */
+.kpiError {
+  grid-column: 1 / -1;
+}
+
+.matrixRow {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: var(--space-20);
+  align-items: start;
+}
+
+.splitRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-20);
+}
+
+/* The Reveal wrappers are display:block by default; make them fill grid cells. */
+.matrixRow > *,
+.splitRow > *,
+.kpiGrid > * {
+  min-width: 0;
+}
+
+@include mq-down("lg") {
+  .kpiGrid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .matrixRow,
+  .splitRow {
+    grid-template-columns: 1fr;
+  }
+}
+
+@include mq-down("sm") {
+  .kpiGrid {
+    grid-template-columns: 1fr;
+  }
+}
