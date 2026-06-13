@@ -31,7 +31,22 @@ let markerSeq = 0;
  */
 export async function resolve(page: Page, fp: Fingerprint): Promise<ResolveResult | null> {
   const token = `loc${++markerSeq}`;
-  const outcome = await page.evaluate(scoreInPage, { fp, MARKER, token });
+  // `scoreInPage` is serialized into the page via `.toString()`. Bundlers that keep
+  // function names (esbuild's `keepNames`, used by tsx in the worker) rewrite its inner
+  // helper consts to call a `__name(fn, "…")` runtime helper that doesn't exist in the
+  // page → "ReferenceError: __name is not defined". Run it through a function built from
+  // a raw string (which the bundler never transpiles) that shims `__name` first; harmless
+  // when no such helper was injected (e.g. under vitest).
+  const body = `var __name = function (f) { return f; }; return (${"_SRC_"})(arg);`.replace(
+    "_SRC_",
+    () => scoreInPage.toString(),
+  );
+  const runInPage = new Function("arg", body) as (arg: {
+    fp: Fingerprint;
+    MARKER: string;
+    token: string;
+  }) => { matchedSignal: string; healed: boolean } | null;
+  const outcome = await page.evaluate(runInPage, { fp, MARKER, token });
   if (!outcome) return null;
   return {
     locator: page.locator(`[${MARKER}="${token}"]`).first(),
