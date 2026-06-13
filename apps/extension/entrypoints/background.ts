@@ -44,17 +44,24 @@ function withState<T>(fn: (s: RecState) => { next?: RecState; result: T }): Prom
   return run;
 }
 
-async function save(): Promise<{ ok: boolean; status?: number; id?: string; error?: string }> {
+async function save(
+  name?: string,
+): Promise<{ ok: boolean; status?: number; id?: string; error?: string }> {
   const s = await withState((st) => ({ result: st }));
   if (!s.steps.length || !s.viewport) {
     return { ok: false, error: "nothing recorded yet" };
+  }
+  // A name is required: prefer the one supplied at save time, else the stored name.
+  const testName = (name ?? s.name ?? "").trim();
+  if (!testName) {
+    return { ok: false, error: "a test name is required" };
   }
   // Declare the recording's variables (derived from its {{tokens}}) so the API and
   // the env editor know what it needs. The background store keeps only steps, so this
   // is where the declared list is attached.
   const variables = variablesFromSteps(s.steps);
   const definition: TestDefinition = {
-    name: s.name,
+    name: testName,
     viewport: s.viewport,
     steps: s.steps,
     ...(variables.length ? { variables } : {}),
@@ -140,7 +147,7 @@ export default defineBackground(() => {
           },
         }));
       case "varys:save":
-        return save();
+        return save(msg.name as string | undefined);
       default:
         return undefined;
     }

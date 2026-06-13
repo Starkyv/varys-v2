@@ -52,6 +52,7 @@ export default defineContentScript({
     let confirmEl: HTMLElement;
     let startBtn: HTMLButtonElement;
     let shotBtn: HTMLButtonElement;
+    let nameEl: HTMLInputElement;
     let saveBtn: HTMLButtonElement;
     let cancelBtn: HTMLButtonElement;
     let modeBtns: Record<CaptureMode, HTMLButtonElement>;
@@ -567,12 +568,20 @@ export default defineContentScript({
     };
 
     const save = async () => {
+      const name = nameEl.value.trim();
+      if (!name) {
+        // A name is required before saving — surface it and focus the field.
+        resultEl.textContent = "Enter a test name before saving.";
+        nameEl.focus();
+        return;
+      }
       resultEl.textContent = "Saving…";
       // biome-ignore lint/suspicious/noExplicitAny: cross-context message response
-      const res: any = await browser.runtime.sendMessage({ type: "varys:save" });
+      const res: any = await browser.runtime.sendMessage({ type: "varys:save", name });
       if (res?.ok) {
         // Saved → clear the recording so it doesn't linger into the next session.
         discard();
+        nameEl.value = "";
         resultEl.textContent = `Saved ✓  test ${res.id ?? ""}`;
         render();
       } else {
@@ -599,7 +608,8 @@ export default defineContentScript({
       startBtn.textContent = recording ? "■ Stop recording" : "● Start recording";
       shotBtn.disabled = !recording || busy;
       shotBtn.textContent = captureLabel();
-      saveBtn.disabled = totalSteps === 0;
+      // Save requires both recorded steps and a non-empty test name.
+      saveBtn.disabled = totalSteps === 0 || nameEl.value.trim() === "";
       // Discard the current recording: "Cancel" while live, "Clear" once stopped.
       cancelBtn.textContent = recording ? "✕ Cancel recording" : "✕ Clear recording";
       cancelBtn.disabled = busy || (!recording && totalSteps === 0);
@@ -655,6 +665,9 @@ export default defineContentScript({
           .cbtn { border: 1px solid #d0d7de; background: #fff; border-radius: 6px; padding: 3px 8px;
                   font: inherit; font-size: 11px; cursor: pointer; }
           .cbtn[aria-pressed="true"] { background: #1f6feb; color: #fff; border-color: #1f6feb; }
+          .namelabel { display: block; font-size: 11px; color: #555; margin: 8px 0 0; }
+          .name { display: block; width: 100%; box-sizing: border-box; margin-top: 4px; padding: 6px 8px;
+                  border: 1px solid #d0d7de; border-radius: 6px; font: inherit; font-size: 12px; }
         </style>
         <div class="panel">
           <div class="row">
@@ -670,6 +683,9 @@ export default defineContentScript({
           </div>
           <button class="action shot">📷 Capture an element</button>
           <div class="confirm"></div>
+          <label class="namelabel">Test name
+            <input class="name" type="text" placeholder="e.g. Login + briefs" />
+          </label>
           <button class="action save">Save test</button>
           <button class="action cancel">✕ Clear recording</button>
           <p class="result"></p>
@@ -681,6 +697,7 @@ export default defineContentScript({
       confirmEl = shadow.querySelector(".confirm") as HTMLElement;
       startBtn = shadow.querySelector(".start") as HTMLButtonElement;
       shotBtn = shadow.querySelector(".shot") as HTMLButtonElement;
+      nameEl = shadow.querySelector(".name") as HTMLInputElement;
       saveBtn = shadow.querySelector(".save") as HTMLButtonElement;
       cancelBtn = shadow.querySelector(".cancel") as HTMLButtonElement;
       modeBtns = {
@@ -694,6 +711,8 @@ export default defineContentScript({
       });
       startBtn.addEventListener("click", () => (recording ? stop() : void start()));
       shotBtn.addEventListener("click", () => capture());
+      // Re-render on input so Save enables/disables as the name field fills/empties.
+      nameEl.addEventListener("input", () => render());
       saveBtn.addEventListener("click", () => void save());
       cancelBtn.addEventListener("click", () => cancel());
       modeBtns.element.addEventListener("click", () => setMode("element"));
