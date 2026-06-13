@@ -47,7 +47,7 @@ describe("locator resolve", () => {
 
   it("returns null when nothing matches", async () => {
     await page.setContent(`<section>Different</section>`);
-    expect(await resolve(page, fp)).toBeNull();
+    expect(await resolve(page, fp, { timeoutMs: 300 })).toBeNull();
   });
 
   // The briefings-card failure mode: recorded on an older build, so the hashed class
@@ -100,12 +100,12 @@ describe("locator resolve", () => {
   it("does not resolve on a build-hashed class alone (it's only corroboration)", async () => {
     await page.setContent(`<div class="X__a___1">content</div>`);
     const onlyHashed: Fingerprint = { tag: "div", moduleClasses: ["X__a___1"] };
-    expect(await resolve(page, onlyHashed)).toBeNull();
+    expect(await resolve(page, onlyHashed, { timeoutMs: 300 })).toBeNull();
   });
 
   it("refuses to guess between indistinguishable candidates", async () => {
     await page.setContent(`<div>Same</div><div>Same</div>`);
     const ambiguous: Fingerprint = { tag: "div", accessibleName: "Same", text: "Same" };
-    expect(await resolve(page, ambiguous)).toBeNull();
+    expect(await resolve(page, ambiguous, { timeoutMs: 300 })).toBeNull();
   });
 });

@@ -28,8 +28,20 @@ let markerSeq = 0;
  * and the step is surfaced for repair, rather than silently acting on the wrong node.
  * The whole fingerprint bundle is fused here, so the matcher can evolve without
  * re-recording (DESIGN §2).
+ *
+ * **Auto-wait:** the scorer is a one-shot DOM scan (unlike Playwright's `.click()`/
+ * `.fill()`, which auto-wait for their own target). After a navigation that mounts a
+ * SPA — e.g. a login submit landing on the app — the target may not be rendered yet, so
+ * a single scan would miss it and the run would fail spuriously. So poll the scan on an
+ * interval up to `timeoutMs`, returning the first confident winner and null only after
+ * the deadline. Matches Playwright's actionability waiting and fixes the whole class of
+ * "element rendered late after navigation."
  */
-export async function resolve(page: Page, fp: Fingerprint): Promise<ResolveResult | null> {
+export async function resolve(
+  page: Page,
+  fp: Fingerprint,
+  opts?: { timeoutMs?: number; intervalMs?: number },
+): Promise<ResolveResult | null> {
   const token = `loc${++markerSeq}`;
   // `scoreInPage` is serialized into the page via `.toString()`. Bundlers that keep
   // function names (esbuild's `keepNames`, used by tsx in the worker) rewrite its inner
@@ -46,13 +58,21 @@ export async function resolve(page: Page, fp: Fingerprint): Promise<ResolveResul
     MARKER: string;
     token: string;
   }) => { matchedSignal: string; healed: boolean } | null;
-  const outcome = await page.evaluate(runInPage, { fp, MARKER, token });
-  if (!outcome) return null;
-  return {
-    locator: page.locator(`[${MARKER}="${token}"]`).first(),
-    matchedSignal: outcome.matchedSignal,
-    healed: outcome.healed,
-  };
+
+  const intervalMs = opts?.intervalMs ?? 200;
+  const attempts = Math.max(1, Math.ceil((opts?.timeoutMs ?? 5000) / intervalMs));
+  for (let i = 0; i < attempts; i++) {
+    const outcome = await page.evaluate(runInPage, { fp, MARKER, token });
+    if (outcome) {
+      return {
+        locator: page.locator(`[${MARKER}="${token}"]`).first(),
+        matchedSignal: outcome.matchedSignal,
+        healed: outcome.healed,
+      };
+    }
+    if (i < attempts - 1) await page.waitForTimeout(intervalMs);
+  }
+  return null;
 }
 
 /**
