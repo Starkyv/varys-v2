@@ -58,7 +58,31 @@ describe("Trace capture API", () => {
     if (storageDir) await rm(storageDir, { recursive: true, force: true });
   });
 
-  type RunBody = { status: string; traceUrl: string | null };
+  type Step = {
+    index: number;
+    label: string;
+    checkpointName: string | null;
+    startedAt: string;
+    durationMs: number;
+    outcome: "passed" | "failed";
+  };
+  type RunBody = { status: string; traceUrl: string | null; timeline: Step[] };
+
+  // The per-step timeline (Issue 2) is recorded for EVERY run, traced or not:
+  // executed steps in order, with timing present and monotonic start times.
+  const assertTimelineSane = (timeline: Step[]): void => {
+    expect(timeline.length).toBeGreaterThan(0);
+    timeline.forEach((s, i) => {
+      expect(s.index).toBe(timeline[i].index);
+      expect(typeof s.durationMs).toBe("number");
+      expect(s.durationMs).toBeGreaterThanOrEqual(0);
+      if (i > 0) {
+        expect(new Date(s.startedAt).getTime()).toBeGreaterThanOrEqual(
+          new Date(timeline[i - 1].startedAt).getTime(),
+        );
+      }
+    });
+  };
 
   const pollRun = async (runId: string): Promise<RunBody> => {
     for (let i = 0; i < 100; i++) {
@@ -92,6 +116,11 @@ describe("Trace capture API", () => {
     expect(body.status).toBe("needs_review"); // first run seeds a baseline
     expect(typeof body.traceUrl).toBe("string");
 
+    // The step timeline records both executed steps (navigate + screenshot).
+    assertTimelineSane(body.timeline);
+    expect(body.timeline.map((s) => s.outcome)).toEqual(["passed", "passed"]);
+    expect(body.timeline[1].checkpointName).toBe("hero"); // screenshot step joins to its checkpoint
+
     // The hosted-viewer contract: the artifact downloads with permissive CORS,
     // and it's a real (PK-magic) non-empty zip.
     const dl = await request(app.getHttpServer())
@@ -114,6 +143,9 @@ describe("Trace capture API", () => {
 
     expect(body.status).toBe("needs_review");
     expect(body.traceUrl).toBeNull();
+    // The timeline is unconditional — recorded even without a trace.
+    assertTimelineSane(body.timeline);
+    expect(body.timeline).toHaveLength(2);
   });
 
   it("keeps the trace even when the run fails (where it's most useful)", async () => {
@@ -138,5 +170,10 @@ describe("Trace capture API", () => {
       .buffer(true)
       .expect(200);
     expect((dl.body as Buffer).length).toBeGreaterThan(0);
+
+    // The failing step (the unresolved navigate, index 0) is marked in the timeline.
+    assertTimelineSane(body.timeline);
+    const failed = body.timeline.find((s) => s.outcome === "failed");
+    expect(failed?.index).toBe(0);
   });
 });

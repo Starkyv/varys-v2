@@ -24,16 +24,17 @@
 > **Dependency shape:** 1 → 2 *(2 is independent in principle, but edits the same runner
 > step-loop and E2E file — build second).*
 >
-> **Status: 🟡 Issue 1 implemented — `traces.e2e` 3/3 (traced→non-empty zip + CORS,
-> untraced→null traceUrl, traced-failure→trace kept); typecheck 27/27; web build +
-> 18 web unit green; regression suite-runs.e2e 3/3. The trace toggle (Tests + Suites)
-> and "Open timeline" link are the manual click-through gate — restart `pnpm dev` once
-> for the runs.trace / trace_artifact_key DDL. Issue 2 (step timeline) remains.**
+> **Status: 🟢 Both issues implemented — `traces.e2e` 3/3 (trace toggle/capture/CORS +
+> folded step-timeline assertions); typecheck 27/27; web build + 18 web unit green;
+> regression runs.e2e 10/10, suite-runs.e2e 3/3. The trace toggle (Tests + Suites),
+> "Open timeline" link, and per-step durations on the failed-run view are the manual
+> click-through gate — restart `pnpm dev` once for the runs.trace / trace_artifact_key
+> / run_steps DDL.**
 >
 > | Issue | Status |
 > |---|---|
 > | 1 — On-demand trace: toggle → capture → "Open timeline" (full stack) | 🟢 Implemented — `traces.e2e` 3/3; typecheck + web build green; UI manual click-through pending |
-> | 2 — Step timeline foundation (every run) | 🔴 Not started |
+> | 2 — Step timeline foundation (every run) | 🟢 Implemented — folded into `traces.e2e` 3/3; typecheck + web build green; UI manual click-through pending |
 
 ---
 
@@ -69,7 +70,7 @@ pattern as the remembered env selection).
 
 - [x] Single-run and suite-run triggers accept the trace flag; suite children all inherit it; the flag persists on the run row; default off. *(`RunsService.create` takes an options object now; suite trigger threads `trace` to every child.)*
 - [x] Flagged runs store a trace zip (every outcome, incl. failed); unflagged runs never start tracing and have a null trace URL. *(Runner starts tracing only when flagged; stop+upload+persist in `finally`, best-effort, never masks the replay error.)*
-- [x] Run view exposes `traceUrl`; "Open timeline" renders only when non-null and opens the hosted Trace Viewer with the absolute artifact URL; artifacts route sends CORS headers on GET (`Access-Control-Allow-Origin: *`). *(Manual click-through for the viewer roundtrip pending — no UI tests.)*
+- [x] Run view exposes `traceUrl`; "Open timeline" renders only when non-null and opens the trace viewer with the absolute artifact URL; artifacts route sends CORS headers on GET (`Access-Control-Allow-Origin: *`). **Viewer is self-hosted** at `/trace-viewer` (API serves the `playwright-core` bundle, proxied in dev) — same-origin as the artifact, since the hosted `trace.playwright.dev` can't fetch a localhost artifact (browser public→local block). *(Manual click-through for the viewer roundtrip pending — no UI tests.)*
 - [x] "Keep trace" checkbox on both trigger surfaces, remembered in localStorage (shared `varys:keepTrace` key). *(Manual click-through pending — no UI tests.)*
 - [x] One new E2E file (`traces.e2e`, chromium, run per-file, 3/3) pinning exactly: traced run → terminal with non-empty (PK-magic) zip artifact + CORS header; untraced run → null traceUrl; traced *failed* run still keeps its trace. No other automated tests.
 - [x] DDL additive (`runs.trace` + `runs.trace_artifact_key`); **restart `pnpm dev`** to apply; CORS `@Header` on the artifacts controller (no new controllers needed — trigger routes reuse the existing run/suite controllers with explicit `@Inject`).
@@ -82,7 +83,7 @@ None — can start immediately.
 
 # Issue 2 — Step timeline foundation: per-step rows for every run
 
-**Type:** AFK · **Blocked by:** Issue 1 *(same runner step-loop + same E2E file)* · **Status: 🔴 Not started**
+**Type:** AFK · **Blocked by:** Issue 1 *(same runner step-loop + same E2E file)* · **Status: 🟢 Implemented — folded into `traces.e2e` 3/3; typecheck 27/27; web build + 18 web unit + runs.e2e 10/10 + suite-runs.e2e 3/3 green; UI manual click-through pending.**
 
 ## Parent
 
@@ -106,11 +107,11 @@ sequence in the viewer shows per-step durations for the steps that ran.
 
 ## Acceptance criteria
 
-- [ ] Every run (traced and untraced) records one run_steps row per executed step with index, label, checkpoint name (screenshot steps), started-at, duration, outcome; failing step marked `failed`; unreached steps absent.
-- [ ] Run read-model exposes the step timeline for all runs; existing failed-run `steps`/`failedStepIndex` behavior unchanged.
-- [ ] Failed-run step sequence in the viewer shows durations for executed steps. *(Manual click-through — no UI tests.)*
-- [ ] Step-timeline assertions folded into Issue 1's `traces.e2e` file (timing present and monotonic; failing step marked; recorded even for untraced runs). No new test files.
-- [ ] DDL additive (`run_steps`); **restart `pnpm dev`** to apply; step rows are run output — relational, never in the versioned definition.
+- [x] Every run (traced and untraced) records one run_steps row per executed step with index, label, checkpoint name (screenshot steps), started-at, duration, outcome; failing step marked `failed`; unreached steps absent. *(Runner accumulates rows in the loop + the failing step in catch, persists once in finally, best-effort.)*
+- [x] Run read-model exposes the step timeline (`RunView.timeline: StepRun[]`) for all runs; existing failed-run `steps`/`failedStepIndex` behavior unchanged.
+- [x] Failed-run step sequence in the viewer shows durations for executed steps. *(Manual click-through pending — no UI tests.)*
+- [x] Step-timeline assertions folded into Issue 1's `traces.e2e` file (timing present and monotonic; failing step marked at index 0; recorded even for untraced runs; checkpoint step joins to its name). No new test files.
+- [x] DDL additive (`run_steps`); **restart `pnpm dev`** to apply; step rows are run output — relational, never in the versioned definition.
 
 ## Blocked by
 

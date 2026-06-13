@@ -7,6 +7,7 @@ import {
   environments,
   runResults,
   runs,
+  runSteps,
   testVersions,
 } from "@varys/db";
 import { diffPng } from "@varys/diff-engine";
@@ -92,6 +93,25 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
   // misattributed to a step).
   let failedStepIndex: number | null = null;
   let failedStepLabel = "";
+  // The per-step timeline (every run): accumulated as steps complete, plus the
+  // failing step in the catch, then persisted once in `finally`. The current
+  // step's checkpoint name + start are hoisted so the catch can time the failure.
+  const stepRuns: (typeof runSteps.$inferInsert)[] = [];
+  let currentCheckpointName: string | null = null;
+  let stepStartedAt: Date | null = null;
+  let stepStartMs = 0;
+  const recordStep = (outcome: "passed" | "failed"): void => {
+    if (failedStepIndex == null || stepStartedAt == null) return;
+    stepRuns.push({
+      runId,
+      stepIndex: failedStepIndex,
+      label: failedStepLabel,
+      checkpointName: currentCheckpointName,
+      startedAt: stepStartedAt,
+      durationMs: Date.now() - stepStartMs,
+      outcome,
+    });
+  };
   let browser: Browser | undefined;
   // Context + tracing live at function scope so the trace is stopped, uploaded,
   // and persisted in `finally` — covering the success AND failure paths uniformly,
@@ -144,13 +164,18 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
     for (let i = 0; i < recorded.steps.length; i++) {
       const raw = recorded.steps[i];
       // Optimistically blame this step; the catch reads these if anything throws
-      // (resolution OR execution). Cleared after the loop.
+      // (resolution OR execution). Cleared after the loop. The same fields time
+      // this step for the run_steps timeline (recorded on completion / in catch).
       failedStepIndex = i;
       failedStepLabel = describeStep(raw);
+      currentCheckpointName = raw.type === "screenshot" ? raw.name : null;
+      stepStartedAt = new Date();
+      stepStartMs = Date.now();
       // Resolve this step's tokens now — an unresolved {{token}} fails THIS step.
       const step = profile ? resolveStep(raw, profile) : raw;
       if (step.type === "navigate") {
         await page.goto(step.url, { waitUntil: "networkidle" });
+        recordStep("passed");
         continue;
       }
 
@@ -169,6 +194,7 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
         } else {
           await target.locator.click();
         }
+        recordStep("passed");
         continue;
       }
 
@@ -262,6 +288,8 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
           reviewStates.push("diff");
         }
       }
+      // Checkpoint captured + judged — record the (screenshot) step.
+      recordStep("passed");
     }
     // Every step ran — a later error (close / status write) is not a step failure.
     failedStepIndex = null;
@@ -285,12 +313,24 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
         ? `Step ${failedStepIndex + 1}/${recorded.steps.length} — ${failedStepLabel}: ${base}`
         : base
     ).slice(0, 2000);
+    // Record the failing step in the timeline (with its duration-to-failure).
+    recordStep("failed");
     await db
       .update(runs)
       .set({ status: "failed", error: message, failedStepIndex, updatedAt: new Date() })
       .where(eq(runs.id, runId));
     throw err;
   } finally {
+    // Persist the per-step timeline (every run). Best-effort — a valuable record,
+    // but not worth masking the run outcome or crashing the worker.
+    if (stepRuns.length > 0) {
+      try {
+        await db.insert(runSteps).values(stepRuns);
+      } catch (stepErr) {
+        // eslint-disable-next-line no-console
+        console.error(`[runner] step timeline persist failed for run ${runId}:`, stepErr);
+      }
+    }
     // Stop + store the trace on BOTH paths, while the context is still open. The
     // trigger explicitly asked for it, so it's kept on every outcome (incl.
     // failure, where it's most useful). Best-effort: a trace stop/upload/persist

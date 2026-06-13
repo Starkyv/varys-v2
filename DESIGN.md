@@ -249,9 +249,15 @@ replays.** The recording's screenshot is a *target + preview + mask surface*, no
 - **Powered by Playwright traces** (per-step before/after screenshots, DOM snapshot, network,
   console — timestamped + scrubbable), with **optional video** layered in when toggled on. A
   trace is a richer "what went wrong" record than video.
-- **Trace retention:** retain-on-failure **+ every baseline-seed** (this honors the transcript's
-  "baseline auto-recorded" via the seed *trace*, not video).
-- **Embed Playwright's Trace Viewer** for the MVP; build a custom branded timeline later.
+- **Trace retention:** ~~retain-on-failure + every baseline-seed~~ → **superseded (slice 9
+  shipped): per-trigger on demand only** — a "keep trace" toggle on the run/suite-run trigger;
+  nothing is kept automatically. Revisit auto-retention only if on-demand proves insufficient.
+- **Embed Playwright's Trace Viewer** for the MVP — **self-hosted** at `/trace-viewer` (served
+  by the API from the `playwright-core` bundle) so the "Open timeline" link is same-origin as
+  the trace artifact. (The hosted `trace.playwright.dev` can't fetch a localhost/loopback
+  artifact — browsers block public→local — so self-hosting is required for local dev and works
+  deployed too.) Build a custom branded timeline later. Slice 9 also persists a per-step
+  **run_steps** timeline (every run) as that custom UI's data skeleton.
 
 ---
 
@@ -333,7 +339,7 @@ email notifications · "existing tests as examples" for AI · in-product embedde
 | 6  | Suite runs + parallelism 🟡           | Fan-out/fan-in, suite × env(s), aggregated run reports ✅ — worker parallelism deliberately deferred (children drain sequentially; more worker processes = parallel today) | 4, 5               |
 | 7  | Dashboard                             | Test × env matrix, runs activity feed, per-checkpoint trend sparklines          | 6                  |
 | 8  | Scheduling + notifications            | Cron triggers + Slack/in-app alerts on diffs/failures                           | 6                  |
-| 9  | Timeline + traces                     | Playwright trace capture, retention, embedded Trace Viewer                      | 1                  |
+| 9  | Timeline + traces ✅                  | On-demand Playwright trace capture + embedded Trace Viewer; per-step run_steps timeline (retention = per-trigger toggle, not auto) | 1 |
 | 10 | Auth & multi-user                     | Google SSO + email/password + OIDC, flat authz, audit surfacing                 | —                  |
 | 11 | Cloud storage + retention enforcement | Azure Blob + S3 adapters + tiered cleanup job                                   | —                  |
 | 12 | CI/webhook triggers                   | Pipeline-driven runs                                                            | 6                  |

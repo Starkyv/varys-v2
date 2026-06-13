@@ -1,4 +1,4 @@
-import type { CaptureMode, CheckpointView, Rect, StepLabel } from "@varys/review-contract";
+import type { CaptureMode, CheckpointView, Rect, StepLabel, StepRun } from "@varys/review-contract";
 import { useRef, useState } from "react";
 import {
   useApproveAll,
@@ -15,15 +15,15 @@ function needsReview(cp: CheckpointView): boolean {
 }
 
 /**
- * Build the interim "Open timeline" target: Playwright's hosted Trace Viewer,
- * pointed at this run's trace artifact. The artifact URL is same-origin and
- * relative — the viewer needs it absolute (it fetches the zip FROM THE USER'S
- * BROWSER, so the trace never transits a third party). Swapped for the custom
- * timeline UI later.
+ * Build the interim "Open timeline" target: Playwright's trace viewer, SELF-HOSTED
+ * at our own origin (`/trace-viewer`, served by the API). Same-origin as the trace
+ * artifact, so the browser doesn't block a public→localhost fetch the way the
+ * hosted viewer (trace.playwright.dev) does. Swapped for the custom timeline UI
+ * later. The artifact path is made absolute (same origin) for the `?trace=` param.
  */
 function timelineViewerUrl(traceUrl: string): string {
   const absolute = new URL(traceUrl, window.location.origin).href;
-  return `https://trace.playwright.dev/?trace=${encodeURIComponent(absolute)}`;
+  return `/trace-viewer/index.html?trace=${encodeURIComponent(absolute)}`;
 }
 
 /** Exactly two ways to look this slice (swipe + onion-skin are deferred). */
@@ -87,7 +87,12 @@ export function DiffViewer({ runId }: { runId: string }) {
         </p>
       </header>
       {data.status === "failed" ? (
-        <RunFailure error={data.error} steps={data.steps} failedStepIndex={data.failedStepIndex} />
+        <RunFailure
+          error={data.error}
+          steps={data.steps}
+          failedStepIndex={data.failedStepIndex}
+          timeline={data.timeline}
+        />
       ) : data.checkpoints.length === 0 ? (
         <p role="status" className={styles.notice}>
           {data.status === "queued" || data.status === "running"
@@ -180,12 +185,16 @@ function RunFailure({
   error,
   steps,
   failedStepIndex,
+  timeline,
 }: {
   error: string | null;
   steps: StepLabel[];
   failedStepIndex: number | null;
+  timeline: StepRun[];
 }) {
   const hasSequence = failedStepIndex != null && steps.length > 0;
+  // Durations for the steps that actually ran, keyed by step index.
+  const durationByIndex = new Map(timeline.map((t) => [t.index, t.durationMs]));
 
   return (
     <section className={styles.failure} aria-label="Run failed">
@@ -211,6 +220,9 @@ function RunFailure({
                 </span>
                 <span className={styles.stepNum}>{s.index + 1}</span>
                 <span className={styles.stepLabel}>{s.label}</span>
+                {durationByIndex.has(s.index) && (
+                  <span className={styles.stepNote}>{durationByIndex.get(s.index)} ms</span>
+                )}
                 {state === "notrun" && <span className={styles.stepNote}>didn’t run</span>}
                 {state === "failed" && (
                   <pre className={styles.stepError}>{error ?? "No error message was recorded."}</pre>

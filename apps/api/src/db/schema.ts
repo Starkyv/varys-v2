@@ -3,6 +3,7 @@ export {
   DDL,
   folders,
   runs,
+  runSteps,
   schema,
   suiteRuns,
   suites,

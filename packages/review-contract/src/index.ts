@@ -219,6 +219,28 @@ export interface StepLabel {
   label: string;
 }
 
+/**
+ * One EXECUTED step of a run, with timing and outcome — the per-step timeline
+ * recorded for every run (traced or not). The skeleton the future custom timeline
+ * UI renders; steps never reached are simply absent (derive "didn't run" from the
+ * definition's full step list, as the failed-run view already does).
+ */
+export interface StepRun {
+  /** 0-based position in the run's steps. */
+  index: number;
+  /** Human label (same vocabulary as StepLabel). */
+  label: string;
+  /** The checkpoint name when this step is a screenshot step; null otherwise.
+   *  The join key to the matching CheckpointView. */
+  checkpointName: string | null;
+  /** When the step started executing, ISO 8601. */
+  startedAt: string;
+  /** How long the step took, milliseconds (to-failure for the failing step). */
+  durationMs: number;
+  /** `passed` (completed) | `failed` (the step that threw). */
+  outcome: "passed" | "failed";
+}
+
 /** A run and its checkpoints, with the identifying context the reviewer needs. */
 export interface RunView {
   runId: string;
@@ -242,5 +264,8 @@ export interface RunView {
   /** Artifact URL of the kept Playwright trace zip, or null when the trigger
    *  didn't request one (traces are per-trigger on demand only). */
   traceUrl: string | null;
+  /** The per-step execution timeline (every run): one entry per step that ran,
+   *  in order. Empty until the run starts executing. */
+  timeline: StepRun[];
   checkpoints: CheckpointView[];
 }

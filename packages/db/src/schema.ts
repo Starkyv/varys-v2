@@ -138,6 +138,29 @@ export const runResults = pgTable("run_results", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+/**
+ * Per-step run timeline — one row per EXECUTED step of a run (every run, traced
+ * or not). The data skeleton the future custom timeline UI renders: index +
+ * label (the `describeStep` vocabulary) + timing + outcome, with `checkpointName`
+ * the join point to run_results for screenshot steps. Steps never reached have
+ * no row (so "didn't run" stays derivable from the definition's full step list).
+ * Run OUTPUT — relational, never part of the versioned definition.
+ */
+export const runSteps = pgTable("run_steps", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  runId: uuid("run_id")
+    .notNull()
+    .references(() => runs.id),
+  stepIndex: integer("step_index").notNull(),
+  label: text("label").notNull(),
+  /** The checkpoint (screenshot) name when this step is a checkpoint; null otherwise. */
+  checkpointName: text("checkpoint_name"),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+  durationMs: integer("duration_ms").notNull(),
+  /** `passed` (step completed) | `failed` (the step that threw). */
+  outcome: text("outcome").notNull(),
+});
+
 /** The current active baseline per (test, checkpoint, environment, viewport). */
 export const baselines = pgTable("baselines", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -174,6 +197,7 @@ export const schema = {
   testVersions,
   runs,
   runResults,
+  runSteps,
   baselines,
   environments,
 };
@@ -255,6 +279,16 @@ CREATE TABLE IF NOT EXISTS run_results (
   healed boolean NOT NULL DEFAULT false,
   resolution text,
   created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS run_steps (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_id uuid NOT NULL REFERENCES runs(id),
+  step_index integer NOT NULL,
+  label text NOT NULL,
+  checkpoint_name text,
+  started_at timestamptz NOT NULL,
+  duration_ms integer NOT NULL,
+  outcome text NOT NULL
 );
 CREATE TABLE IF NOT EXISTS baselines (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

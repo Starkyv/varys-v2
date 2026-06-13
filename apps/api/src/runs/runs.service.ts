@@ -5,7 +5,15 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { baselines, environments, runResults, runs, testVersions, tests } from "@varys/db";
+import {
+  baselines,
+  environments,
+  runResults,
+  runs,
+  runSteps,
+  testVersions,
+  tests,
+} from "@varys/db";
 import { diffPng } from "@varys/diff-engine";
 import { type Boss, enqueueRun } from "@varys/queue";
 import type {
@@ -20,6 +28,7 @@ import type {
   RunSummary,
   RunView,
   StepLabel,
+  StepRun,
   TuningInput,
 } from "@varys/review-contract";
 import { describeStep, type TestDefinition } from "@varys/step-schema";
@@ -142,6 +151,29 @@ export class RunsService {
           }))
         : [];
 
+    // The per-step execution timeline (every run): the steps that actually ran,
+    // in order, with timing + outcome — the custom-timeline foundation.
+    const stepRows = await this.db
+      .select({
+        index: runSteps.stepIndex,
+        label: runSteps.label,
+        checkpointName: runSteps.checkpointName,
+        startedAt: runSteps.startedAt,
+        durationMs: runSteps.durationMs,
+        outcome: runSteps.outcome,
+      })
+      .from(runSteps)
+      .where(eq(runSteps.runId, runId))
+      .orderBy(runSteps.stepIndex);
+    const timeline: StepRun[] = stepRows.map((s) => ({
+      index: s.index,
+      label: s.label,
+      checkpointName: s.checkpointName,
+      startedAt: s.startedAt.toISOString(),
+      durationMs: s.durationMs,
+      outcome: s.outcome as "passed" | "failed",
+    }));
+
     return {
       runId,
       status: row.status,
@@ -152,6 +184,7 @@ export class RunsService {
       steps,
       failedStepIndex: row.failedStepIndex ?? null,
       traceUrl: url(row.traceArtifactKey),
+      timeline,
       checkpoints: results.map(
         (r): CheckpointView => ({
           name: r.name,
