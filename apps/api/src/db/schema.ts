@@ -4,6 +4,7 @@ export {
   folders,
   runs,
   schema,
+  suiteRuns,
   suites,
   suiteTests,
   tests,

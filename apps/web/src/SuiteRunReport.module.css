@@ -1,12 +1,43 @@
-.list {
+.report {
   font-family: system-ui, Arial, sans-serif;
   max-width: 900px;
   margin: 0 auto;
   padding: 16px;
 }
 
-.list h1 {
+.crumbs {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.crumbs a {
+  color: #1f6feb;
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.header h1 {
   font-size: 1.25rem;
+  margin: 0;
+}
+
+.meta {
+  color: #888;
+  font-size: 0.85rem;
+  margin: 6px 0 0;
+}
+
+.counts {
+  color: #555;
+  font-size: 0.9rem;
+  margin: 10px 0 16px;
 }
 
 .items {
@@ -75,28 +106,6 @@
   font-size: 0.85rem;
 }
 
-.suiteTag {
-  font-size: 0.7rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  color: #6639ba;
-  background: #fbefff;
-  border-radius: 999px;
-  padding: 2px 8px;
-  vertical-align: middle;
-}
-
-.counts {
-  color: #57606a;
-  font-size: 0.85rem;
-}
-
-.time {
-  color: #888;
-  font-size: 0.85rem;
-}
-
 .errorLine {
   flex-basis: 100%;
   color: #b00020;
@@ -117,10 +126,4 @@
   font-family: system-ui, Arial, sans-serif;
   color: #b00020;
   padding: 8px 16px;
-}
-
-.empty {
-  font-family: system-ui, Arial, sans-serif;
-  color: #555;
-  padding: 16px;
 }

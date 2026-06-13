@@ -326,16 +326,16 @@ email notifications · "existing tests as examples" for AI · in-product embedde
 | #  | Slice                                 | Scope (one line)                                                                 | Depends on         |
 |----|---------------------------------------|----------------------------------------------------------------------------------|--------------------|
 | 1  | MVP ✅                                | Record → replay → diff one element (1 test, 1 env, manual, API review)          | —                  |
-| 2  | Visual review UI                      | Diff viewer (side-by-side + highlight) + in-browser approve/reject + irreversible confirm | 1          |
-| 3  | Multi-checkpoint + capture modes      | Many checkpoints/test, full-page & region modes, recorder/in-viewer masking     | 1                  |
-| 4  | Full multi-environment + variable UX  | Env management, per-env profiles, inline variable confirm, env-agnostic guarantees | 1               |
-| 5  | Organization                          | Folders + tags + suites (saved selection = run unit)                            | —                  |
-| 6  | Suite runs + parallelism              | Fan-out/fan-in, suite × env(s), aggregated run reports                          | 4, 5               |
+| 2  | Visual review UI ✅                   | Diff viewer (side-by-side + highlight) + in-browser approve/reject + irreversible confirm | 1          |
+| 3  | Multi-checkpoint + capture modes ✅   | Many checkpoints/test, full-page & region modes, recorder/in-viewer masking     | 1                  |
+| 4  | Full multi-environment + variable UX ✅ | Env management, per-env profiles, inline variable confirm, env-agnostic guarantees | 1               |
+| 5  | Organization ✅                       | Folders + tags + suites (saved selection = run unit)                            | —                  |
+| 6  | Suite runs + parallelism 🟡           | Fan-out/fan-in, suite × env(s), aggregated run reports ✅ — worker parallelism deliberately deferred (children drain sequentially; more worker processes = parallel today) | 4, 5               |
 | 7  | Dashboard                             | Test × env matrix, runs activity feed, per-checkpoint trend sparklines          | 6                  |
 | 8  | Scheduling + notifications            | Cron triggers + Slack/in-app alerts on diffs/failures                           | 6                  |
 | 9  | Timeline + traces                     | Playwright trace capture, retention, embedded Trace Viewer                      | 1                  |
 | 10 | Auth & multi-user                     | Google SSO + email/password + OIDC, flat authz, audit surfacing                 | —                  |
 | 11 | Cloud storage + retention enforcement | Azure Blob + S3 adapters + tiered cleanup job                                   | —                  |
 | 12 | CI/webhook triggers                   | Pipeline-driven runs                                                            | 6                  |
-| 13 | Scored-locator upgrade                | Replace ranked matcher with confidence scoring (no re-record)                   | 1                  |
+| 13 | Scored-locator upgrade ✅             | Replace ranked matcher with confidence scoring (no re-record)                   | 1                  |
 | 14 | Claude/MCP authoring (Phase 2)        | MCP server → live-session authoring → draft → promote (likely 2 PRDs)           | Most of the above  |

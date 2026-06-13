@@ -16,6 +16,8 @@ import {
   fetchRuns,
   fetchRunView,
   fetchSuite,
+  fetchSuiteRun,
+  fetchSuiteRuns,
   fetchSuites,
   fetchTags,
   fetchTests,
@@ -24,6 +26,7 @@ import {
   reEvaluateCheckpoint,
   renameFolder,
   runTest,
+  triggerSuiteRun,
   updateSuite,
   type UpdateEnvironmentBody,
   type UpdateTestBody,
@@ -142,6 +145,50 @@ export function useDeleteSuite() {
   return useMutation({
     mutationFn: (id: string) => deleteSuite(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: suitesQueryKey() }),
+  });
+}
+
+export function suiteRunsQueryKey() {
+  return ["suite-runs"] as const;
+}
+
+export function suiteRunQueryKey(id: string) {
+  return ["suite-run", id] as const;
+}
+
+/** The suite-run history (aggregates). Polled so derived statuses advance as the
+ *  worker drains the fan-out. */
+export function useSuiteRuns() {
+  return useQuery({
+    queryKey: suiteRunsQueryKey(),
+    queryFn: fetchSuiteRuns,
+    refetchInterval: 3000,
+  });
+}
+
+/** One suite-run report. Polls while any child is still in flight, then stops —
+ *  a terminal report only changes through review actions, not on its own. */
+export function useSuiteRun(id: string) {
+  return useQuery({
+    queryKey: suiteRunQueryKey(id),
+    queryFn: () => fetchSuiteRun(id),
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === "queued" || status === "running" ? 3000 : false;
+    },
+  });
+}
+
+/** Trigger `suite × env(s)`, then refresh the histories the fan-out lands in. */
+export function useTriggerSuiteRun() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { suiteId: string; environmentIds: string[] }) =>
+      triggerSuiteRun(vars.suiteId, vars.environmentIds),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: suiteRunsQueryKey() });
+      qc.invalidateQueries({ queryKey: needsReviewQueryKey() });
+    },
   });
 }
 

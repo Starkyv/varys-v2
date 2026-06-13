@@ -50,7 +50,11 @@ export class RunsService {
     @Inject(STORAGE) private readonly storage: StorageAdapter,
   ) {}
 
-  async create(testId: string, environmentId?: string): Promise<CreatedRun> {
+  async create(
+    testId: string,
+    environmentId?: string,
+    suiteRunId?: string,
+  ): Promise<CreatedRun> {
     const [version] = await this.db
       .select({ id: testVersions.id })
       .from(testVersions)
@@ -64,6 +68,7 @@ export class RunsService {
       .values({
         testVersionId: version.id,
         environmentId: environmentId ?? null,
+        suiteRunId: suiteRunId ?? null,
         status: "queued",
       })
       .returning({ id: runs.id });
@@ -191,7 +196,9 @@ export class RunsService {
     return env?.name ?? ENVIRONMENT;
   }
 
-  /** Every run, newest first — the Runs history (all outcomes, incl. passed/failed). */
+  /** Every STANDALONE run, newest first — the Runs history (all outcomes).
+   *  Suite-run children are excluded: they surface through their parent's
+   *  aggregate row + report, so one fan-out doesn't flood the flat list. */
   async listRuns(limit = 100): Promise<RunSummary[]> {
     const rows = await this.db
       .select({
@@ -205,6 +212,7 @@ export class RunsService {
       .from(runs)
       .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
       .innerJoin(tests, eq(tests.id, testVersions.testId))
+      .where(isNull(runs.suiteRunId))
       .orderBy(desc(runs.createdAt))
       .limit(limit);
 

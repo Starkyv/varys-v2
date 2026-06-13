@@ -169,6 +169,48 @@ export interface RunSummary {
   error: string | null;
 }
 
+/** Aggregate child-run counts for a suite run — derived on read, never stored. */
+export interface SuiteRunCounts {
+  total: number;
+  queued: number;
+  running: number;
+  passed: number;
+  needsReview: number;
+  failed: number;
+}
+
+/**
+ * One row in the suite-runs history: a fan-out's parent (`suite × env(s)`,
+ * DESIGN §6) with its derived aggregate. `suiteName` is a trigger-time snapshot,
+ * so the report survives suite deletion/rename.
+ */
+export interface SuiteRunSummary {
+  suiteRunId: string;
+  suiteName: string;
+  /** Distinct environment names the fan-out targeted ("default" when none). */
+  environments: string[];
+  /** Derived from the children: all-queued → queued; any queued/running →
+   *  running; else failed > needs_review > passed. */
+  status: string;
+  counts: SuiteRunCounts;
+  runTimestamp: string;
+}
+
+/** One child inside a suite-run report — an ordinary run, opened via `?run=`. */
+export interface SuiteRunChild {
+  runId: string;
+  testName: string;
+  /** Environment name this child ran against ("default" when none). */
+  environment: string;
+  status: string;
+  error: string | null;
+}
+
+/** The suite-run report: the aggregate plus children in stable test×env order. */
+export interface SuiteRunView extends SuiteRunSummary {
+  children: SuiteRunChild[];
+}
+
 /** One step of a run, as a label for the failed-run step sequence. */
 export interface StepLabel {
   /** 0-based position in the run's steps. */

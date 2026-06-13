@@ -6,6 +6,8 @@ import type {
   ReEvaluation,
   RunSummary,
   RunView,
+  SuiteRunSummary,
+  SuiteRunView,
   SuiteSummary,
   SuiteView,
   TestSummary,
@@ -188,6 +190,45 @@ export async function deleteSuite(id: string): Promise<void> {
   if (!res.ok) {
     throw new Error(`Failed to delete suite (${res.status})`);
   }
+}
+
+/** Trigger a suite run — fans out one run per (member test × environment);
+ *  an empty selection runs each test env-less ("default"). */
+export async function triggerSuiteRun(
+  suiteId: string,
+  environmentIds: string[],
+): Promise<{ suiteRunId: string }> {
+  const res = await fetch(`${API_BASE}/suites/${suiteId}/runs`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ environmentIds }),
+  });
+  if (!res.ok) {
+    throw new Error(
+      res.status === 400
+        ? "This suite has no member tests yet — add some before running it"
+        : `Failed to start suite run (${res.status})`,
+    );
+  }
+  return (await res.json()) as { suiteRunId: string };
+}
+
+/** Fetch the suite-run history (aggregates, newest first). */
+export async function fetchSuiteRuns(): Promise<SuiteRunSummary[]> {
+  const res = await fetch(`${API_BASE}/suite-runs`);
+  if (!res.ok) {
+    throw new Error(`Failed to load suite runs (${res.status})`);
+  }
+  return (await res.json()) as SuiteRunSummary[];
+}
+
+/** Fetch one suite-run report (aggregate + per-child rows). */
+export async function fetchSuiteRun(id: string): Promise<SuiteRunView> {
+  const res = await fetch(`${API_BASE}/suite-runs/${id}`);
+  if (!res.ok) {
+    throw new Error(`Failed to load suite run (${res.status})`);
+  }
+  return (await res.json()) as SuiteRunView;
 }
 
 /** Fetch all environments (secrets are names-only). Throws on a non-2xx response. */

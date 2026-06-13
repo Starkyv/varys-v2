@@ -5,6 +5,7 @@ import { DiffViewer } from "./DiffViewer";
 import { EnvironmentsList } from "./EnvironmentsList";
 import { NeedsReviewList } from "./NeedsReviewList";
 import { RunsList } from "./RunsList";
+import { SuiteRunReport } from "./SuiteRunReport";
 import { SuitesList } from "./SuitesList";
 import { TestsList } from "./TestsList";
 
@@ -65,6 +66,10 @@ function Nav({ active }: { active: Tab }) {
 function App() {
   const runId = runIdFromLocation();
   if (runId) return <DiffViewer runId={runId} />;
+
+  // Suite-run report deep link (`?suiteRun=<id>`) — same pattern as `?run=`.
+  const suiteRunId = new URLSearchParams(window.location.search).get("suiteRun");
+  if (suiteRunId) return <SuiteRunReport suiteRunId={suiteRunId} />;
 
   const view = new URLSearchParams(window.location.search).get("view");
   const tab: Tab =

@@ -7,5 +7,8 @@ import { RunsService } from "./runs.service";
   imports: [QueueModule],
   controllers: [RunsController],
   providers: [RunsService],
+  // Exported so a suite-run fan-out creates children through the SAME
+  // single-run path (version pin + enqueue) instead of duplicating it.
+  exports: [RunsService],
 })
 export class RunsModule {}

@@ -156,6 +156,12 @@
   padding: 2px 8px;
 }
 
+.hint {
+  color: #57606a;
+  font-size: 0.8rem;
+  margin: 8px 0 10px;
+}
+
 .notice {
   color: #1a7f37;
   padding: 8px 16px;

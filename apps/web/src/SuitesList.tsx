@@ -3,18 +3,20 @@ import { useState } from "react";
 import {
   useCreateSuite,
   useDeleteSuite,
+  useEnvironments,
   useSuite,
   useSuites,
   useTests,
+  useTriggerSuiteRun,
   useUpdateSuite,
 } from "./queries";
 import styles from "./SuitesList.module.css";
 
 /**
  * The Suites view: a suite is a named, saved selection of tests — THE run unit
- * (DESIGN §5). This view only defines and manages suites (create / rename / pick
- * members / delete); *running* a suite (`suite × env(s)`, fan-out, aggregated
- * reports) arrives with the suite-runs slice — deliberately no Run affordance here.
+ * (DESIGN §5). Defines and manages suites (create / rename / pick members /
+ * delete) and triggers suite runs (`suite × env(s)`): pick environments, Run,
+ * land on the aggregated report (`?suiteRun=`).
  *
  * Manual-verified (no UI tests, per direction).
  */
@@ -49,8 +51,8 @@ export function SuitesList() {
     <main className={styles.list}>
       <h1>Suites</h1>
       <p className={styles.subtitle}>
-        A suite is a saved selection of tests — the unit a suite run will execute against an
-        environment. Running suites arrives in a later slice; for now, define them here.
+        A suite is a saved selection of tests — the run unit. Run one against any set of
+        environments and review the fan-out in its aggregated report.
       </p>
 
       <div className={styles.newRow}>
@@ -107,6 +109,7 @@ function SuiteRow({
   onToggleEdit: () => void;
 }) {
   const del = useDeleteSuite();
+  const [showRun, setShowRun] = useState(false);
 
   const onDelete = () => {
     if (
@@ -125,6 +128,15 @@ function SuiteRow({
         <span className={styles.count}>
           {suite.testCount} test{suite.testCount === 1 ? "" : "s"}
         </span>
+        <button
+          type="button"
+          className={styles.primary}
+          disabled={suite.testCount === 0}
+          title={suite.testCount === 0 ? "Add tests to this suite first" : undefined}
+          onClick={() => setShowRun(!showRun)}
+        >
+          {showRun ? "Close" : "Run…"}
+        </button>
         <button type="button" className={styles.smallBtn} onClick={onToggleEdit}>
           {editing ? "Close" : "Edit"}
         </button>
@@ -142,7 +154,109 @@ function SuiteRow({
           {(del.error as Error).message}
         </p>
       )}
+      {showRun && <RunPanel suiteId={suite.id} onDone={() => setShowRun(false)} />}
       {editing && <SuiteEditor suiteId={suite.id} onDone={onToggleEdit} />}
+    </div>
+  );
+}
+
+/** Remembered env selection for suite runs (ids; stale ones dropped on use). */
+const ENV_SELECTION_KEY = "varys:lastSuiteRunEnvs";
+
+function loadEnvSelection(): string[] {
+  try {
+    const ids: unknown = JSON.parse(window.localStorage.getItem(ENV_SELECTION_KEY) ?? "[]");
+    return Array.isArray(ids) ? ids.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The `suite × env(s)` trigger: pick any set of environments (none = one
+ * env-less "default" run per test) and start the fan-out — then land on the
+ * aggregated report. The selection is remembered for the next run.
+ */
+function RunPanel({ suiteId, onDone }: { suiteId: string; onDone: () => void }) {
+  const envs = useEnvironments();
+  const trigger = useTriggerSuiteRun();
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(loadEnvSelection()));
+
+  const toggle = (id: string) => {
+    const next = new Set(selected);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSelected(next);
+  };
+
+  const onStart = () => {
+    // Send only ids that still exist — a remembered-but-deleted env must not 404.
+    const ids = (envs.data ?? []).filter((e) => selected.has(e.id)).map((e) => e.id);
+    trigger.mutate(
+      { suiteId, environmentIds: ids },
+      {
+        onSuccess: ({ suiteRunId }) => {
+          try {
+            window.localStorage.setItem(ENV_SELECTION_KEY, JSON.stringify(ids));
+          } catch {
+            // Remembering the selection is best-effort.
+          }
+          window.location.href = `?suiteRun=${suiteRunId}`;
+        },
+      },
+    );
+  };
+
+  return (
+    <div className={styles.editor}>
+      {envs.isLoading ? (
+        <p role="status" className={styles.notice}>
+          Loading environments…
+        </p>
+      ) : (envs.data?.length ?? 0) === 0 ? (
+        <p className={styles.hint}>
+          No environments defined — each test runs once against “default”.
+        </p>
+      ) : (
+        <>
+          <ul className={styles.picker}>
+            {envs.data?.map((e) => (
+              <li key={e.id}>
+                <label className={styles.pickRow}>
+                  <input
+                    type="checkbox"
+                    checked={selected.has(e.id)}
+                    onChange={() => toggle(e.id)}
+                  />
+                  <span className={styles.pickName}>{e.name}</span>
+                </label>
+              </li>
+            ))}
+          </ul>
+          <p className={styles.hint}>
+            One run per test per selected environment; none selected = one “default” run per
+            test.
+          </p>
+        </>
+      )}
+      <div className={styles.editorRow}>
+        <button
+          type="button"
+          className={styles.primary}
+          disabled={trigger.isPending || envs.isLoading}
+          onClick={onStart}
+        >
+          {trigger.isPending ? "Starting…" : "Start run"}
+        </button>
+        <button type="button" className={styles.smallBtn} onClick={onDone}>
+          Cancel
+        </button>
+      </div>
+      {trigger.isError && (
+        <p role="alert" className={styles.error}>
+          {(trigger.error as Error).message}
+        </p>
+      )}
     </div>
   );
 }

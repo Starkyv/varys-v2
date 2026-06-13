@@ -63,6 +63,18 @@ export const suiteTests = pgTable(
   (t) => ({ pk: primaryKey({ columns: [t.suiteId, t.testId] }) }),
 );
 
+/** A suite run — the parent of a fan-out: one ordinary child run per
+ *  (member test × environment), DESIGN §6. No aggregate state is stored —
+ *  status/counts are derived on read from the children. The suite FK is
+ *  SET NULL + a name snapshot so reports survive suite deletion/rename. */
+export const suiteRuns = pgTable("suite_runs", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  suiteId: uuid("suite_id").references(() => suites.id, { onDelete: "set null" }),
+  /** Trigger-time snapshot of the suite's name. */
+  suiteName: text("suite_name").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const testVersions = pgTable("test_versions", {
   id: uuid("id").defaultRandom().primaryKey(),
   testId: uuid("test_id")
@@ -89,6 +101,8 @@ export const runs = pgTable("runs", {
     .notNull()
     .references(() => testVersions.id),
   environmentId: uuid("environment_id"),
+  /** The fan-out parent when this run is a suite-run child; null = standalone. */
+  suiteRunId: uuid("suite_run_id").references(() => suiteRuns.id),
   status: text("status").notNull().default("queued"),
   /** Why a `failed` run failed (the replay error) — null otherwise. */
   error: text("error"),
@@ -151,6 +165,7 @@ export const schema = {
   testTags,
   suites,
   suiteTests,
+  suiteRuns,
   testVersions,
   runs,
   runResults,
@@ -191,6 +206,12 @@ CREATE TABLE IF NOT EXISTS suite_tests (
   test_id uuid NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
   PRIMARY KEY (suite_id, test_id)
 );
+CREATE TABLE IF NOT EXISTS suite_runs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  suite_id uuid REFERENCES suites(id) ON DELETE SET NULL,
+  suite_name text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS test_versions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   test_id uuid NOT NULL REFERENCES tests(id),
@@ -213,6 +234,7 @@ CREATE TABLE IF NOT EXISTS runs (
 -- Bring an existing runs table (created before the error column) up to date.
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS error text;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS failed_step_index integer;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS suite_run_id uuid REFERENCES suite_runs(id);
 CREATE TABLE IF NOT EXISTS run_results (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   run_id uuid NOT NULL REFERENCES runs(id),
