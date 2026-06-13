@@ -66,6 +66,37 @@ export interface TestSummary {
    *  require an environment before the test can run (a no-variable test runs without
    *  one). Computed server-side from the latest version's definition. */
   needsEnvironment: boolean;
+  /** The test's folder (organization metadata, relational — never part of the
+   *  versioned definition). Null = Unfiled. */
+  folderId: string | null;
+  folderName: string | null;
+  /** Free-form tags (many-to-many slicing across folder boundaries). */
+  tags: string[];
+}
+
+/** A flat folder — each test's one browsable home (DESIGN §5). */
+export interface FolderSummary {
+  id: string;
+  name: string;
+  /** How many tests currently live in this folder. */
+  testCount: number;
+}
+
+/** A suite — a named, saved selection of tests: the run unit slice 6 executes as
+ *  `suite × env(s)` (DESIGN §5). This slice defines and manages them only. */
+export interface SuiteSummary {
+  id: string;
+  name: string;
+  /** How many tests the suite currently selects. */
+  testCount: number;
+}
+
+/** A suite with its member tests (full summaries, so the UI gets folder/tags/
+ *  needsEnvironment context without extra lookups). */
+export interface SuiteView {
+  id: string;
+  name: string;
+  tests: TestSummary[];
 }
 
 /**

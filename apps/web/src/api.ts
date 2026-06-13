@@ -1,10 +1,13 @@
 import type {
   EnvironmentView,
+  FolderSummary,
   NeedsReviewItem,
   PersistResult,
   ReEvaluation,
   RunSummary,
   RunView,
+  SuiteSummary,
+  SuiteView,
   TestSummary,
   TuningInput,
 } from "@varys/review-contract";
@@ -52,6 +55,139 @@ export async function fetchTests(): Promise<TestSummary[]> {
     throw new Error(`Failed to load tests (${res.status})`);
   }
   return (await res.json()) as TestSummary[];
+}
+
+/** Organization metadata for a test — name, folder (null unfiles), and/or tags
+ *  (full-list replace). Never the definition: the server writes only organization
+ *  rows (no new test version). */
+export interface UpdateTestBody {
+  name?: string;
+  folderId?: string | null;
+  tags?: string[];
+}
+
+/** Rename / (un)file a test. Throws on a non-2xx response. */
+export async function updateTest(id: string, body: UpdateTestBody): Promise<void> {
+  const res = await fetch(`${API_BASE}/tests/${id}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to update test (${res.status})`);
+  }
+}
+
+/** Fetch the distinct tags currently in use (for pickers/filters). */
+export async function fetchTags(): Promise<string[]> {
+  const res = await fetch(`${API_BASE}/tags`);
+  if (!res.ok) {
+    throw new Error(`Failed to load tags (${res.status})`);
+  }
+  return (await res.json()) as string[];
+}
+
+/** Fetch all folders (with test counts). Throws on a non-2xx response. */
+export async function fetchFolders(): Promise<FolderSummary[]> {
+  const res = await fetch(`${API_BASE}/folders`);
+  if (!res.ok) {
+    throw new Error(`Failed to load folders (${res.status})`);
+  }
+  return (await res.json()) as FolderSummary[];
+}
+
+/** Create a folder. 409 (name taken) surfaces as an error. */
+export async function createFolder(name: string): Promise<{ id: string }> {
+  const res = await fetch(`${API_BASE}/folders`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) {
+    throw new Error(
+      res.status === 409 ? `A folder named “${name}” already exists` : `Failed to create folder (${res.status})`,
+    );
+  }
+  return (await res.json()) as { id: string };
+}
+
+/** Rename a folder. 409 (name taken) surfaces as an error. */
+export async function renameFolder(id: string, name: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/folders/${id}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) {
+    throw new Error(
+      res.status === 409 ? `A folder named “${name}” already exists` : `Failed to rename folder (${res.status})`,
+    );
+  }
+}
+
+/** Delete a folder — its tests become Unfiled (never deleted). */
+export async function deleteFolder(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/folders/${id}`, { method: "DELETE" });
+  if (!res.ok) {
+    throw new Error(`Failed to delete folder (${res.status})`);
+  }
+}
+
+/** Fetch all suites (with member counts). Throws on a non-2xx response. */
+export async function fetchSuites(): Promise<SuiteSummary[]> {
+  const res = await fetch(`${API_BASE}/suites`);
+  if (!res.ok) {
+    throw new Error(`Failed to load suites (${res.status})`);
+  }
+  return (await res.json()) as SuiteSummary[];
+}
+
+/** Fetch one suite with its member tests. Throws on a non-2xx response. */
+export async function fetchSuite(id: string): Promise<SuiteView> {
+  const res = await fetch(`${API_BASE}/suites/${id}`);
+  if (!res.ok) {
+    throw new Error(`Failed to load suite (${res.status})`);
+  }
+  return (await res.json()) as SuiteView;
+}
+
+/** Create a suite (optionally with initial members). Returns the new id. */
+export async function createSuite(body: {
+  name: string;
+  testIds?: string[];
+}): Promise<{ id: string }> {
+  const res = await fetch(`${API_BASE}/suites`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to create suite (${res.status})`);
+  }
+  return (await res.json()) as { id: string };
+}
+
+/** Update a suite — rename and/or replace the member list wholesale. */
+export async function updateSuite(
+  id: string,
+  body: { name?: string; testIds?: string[] },
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/suites/${id}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to update suite (${res.status})`);
+  }
+}
+
+/** Delete a suite — memberships only; the member tests are untouched. */
+export async function deleteSuite(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/suites/${id}`, { method: "DELETE" });
+  if (!res.ok) {
+    throw new Error(`Failed to delete suite (${res.status})`);
+  }
 }
 
 /** Fetch all environments (secrets are names-only). Throws on a non-2xx response. */

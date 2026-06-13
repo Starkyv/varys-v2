@@ -4,19 +4,31 @@ import {
   approveAllInRun,
   type CreateEnvironmentBody,
   createEnvironment,
+  createFolder,
+  createSuite,
   type DecisionAction,
   deleteEnvironment,
+  deleteFolder,
+  deleteSuite,
   fetchEnvironments,
+  fetchFolders,
   fetchNeedsReview,
   fetchRuns,
   fetchRunView,
+  fetchSuite,
+  fetchSuites,
+  fetchTags,
   fetchTests,
   persistCheckpointMasks,
   postDecision,
   reEvaluateCheckpoint,
+  renameFolder,
   runTest,
+  updateSuite,
   type UpdateEnvironmentBody,
+  type UpdateTestBody,
   updateEnvironment,
+  updateTest,
 } from "./api";
 
 /** TanStack Query owns the run read-model; the key is reused for invalidation
@@ -64,6 +76,120 @@ export function useNeedsReview() {
 
 export function useTests() {
   return useQuery({ queryKey: testsQueryKey(), queryFn: fetchTests });
+}
+
+export function foldersQueryKey() {
+  return ["folders"] as const;
+}
+
+/** The folders list — drives the Tests view's folder filter + organize affordance. */
+export function useFolders() {
+  return useQuery({ queryKey: foldersQueryKey(), queryFn: fetchFolders });
+}
+
+export function tagsQueryKey() {
+  return ["tags"] as const;
+}
+
+/** The distinct tags in use — drives the tag filter + the organize editor's picker. */
+export function useTags() {
+  return useQuery({ queryKey: tagsQueryKey(), queryFn: fetchTags });
+}
+
+export function suitesQueryKey() {
+  return ["suites"] as const;
+}
+
+export function suiteQueryKey(id: string) {
+  return ["suite", id] as const;
+}
+
+/** The suites list (with member counts) — the Suites tab's main read. */
+export function useSuites() {
+  return useQuery({ queryKey: suitesQueryKey(), queryFn: fetchSuites });
+}
+
+/** One suite with its member tests — fetched when its editor is opened. */
+export function useSuite(id: string) {
+  return useQuery({ queryKey: suiteQueryKey(id), queryFn: () => fetchSuite(id) });
+}
+
+/** Create a suite, then refresh the list. */
+export function useCreateSuite() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { name: string; testIds?: string[] }) => createSuite(body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: suitesQueryKey() }),
+  });
+}
+
+/** Rename / replace members of a suite, then refresh the list + that suite. */
+export function useUpdateSuite() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { id: string; body: { name?: string; testIds?: string[] } }) =>
+      updateSuite(vars.id, vars.body),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: suitesQueryKey() });
+      qc.invalidateQueries({ queryKey: suiteQueryKey(vars.id) });
+    },
+  });
+}
+
+/** Delete a suite (memberships only — tests untouched), then refresh the list. */
+export function useDeleteSuite() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => deleteSuite(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: suitesQueryKey() }),
+  });
+}
+
+/** Rename / (un)file / retag a test, then refresh tests, folder counts, and the
+ *  tags-in-use list (a new tag should appear in pickers immediately). */
+export function useUpdateTest() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { id: string; body: UpdateTestBody }) => updateTest(vars.id, vars.body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: testsQueryKey() });
+      qc.invalidateQueries({ queryKey: foldersQueryKey() });
+      qc.invalidateQueries({ queryKey: tagsQueryKey() });
+    },
+  });
+}
+
+/** Create a folder, then refresh the folder list. */
+export function useCreateFolder() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) => createFolder(name),
+    onSuccess: () => qc.invalidateQueries({ queryKey: foldersQueryKey() }),
+  });
+}
+
+/** Rename a folder; tests carry the folder name, so refresh both. */
+export function useRenameFolder() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { id: string; name: string }) => renameFolder(vars.id, vars.name),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: foldersQueryKey() });
+      qc.invalidateQueries({ queryKey: testsQueryKey() });
+    },
+  });
+}
+
+/** Delete a folder (its tests become Unfiled), then refresh both lists. */
+export function useDeleteFolder() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => deleteFolder(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: foldersQueryKey() });
+      qc.invalidateQueries({ queryKey: testsQueryKey() });
+    },
+  });
 }
 
 export function environmentsQueryKey() {

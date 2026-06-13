@@ -49,6 +49,107 @@
   text-decoration: none;
 }
 
+.folderBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+  font-size: 0.9rem;
+  flex-wrap: wrap;
+}
+
+.folderSpacer {
+  flex: 1;
+}
+
+.folderInput {
+  font: inherit;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  padding: 6px 8px;
+  min-width: 0;
+}
+
+.smallBtn {
+  border: 1px solid #d0d7de;
+  background: #f6f8fa;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.smallBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.smallDanger {
+  color: #b00020;
+  border-color: #f0c0c0;
+  background: #fff;
+}
+
+.folderTag {
+  font-size: 0.78rem;
+  color: #57606a;
+  background: #eaeef2;
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
+.organizeRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  margin: 0 0 4px;
+  background: #f6f8fa;
+  border-radius: 6px;
+  flex-wrap: wrap;
+}
+
+.organizeRow .folderInput {
+  flex: 1;
+}
+
+.tagChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.78rem;
+  color: #0550ae;
+  background: #ddf4ff;
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
+.tagRemove {
+  border: 0;
+  background: none;
+  color: inherit;
+  font-size: 0.9rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.tagEditor {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.tagEditor .folderInput {
+  flex: 1;
+  min-width: 160px;
+}
+
 .badge {
   font-size: 0.72rem;
   text-transform: uppercase;

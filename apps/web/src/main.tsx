@@ -5,6 +5,7 @@ import { DiffViewer } from "./DiffViewer";
 import { EnvironmentsList } from "./EnvironmentsList";
 import { NeedsReviewList } from "./NeedsReviewList";
 import { RunsList } from "./RunsList";
+import { SuitesList } from "./SuitesList";
 import { TestsList } from "./TestsList";
 
 const queryClient = new QueryClient();
@@ -22,7 +23,7 @@ export function runIdFromLocation(loc: Location = window.location): string | nul
   return m ? m[1] : null;
 }
 
-type Tab = "review" | "runs" | "tests" | "environments";
+type Tab = "review" | "runs" | "tests" | "suites" | "environments";
 
 function Nav({ active }: { active: Tab }) {
   const link = (on: boolean) => ({
@@ -51,6 +52,9 @@ function Nav({ active }: { active: Tab }) {
       <a href="?view=tests" style={link(active === "tests")}>
         Tests
       </a>
+      <a href="?view=suites" style={link(active === "suites")}>
+        Suites
+      </a>
       <a href="?view=environments" style={link(active === "environments")}>
         Environments
       </a>
@@ -66,16 +70,20 @@ function App() {
   const tab: Tab =
     view === "tests"
       ? "tests"
-      : view === "environments"
-        ? "environments"
-        : view === "runs"
-          ? "runs"
-          : "review";
+      : view === "suites"
+        ? "suites"
+        : view === "environments"
+          ? "environments"
+          : view === "runs"
+            ? "runs"
+            : "review";
   return (
     <>
       <Nav active={tab} />
       {tab === "tests" ? (
         <TestsList />
+      ) : tab === "suites" ? (
+        <SuitesList />
       ) : tab === "environments" ? (
         <EnvironmentsList />
       ) : tab === "runs" ? (

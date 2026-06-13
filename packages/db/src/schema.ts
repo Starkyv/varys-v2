@@ -4,16 +4,64 @@ import {
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uuid,
 } from "drizzle-orm/pg-core";
 
+/** A flat folder — each test's one browsable home (DESIGN §5; no nesting for MVP).
+ *  Organization metadata only: never part of the versioned definition. */
+export const folders = pgTable("folders", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull().unique(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const tests = pgTable("tests", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull(),
+  /** The test's folder; null = Unfiled. Folder deletion unfiles (SET NULL). */
+  folderId: uuid("folder_id").references(() => folders.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+/** Free-form tags on tests (many-to-many slicing, DESIGN §5 — `release:5.0` style
+ *  namespacing is convention, not schema). Composite PK = a tag attaches at most
+ *  once per test. Organization metadata only — never part of the definition. */
+export const testTags = pgTable(
+  "test_tags",
+  {
+    testId: uuid("test_id")
+      .notNull()
+      .references(() => tests.id, { onDelete: "cascade" }),
+    tag: text("tag").notNull(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.testId, t.tag] }) }),
+);
+
+/** A suite — a named, saved selection of tests: THE run unit (DESIGN §5). Slice 6
+ *  executes `suite × env(s)`; this slice only defines and manages them. */
+export const suites = pgTable("suites", {
   id: uuid("id").defaultRandom().primaryKey(),
   name: text("name").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+/** Suite membership (explicit, many-to-many — a test may be in several suites).
+ *  CASCADE both ways: deleting a suite removes memberships only, never tests. */
+export const suiteTests = pgTable(
+  "suite_tests",
+  {
+    suiteId: uuid("suite_id")
+      .notNull()
+      .references(() => suites.id, { onDelete: "cascade" }),
+    testId: uuid("test_id")
+      .notNull()
+      .references(() => tests.id, { onDelete: "cascade" }),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.suiteId, t.testId] }) }),
+);
 
 export const testVersions = pgTable("test_versions", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -98,7 +146,11 @@ export const environments = pgTable("environments", {
 });
 
 export const schema = {
+  folders,
   tests,
+  testTags,
+  suites,
+  suiteTests,
   testVersions,
   runs,
   runResults,
@@ -116,6 +168,28 @@ CREATE TABLE IF NOT EXISTS tests (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   name text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS folders (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL UNIQUE,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+-- Bring an existing tests table up to date; folder deletion unfiles via SET NULL.
+ALTER TABLE tests ADD COLUMN IF NOT EXISTS folder_id uuid REFERENCES folders(id) ON DELETE SET NULL;
+CREATE TABLE IF NOT EXISTS test_tags (
+  test_id uuid NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+  tag text NOT NULL,
+  PRIMARY KEY (test_id, tag)
+);
+CREATE TABLE IF NOT EXISTS suites (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS suite_tests (
+  suite_id uuid NOT NULL REFERENCES suites(id) ON DELETE CASCADE,
+  test_id uuid NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+  PRIMARY KEY (suite_id, test_id)
 );
 CREATE TABLE IF NOT EXISTS test_versions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
