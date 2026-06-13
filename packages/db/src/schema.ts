@@ -103,6 +103,11 @@ export const runs = pgTable("runs", {
   environmentId: uuid("environment_id"),
   /** The fan-out parent when this run is a suite-run child; null = standalone. */
   suiteRunId: uuid("suite_run_id").references(() => suiteRuns.id),
+  /** Whether the trigger asked for a Playwright trace. On-demand ONLY — there is
+   *  no automatic keep on failure/seed (decided deviation from DESIGN §9). */
+  trace: boolean("trace").notNull().default(false),
+  /** Where the kept trace zip lives; null = none requested (or capture failed). */
+  traceArtifactKey: text("trace_artifact_key"),
   status: text("status").notNull().default("queued"),
   /** Why a `failed` run failed (the replay error) — null otherwise. */
   error: text("error"),
@@ -235,6 +240,8 @@ CREATE TABLE IF NOT EXISTS runs (
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS error text;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS failed_step_index integer;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS suite_run_id uuid REFERENCES suite_runs(id);
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS trace boolean NOT NULL DEFAULT false;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS trace_artifact_key text;
 CREATE TABLE IF NOT EXISTS run_results (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   run_id uuid NOT NULL REFERENCES runs(id),

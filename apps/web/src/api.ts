@@ -197,11 +197,12 @@ export async function deleteSuite(id: string): Promise<void> {
 export async function triggerSuiteRun(
   suiteId: string,
   environmentIds: string[],
+  trace?: boolean,
 ): Promise<{ suiteRunId: string }> {
   const res = await fetch(`${API_BASE}/suites/${suiteId}/runs`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ environmentIds }),
+    body: JSON.stringify({ environmentIds, trace: trace ?? false }),
   });
   if (!res.ok) {
     throw new Error(
@@ -298,11 +299,15 @@ export async function deleteEnvironment(id: string): Promise<void> {
 export async function runTest(
   testId: string,
   environmentId?: string,
+  trace?: boolean,
 ): Promise<{ runId: string }> {
+  const body: { testId: string; environmentId?: string; trace?: boolean } = { testId };
+  if (environmentId) body.environmentId = environmentId;
+  if (trace) body.trace = true;
   const res = await fetch(`${API_BASE}/runs`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(environmentId ? { testId, environmentId } : { testId }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     throw new Error(`Failed to start run (${res.status})`);

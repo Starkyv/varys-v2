@@ -162,6 +162,8 @@ function SuiteRow({
 
 /** Remembered env selection for suite runs (ids; stale ones dropped on use). */
 const ENV_SELECTION_KEY = "varys:lastSuiteRunEnvs";
+/** Shared with the Tests Run action — one "keep trace" preference across triggers. */
+const TRACE_KEY = "varys:keepTrace";
 
 function loadEnvSelection(): string[] {
   try {
@@ -181,6 +183,9 @@ function RunPanel({ suiteId, onDone }: { suiteId: string; onDone: () => void }) 
   const envs = useEnvironments();
   const trigger = useTriggerSuiteRun();
   const [selected, setSelected] = useState<Set<string>>(() => new Set(loadEnvSelection()));
+  const [keepTrace, setKeepTrace] = useState<boolean>(
+    () => window.localStorage.getItem(TRACE_KEY) === "1",
+  );
 
   const toggle = (id: string) => {
     const next = new Set(selected);
@@ -189,11 +194,16 @@ function RunPanel({ suiteId, onDone }: { suiteId: string; onDone: () => void }) 
     setSelected(next);
   };
 
+  const chooseTrace = (on: boolean) => {
+    setKeepTrace(on);
+    window.localStorage.setItem(TRACE_KEY, on ? "1" : "0");
+  };
+
   const onStart = () => {
     // Send only ids that still exist — a remembered-but-deleted env must not 404.
     const ids = (envs.data ?? []).filter((e) => selected.has(e.id)).map((e) => e.id);
     trigger.mutate(
-      { suiteId, environmentIds: ids },
+      { suiteId, environmentIds: ids, trace: keepTrace },
       {
         onSuccess: ({ suiteRunId }) => {
           try {
@@ -239,6 +249,12 @@ function RunPanel({ suiteId, onDone }: { suiteId: string; onDone: () => void }) 
           </p>
         </>
       )}
+      <label className={styles.editorRow} title="Keep a Playwright trace for every run in this fan-out">
+        <input type="checkbox" checked={keepTrace} onChange={(e) => chooseTrace(e.target.checked)} />
+        <span className={styles.hint} style={{ margin: 0 }}>
+          Keep trace for each run
+        </span>
+      </label>
       <div className={styles.editorRow}>
         <button
           type="button"

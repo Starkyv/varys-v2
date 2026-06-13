@@ -38,8 +38,12 @@ export class SuitesController {
 
   // Trigger `suite × env(s)`: fans out one child run per (member test ×
   // environment). Empty/omitted environmentIds ⇒ env-less "default" children.
+  // `trace` (per-trigger on demand) applies to every child.
   @Post(":id/runs")
-  run(@Param("id") id: string, @Body() body: { environmentIds?: string[] }) {
-    return this.suiteRuns.trigger(id, body?.environmentIds);
+  run(
+    @Param("id") id: string,
+    @Body() body: { environmentIds?: string[]; trace?: boolean },
+  ) {
+    return this.suiteRuns.trigger(id, body?.environmentIds, body?.trace);
   }
 }

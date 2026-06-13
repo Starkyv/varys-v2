@@ -14,6 +14,18 @@ function needsReview(cp: CheckpointView): boolean {
   return (cp.reviewState === "pending-baseline" || cp.reviewState === "diff") && !cp.resolution;
 }
 
+/**
+ * Build the interim "Open timeline" target: Playwright's hosted Trace Viewer,
+ * pointed at this run's trace artifact. The artifact URL is same-origin and
+ * relative — the viewer needs it absolute (it fetches the zip FROM THE USER'S
+ * BROWSER, so the trace never transits a third party). Swapped for the custom
+ * timeline UI later.
+ */
+function timelineViewerUrl(traceUrl: string): string {
+  const absolute = new URL(traceUrl, window.location.origin).href;
+  return `https://trace.playwright.dev/?trace=${encodeURIComponent(absolute)}`;
+}
+
 /** Exactly two ways to look this slice (swipe + onion-skin are deferred). */
 type ViewMode = "side-by-side" | "overlay";
 
@@ -59,6 +71,19 @@ export function DiffViewer({ runId }: { runId: string }) {
         <h1>{data.testName}</h1>
         <p className={styles.meta}>
           {data.environment} · {new Date(data.runTimestamp).toLocaleString()} · {data.status}
+          {data.traceUrl && (
+            <>
+              {" · "}
+              <a
+                className={styles.traceLink}
+                href={timelineViewerUrl(data.traceUrl)}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open timeline ↗
+              </a>
+            </>
+          )}
         </p>
       </header>
       {data.status === "failed" ? (

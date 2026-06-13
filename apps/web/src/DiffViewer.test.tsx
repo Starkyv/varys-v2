@@ -22,6 +22,7 @@ const diffRun: RunView = {
   error: null,
   steps: [],
   failedStepIndex: null,
+  traceUrl: null,
   checkpoints: [
     {
       name: "hero",
@@ -48,6 +49,7 @@ const seedRun: RunView = {
   error: null,
   steps: [],
   failedStepIndex: null,
+  traceUrl: null,
   checkpoints: [
     {
       name: "hero",
@@ -197,6 +199,7 @@ describe("DiffViewer", () => {
         { index: 2, label: 'checkpoint "hero" (element)' },
       ],
       failedStepIndex: 1,
+      traceUrl: null,
       checkpoints: [],
     };
     server.use(http.get(`${API_BASE}/runs/run-1`, () => HttpResponse.json(failedRun)));

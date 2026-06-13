@@ -8,9 +8,13 @@ export class RunsController {
   // runner, tsx/esbuild, doesn't emit design:paramtypes).
   constructor(@Inject(RunsService) private readonly runs: RunsService) {}
 
+  // `trace` asks for a Playwright trace to be kept (per-trigger on demand only).
   @Post()
-  create(@Body() body: { testId: string; environmentId?: string }) {
-    return this.runs.create(body.testId, body.environmentId);
+  create(@Body() body: { testId: string; environmentId?: string; trace?: boolean }) {
+    return this.runs.create(body.testId, {
+      environmentId: body.environmentId,
+      trace: body.trace,
+    });
   }
 
   // The Runs history — every run, newest first (all outcomes).

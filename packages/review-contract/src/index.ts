@@ -239,5 +239,8 @@ export interface RunView {
   /** For a `failed` run: 0-based index into `steps` of the step that failed, or null
    *  when it failed before any step ran (e.g. environment resolution). */
   failedStepIndex: number | null;
+  /** Artifact URL of the kept Playwright trace zip, or null when the trigger
+   *  didn't request one (traces are per-trigger on demand only). */
+  traceUrl: string | null;
   checkpoints: CheckpointView[];
 }

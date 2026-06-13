@@ -15,6 +15,8 @@ import styles from "./TestsList.module.css";
 
 /** Remember the last-used environment across reloads, so Run defaults to it. */
 const LAST_ENV_KEY = "varys:lastEnvId";
+/** Remember the "keep trace" choice, so a debugging session needn't re-check it. */
+const TRACE_KEY = "varys:keepTrace";
 
 /**
  * The Tests view: the saved recordings, each runnable on demand against a chosen
@@ -40,6 +42,14 @@ export function TestsList() {
 
   // The environment to run against (shared across the rows), seeded from the last use.
   const [envId, setEnvId] = useState<string>(() => localStorage.getItem(LAST_ENV_KEY) ?? "");
+  // Whether Run keeps a Playwright trace (on demand), seeded from the last use.
+  const [keepTrace, setKeepTrace] = useState<boolean>(
+    () => localStorage.getItem(TRACE_KEY) === "1",
+  );
+  const chooseTrace = (on: boolean) => {
+    setKeepTrace(on);
+    localStorage.setItem(TRACE_KEY, on ? "1" : "0");
+  };
   // Folder filter: "all" | "unfiled" | a folder id.
   const [folderFilter, setFolderFilter] = useState<string>("all");
   // Tag filter: "all" | a tag — slices across folder boundaries.
@@ -164,6 +174,14 @@ export function TestsList() {
             No environments yet — create one
           </a>
         )}
+        <label className={styles.traceToggle} title="Keep a Playwright trace to debug this run">
+          <input
+            type="checkbox"
+            checked={keepTrace}
+            onChange={(e) => chooseTrace(e.target.checked)}
+          />
+          Keep trace
+        </label>
       </div>
 
       <div className={styles.folderBar}>
@@ -296,7 +314,13 @@ export function TestsList() {
                         ? "This test references variables — pick an environment to run it."
                         : undefined
                     }
-                    onClick={() => run.mutate({ testId: t.id, environmentId: envId || undefined })}
+                    onClick={() =>
+                      run.mutate({
+                        testId: t.id,
+                        environmentId: envId || undefined,
+                        trace: keepTrace,
+                      })
+                    }
                   >
                     Run
                   </button>

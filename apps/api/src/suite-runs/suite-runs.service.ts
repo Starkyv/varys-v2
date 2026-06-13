@@ -65,6 +65,7 @@ export class SuiteRunsService {
   async trigger(
     suiteId: string,
     environmentIds?: string[],
+    trace?: boolean,
   ): Promise<{ suiteRunId: string }> {
     const [suite] = await this.db
       .select({ id: suites.id, name: suites.name })
@@ -99,10 +100,15 @@ export class SuiteRunsService {
       .values({ suiteId: suite.id, suiteName: suite.name })
       .returning({ id: suiteRuns.id });
 
+    // The trace flag fans out to every child (per-trigger on demand only).
     const targets: (string | undefined)[] = envIds.length > 0 ? envIds : [undefined];
     for (const { testId } of members) {
       for (const envId of targets) {
-        await this.runs.create(testId, envId, parent.id);
+        await this.runs.create(testId, {
+          environmentId: envId,
+          suiteRunId: parent.id,
+          trace,
+        });
       }
     }
     return { suiteRunId: parent.id };

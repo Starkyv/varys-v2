@@ -52,8 +52,7 @@ export class RunsService {
 
   async create(
     testId: string,
-    environmentId?: string,
-    suiteRunId?: string,
+    opts: { environmentId?: string; suiteRunId?: string; trace?: boolean } = {},
   ): Promise<CreatedRun> {
     const [version] = await this.db
       .select({ id: testVersions.id })
@@ -67,8 +66,9 @@ export class RunsService {
       .insert(runs)
       .values({
         testVersionId: version.id,
-        environmentId: environmentId ?? null,
-        suiteRunId: suiteRunId ?? null,
+        environmentId: opts.environmentId ?? null,
+        suiteRunId: opts.suiteRunId ?? null,
+        trace: opts.trace ?? false,
         status: "queued",
       })
       .returning({ id: runs.id });
@@ -85,6 +85,7 @@ export class RunsService {
         environmentId: runs.environmentId,
         error: runs.error,
         failedStepIndex: runs.failedStepIndex,
+        traceArtifactKey: runs.traceArtifactKey,
         testId: testVersions.testId,
         testName: tests.name,
         definition: testVersions.definition,
@@ -150,6 +151,7 @@ export class RunsService {
       error: row.error,
       steps,
       failedStepIndex: row.failedStepIndex ?? null,
+      traceUrl: url(row.traceArtifactKey),
       checkpoints: results.map(
         (r): CheckpointView => ({
           name: r.name,

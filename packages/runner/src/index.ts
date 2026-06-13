@@ -1,3 +1,6 @@
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   baselines,
   type Db,
@@ -12,7 +15,13 @@ import { describeStep, type Fingerprint, type TestDefinition, type Wait } from "
 import type { StorageAdapter } from "@varys/storage-adapter";
 import { type EnvironmentProfile, resolveStep } from "@varys/variable-resolver";
 import { and, eq } from "drizzle-orm";
-import { type Browser, chromium, type Locator, type Page } from "playwright";
+import {
+  type Browser,
+  type BrowserContext,
+  chromium,
+  type Locator,
+  type Page,
+} from "playwright";
 
 export interface ReplayDeps {
   db: Db;
@@ -67,6 +76,7 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
       testId: testVersions.testId,
       definition: testVersions.definition,
       environmentId: runs.environmentId,
+      trace: runs.trace,
     })
     .from(runs)
     .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
@@ -83,6 +93,11 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
   let failedStepIndex: number | null = null;
   let failedStepLabel = "";
   let browser: Browser | undefined;
+  // Context + tracing live at function scope so the trace is stopped, uploaded,
+  // and persisted in `finally` — covering the success AND failure paths uniformly,
+  // with the context still open when tracing stops.
+  let context: BrowserContext | undefined;
+  let tracingStarted = false;
   try {
     // Load the run's environment profile (if any). Resolution happens PER STEP in the
     // loop below — so an unresolved token (e.g. "{{baseUrl}}") is attributed to the
@@ -110,7 +125,7 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
     const vpKey = viewportKey(recorded.viewport);
 
     browser = await chromium.launch();
-    const context = await browser.newContext({
+    context = await browser.newContext({
       viewport: {
         width: recorded.viewport.width,
         height: recorded.viewport.height,
@@ -118,6 +133,12 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
       deviceScaleFactor: recorded.viewport.deviceScaleFactor,
       reducedMotion: "reduce",
     });
+    // Trace only when the trigger asked for it (on-demand only — no automatic
+    // capture). Screenshots + DOM snapshots make the hosted Trace Viewer useful.
+    if (row.trace) {
+      await context.tracing.start({ screenshots: true, snapshots: true });
+      tracingStarted = true;
+    }
     const page = await context.newPage();
 
     for (let i = 0; i < recorded.steps.length; i++) {
@@ -246,7 +267,7 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
     failedStepIndex = null;
     failedStepLabel = "";
 
-    await context.close();
+    // Context is closed in `finally` (after the trace is stopped, if any).
     const status = reviewStates.some((s) => s !== "passed")
       ? "needs_review"
       : "passed";
@@ -270,6 +291,30 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
       .where(eq(runs.id, runId));
     throw err;
   } finally {
+    // Stop + store the trace on BOTH paths, while the context is still open. The
+    // trigger explicitly asked for it, so it's kept on every outcome (incl.
+    // failure, where it's most useful). Best-effort: a trace stop/upload/persist
+    // failure must never mask the replay outcome already recorded above.
+    if (tracingStarted && context) {
+      let traceDir: string | undefined;
+      try {
+        traceDir = await mkdtemp(join(tmpdir(), "varys-trace-"));
+        const zipPath = join(traceDir, "trace.zip");
+        await context.tracing.stop({ path: zipPath });
+        const traceKey = `runs/${runId}/trace.zip`;
+        await storage.put(traceKey, await readFile(zipPath));
+        await db
+          .update(runs)
+          .set({ traceArtifactKey: traceKey, updatedAt: new Date() })
+          .where(eq(runs.id, runId));
+      } catch (traceErr) {
+        // eslint-disable-next-line no-console
+        console.error(`[runner] trace capture failed for run ${runId}:`, traceErr);
+      } finally {
+        if (traceDir) await rm(traceDir, { recursive: true, force: true }).catch(() => undefined);
+      }
+    }
+    await context?.close();
     await browser?.close();
   }
 }

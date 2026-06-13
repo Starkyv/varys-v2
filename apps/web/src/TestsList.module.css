@@ -49,6 +49,14 @@
   text-decoration: none;
 }
 
+.traceToggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #57606a;
+  cursor: pointer;
+}
+
 .folderBar {
   display: flex;
   align-items: center;

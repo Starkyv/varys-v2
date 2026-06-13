@@ -183,8 +183,8 @@ export function useSuiteRun(id: string) {
 export function useTriggerSuiteRun() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (vars: { suiteId: string; environmentIds: string[] }) =>
-      triggerSuiteRun(vars.suiteId, vars.environmentIds),
+    mutationFn: (vars: { suiteId: string; environmentIds: string[]; trace?: boolean }) =>
+      triggerSuiteRun(vars.suiteId, vars.environmentIds, vars.trace),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: suiteRunsQueryKey() });
       qc.invalidateQueries({ queryKey: needsReviewQueryKey() });
@@ -281,8 +281,8 @@ export function useDeleteEnvironment() {
 export function useRunTest() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (vars: { testId: string; environmentId?: string }) =>
-      runTest(vars.testId, vars.environmentId),
+    mutationFn: (vars: { testId: string; environmentId?: string; trace?: boolean }) =>
+      runTest(vars.testId, vars.environmentId, vars.trace),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: needsReviewQueryKey() });
       qc.invalidateQueries({ queryKey: runsQueryKey() });

@@ -24,6 +24,12 @@
   font-size: 0.85rem;
 }
 
+.traceLink {
+  color: #1f6feb;
+  text-decoration: none;
+  font-weight: 600;
+}
+
 .panel {
   margin-top: 24px;
   border-top: 1px solid #eee;
