@@ -19,6 +19,7 @@ import { type Boss, enqueueRun } from "@varys/queue";
 import type {
   CaptureMode,
   CheckpointView,
+  FingerprintSummary,
   NeedsReviewItem,
   PersistResult,
   ReEvaluation,
@@ -31,7 +32,7 @@ import type {
   StepRun,
   TuningInput,
 } from "@varys/review-contract";
-import { describeStep, type TestDefinition } from "@varys/step-schema";
+import { describeStep, type Fingerprint, type TestDefinition } from "@varys/step-schema";
 import type { StorageAdapter } from "@varys/storage-adapter";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
@@ -42,6 +43,43 @@ const ENVIRONMENT = "default";
 
 function viewportKey(vp: TestDefinition["viewport"]): string {
   return `${vp.width}x${vp.height}@${vp.deviceScaleFactor}`;
+}
+
+/** Distil a recorded fingerprint into the display-oriented summary the viewer shows
+ *  for a failed locate (the "what was it looking for?" panel). */
+function summarizeFingerprint(fp: Fingerprint | undefined): FingerprintSummary | null {
+  if (!fp) return null;
+  const { id, ...restAttrs } = fp.attributes ?? {};
+  return {
+    tag: fp.tag,
+    role: fp.role ?? null,
+    accessibleName: fp.accessibleName ?? null,
+    nameFromAttr: fp.nameFromAttr ?? false,
+    // The recorded text can be long / carry volatile data — cap it for display.
+    text: fp.text ? fp.text.slice(0, 400) : null,
+    testId: fp.testId ?? null,
+    elementId: id ?? null,
+    attributes: restAttrs && Object.keys(restAttrs).length > 0 ? restAttrs : null,
+    stableClasses: fp.stableClasses?.length ? fp.stableClasses : null,
+    moduleClasses: fp.moduleClasses?.length ? fp.moduleClasses : null,
+    ancestors: fp.ancestors?.length
+      ? fp.ancestors.map((a) => {
+          let s = a.tag;
+          if (a.role) s += `[${a.role}]`;
+          if (a.id) s += `#${a.id}`;
+          else if (a.testId) s += `[data-testid="${a.testId}"]`;
+          return s;
+        })
+      : null,
+    boundingBox: fp.boundingBox ?? null,
+  };
+}
+
+/** The recorded target fingerprint per step, indexed by step position — what the
+ *  locator looks for. Null for steps with no element target (navigate, full-page /
+ *  region screenshot). The definition already holds this, so it's free to surface. */
+function buildFingerprints(def: TestDefinition): (FingerprintSummary | null)[] {
+  return def.steps.map((s) => ("target" in s ? summarizeFingerprint(s.target) : null));
 }
 
 export interface CreatedRun {
@@ -135,9 +173,24 @@ export class RunsService {
         actualArtifactKey: runResults.actualArtifactKey,
         baselineArtifactKey: runResults.baselineArtifactKey,
         diffArtifactKey: runResults.diffArtifactKey,
+        createdAt: runResults.createdAt,
       })
       .from(runResults)
       .where(eq(runResults.runId, runId));
+
+    // A run that was re-executed (e.g. redelivered by the queue before idempotent
+    // writes landed) can carry more than one row per checkpoint. Collapse to the
+    // latest pass per checkpoint name so the viewer never shows a checkpoint twice.
+    // Belt-and-braces: the unique index on (run_id, checkpoint_name) now prevents
+    // new dupes, but historical runs predate it.
+    const latestResultByName = new Map<string, (typeof results)[number]>();
+    for (const r of results) {
+      const prev = latestResultByName.get(r.name);
+      if (!prev || r.createdAt > prev.createdAt) latestResultByName.set(r.name, r);
+    }
+    const dedupedResults = [...latestResultByName.values()].sort(
+      (a, b) => a.createdAt.getTime() - b.createdAt.getTime(),
+    );
 
     const url = (key: string | null) => (key ? this.storage.getUrl(key) : null);
 
@@ -165,14 +218,24 @@ export class RunsService {
       .from(runSteps)
       .where(eq(runSteps.runId, runId))
       .orderBy(runSteps.stepIndex);
-    const timeline: StepRun[] = stepRows.map((s) => ({
-      index: s.index,
-      label: s.label,
-      checkpointName: s.checkpointName,
-      startedAt: s.startedAt.toISOString(),
-      durationMs: s.durationMs,
-      outcome: s.outcome as "passed" | "failed",
-    }));
+    // Collapse duplicate passes: keep the latest row per step_index (the most recent
+    // execution). Same defensiveness as the checkpoints above — the unique index on
+    // (run_id, step_index) prevents new dupes; this fixes already-duplicated runs.
+    const latestStepByIndex = new Map<number, (typeof stepRows)[number]>();
+    for (const s of stepRows) {
+      const prev = latestStepByIndex.get(s.index);
+      if (!prev || s.startedAt > prev.startedAt) latestStepByIndex.set(s.index, s);
+    }
+    const timeline: StepRun[] = [...latestStepByIndex.values()]
+      .sort((a, b) => a.index - b.index)
+      .map((s) => ({
+        index: s.index,
+        label: s.label,
+        checkpointName: s.checkpointName,
+        startedAt: s.startedAt.toISOString(),
+        durationMs: s.durationMs,
+        outcome: s.outcome as "passed" | "failed",
+      }));
 
     return {
       runId,
@@ -183,9 +246,10 @@ export class RunsService {
       error: row.error,
       steps,
       failedStepIndex: row.failedStepIndex ?? null,
+      fingerprints: buildFingerprints(row.definition as TestDefinition),
       traceUrl: url(row.traceArtifactKey),
       timeline,
-      checkpoints: results.map(
+      checkpoints: dedupedResults.map(
         (r): CheckpointView => ({
           name: r.name,
           reviewState: r.reviewState as ReviewState,
@@ -325,6 +389,44 @@ export class RunsService {
     );
   }
 
+  /**
+   * Re-derive a run's review status from its checkpoints after a decision
+   * (approve / reject) or a mask-threshold re-judge. The worker stamps `runs.status`
+   * once at replay time, so without this the Runs table (and dashboard / detail header,
+   * which all read the stored column) keep showing "needs review" after the last
+   * checkpoint is resolved.
+   *
+   * Only post-review statuses roll up. Execution-failed runs are left as-is —
+   * reviewing the partial checkpoints a run captured before it failed must not flip it
+   * to passed — and queued/running are owned by the worker. Per-checkpoint effective
+   * status mirrors the UI: approved→passed, rejected→regression, else the stored
+   * reviewState; rollup is any-pending→needs_review, else any-rejected→failed, else passed.
+   */
+  private async recomputeRunStatus(runId: string): Promise<void> {
+    const [run] = await this.db
+      .select({ status: runs.status })
+      .from(runs)
+      .where(eq(runs.id, runId))
+      .limit(1);
+    if (!run || (run.status !== "passed" && run.status !== "needs_review")) return;
+
+    const results = await this.db
+      .select({ reviewState: runResults.reviewState, resolution: runResults.resolution })
+      .from(runResults)
+      .where(eq(runResults.runId, runId));
+
+    let anyPending = false;
+    let anyRejected = false;
+    for (const r of results) {
+      if (r.resolution === "rejected") anyRejected = true;
+      else if (r.resolution === "approved") continue; // resolved → passed
+      else if (r.reviewState === "pending-baseline" || r.reviewState === "diff") anyPending = true;
+    }
+    const next = anyPending ? "needs_review" : anyRejected ? "failed" : "passed";
+    if (next === run.status) return;
+    await this.db.update(runs).set({ status: next, updatedAt: new Date() }).where(eq(runs.id, runId));
+  }
+
   /** Approve a checkpoint: promote a pending seed (or replace an active baseline) and audit it. */
   async approve(runId: string, checkpointName: string): Promise<{ ok: true }> {
     const [result] = await this.db
@@ -417,6 +519,7 @@ export class RunsService {
       .update(runResults)
       .set({ resolution: "approved" })
       .where(eq(runResults.id, result.id));
+    await this.recomputeRunStatus(runId);
     return { ok: true };
   }
 
@@ -463,6 +566,7 @@ export class RunsService {
       .update(runResults)
       .set({ resolution: "rejected" })
       .where(eq(runResults.id, result.id));
+    await this.recomputeRunStatus(runId);
     return { ok: true };
   }
 
@@ -576,6 +680,9 @@ export class RunsService {
         .set({ reviewState: "diff", diffScore: score, threshold, diffArtifactKey: diffKey })
         .where(eq(runResults.id, ctx.runResultId));
     }
+    // Tuning a diff back within threshold resolves the last pending checkpoint — keep
+    // the run's stored status in step with that, same as approve/reject.
+    await this.recomputeRunStatus(runId);
     return {
       reviewState: verdict === "match" ? "passed" : "diff",
       diffScore: score,

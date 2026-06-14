@@ -61,6 +61,13 @@ export const fingerprint = z.object({
       height: z.number(),
     })
     .optional(),
+  /** A deterministic structural CSS path (classic getSelector ladder: stable unique
+   *  `#id` → `[data-testid]` → ancestor-anchored path with filtered classes +
+   *  `:nth-of-type`). A last-resort fallback the runner uses ONLY for element
+   *  screenshots when the scored matcher can't confidently resolve — a wrong region
+   *  is far cheaper than a wrong click, so screenshots tolerate a positional `.first()`
+   *  match the click path deliberately refuses. */
+  cssPath: z.string().optional(),
 });
 
 export type Fingerprint = z.infer<typeof fingerprint>;
@@ -153,6 +160,12 @@ export const testDefinition = z
     /** The test's declared variables. Optional for back-compat — old definitions
      *  (recorded before this slice) carry none. */
     variables: z.array(variable).optional(),
+    /** Test-level defaults the runner applies before EVERY step that supports waits
+     *  (click / type / screenshot — not navigate). Merged AHEAD of each step's own
+     *  `waitBefore`, so a global "wait for network idle before each checkpoint" lives
+     *  here and per-step waits layer on top. Optional/back-compat — old definitions
+     *  carry none, and the runner's hard-coded pre-screenshot settle remains a net. */
+    defaults: z.object({ waitBefore: z.array(wait).optional() }).optional(),
   })
   // Per-mode requirements: element ⇒ target, region ⇒ rect, fullpage ⇒ neither.
   // (Refined here rather than on screenshotStep so it stays a discriminated-union

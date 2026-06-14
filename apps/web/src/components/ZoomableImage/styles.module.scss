@@ -1,0 +1,104 @@
+@use "../../styles/mixins" as *;
+
+/* In-flow trigger — wraps the image so it stays keyboard-operable. */
+.trigger {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  position: relative;
+  cursor: zoom-in;
+
+  @include focus-ring;
+}
+
+.img {
+  display: block;
+  width: 100%;
+  height: auto;
+  vertical-align: middle;
+}
+
+.hint {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-full);
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+
+.trigger:hover .hint,
+.trigger:focus-visible .hint {
+  opacity: 1;
+}
+
+/* --- Lightbox overlay (portaled to body) --- */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-16);
+  padding: var(--space-32);
+  background: rgba(0, 0, 0, 0.85);
+  cursor: zoom-out;
+  overflow: auto;
+}
+
+.full {
+  max-width: min(96vw, 100%);
+  max-height: 86vh;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  background: #fff;
+  cursor: default;
+}
+
+.close {
+  position: fixed;
+  top: var(--space-16);
+  right: var(--space-16);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-standard);
+
+  @include focus-ring;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.26);
+  }
+}
+
+.caption {
+  max-width: 90vw;
+  color: rgba(255, 255, 255, 0.86);
+  font-size: var(--font-size-sm);
+  text-align: center;
+  cursor: default;
+  word-break: break-word;
+}

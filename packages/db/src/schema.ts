@@ -7,6 +7,7 @@ import {
   primaryKey,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 
@@ -121,22 +122,28 @@ export const runs = pgTable("runs", {
 export type ReviewState = "pending-baseline" | "diff" | "passed";
 export type Resolution = "approved" | "rejected";
 
-export const runResults = pgTable("run_results", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  runId: uuid("run_id")
-    .notNull()
-    .references(() => runs.id),
-  checkpointName: text("checkpoint_name").notNull(),
-  reviewState: text("review_state").notNull(),
-  actualArtifactKey: text("actual_artifact_key"),
-  baselineArtifactKey: text("baseline_artifact_key"),
-  diffArtifactKey: text("diff_artifact_key"),
-  diffScore: doublePrecision("diff_score"),
-  threshold: doublePrecision("threshold").notNull(),
-  healed: boolean("healed").notNull().default(false),
-  resolution: text("resolution"),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-});
+export const runResults = pgTable(
+  "run_results",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => runs.id),
+    checkpointName: text("checkpoint_name").notNull(),
+    reviewState: text("review_state").notNull(),
+    actualArtifactKey: text("actual_artifact_key"),
+    baselineArtifactKey: text("baseline_artifact_key"),
+    diffArtifactKey: text("diff_artifact_key"),
+    diffScore: doublePrecision("diff_score"),
+    threshold: doublePrecision("threshold").notNull(),
+    healed: boolean("healed").notNull().default(false),
+    resolution: text("resolution"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  // One result per checkpoint per run — lets the worker upsert so a redelivered run
+  // can't accumulate duplicate checkpoints.
+  (t) => ({ runCheckpointUq: uniqueIndex("run_results_run_checkpoint_uq").on(t.runId, t.checkpointName) }),
+);
 
 /**
  * Per-step run timeline — one row per EXECUTED step of a run (every run, traced
@@ -146,20 +153,26 @@ export const runResults = pgTable("run_results", {
  * no row (so "didn't run" stays derivable from the definition's full step list).
  * Run OUTPUT — relational, never part of the versioned definition.
  */
-export const runSteps = pgTable("run_steps", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  runId: uuid("run_id")
-    .notNull()
-    .references(() => runs.id),
-  stepIndex: integer("step_index").notNull(),
-  label: text("label").notNull(),
-  /** The checkpoint (screenshot) name when this step is a checkpoint; null otherwise. */
-  checkpointName: text("checkpoint_name"),
-  startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
-  durationMs: integer("duration_ms").notNull(),
-  /** `passed` (step completed) | `failed` (the step that threw). */
-  outcome: text("outcome").notNull(),
-});
+export const runSteps = pgTable(
+  "run_steps",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => runs.id),
+    stepIndex: integer("step_index").notNull(),
+    label: text("label").notNull(),
+    /** The checkpoint (screenshot) name when this step is a checkpoint; null otherwise. */
+    checkpointName: text("checkpoint_name"),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    durationMs: integer("duration_ms").notNull(),
+    /** `passed` (step completed) | `failed` (the step that threw). */
+    outcome: text("outcome").notNull(),
+  },
+  // One row per step per run — lets the worker upsert so a redelivered run can't
+  // accumulate the same step multiple times.
+  (t) => ({ runStepUq: uniqueIndex("run_steps_run_step_uq").on(t.runId, t.stepIndex) }),
+);
 
 /** The current active baseline per (test, checkpoint, environment, viewport). */
 export const baselines = pgTable("baselines", {
@@ -184,6 +197,9 @@ export const environments = pgTable("environments", {
   name: text("name").notNull(),
   values: jsonb("values").notNull().default({}),
   secrets: jsonb("secrets").notNull().default({}),
+  /** Cookies seeded onto the browser context before each run against this env
+   *  (array of { name, value, domain?, path? }). Values may carry `{{secret:NAME}}`. */
+  cookies: jsonb("cookies").notNull().default([]),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -310,4 +326,18 @@ CREATE TABLE IF NOT EXISTS environments (
   secrets jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+-- Bring an existing environments table (created before cookies) up to date.
+ALTER TABLE environments ADD COLUMN IF NOT EXISTS cookies jsonb NOT NULL DEFAULT '[]'::jsonb;
+-- Idempotency for re-executed runs: first collapse any duplicate rows an earlier
+-- redelivered run may have written (keep the latest per group), then enforce one
+-- row per (run, step) and (run, checkpoint) so duplicates can't recur. Both the
+-- dedup DELETEs and the IF NOT EXISTS index creates are no-ops on later boots.
+DELETE FROM run_steps a USING run_steps b
+  WHERE a.run_id = b.run_id AND a.step_index = b.step_index
+    AND (a.started_at < b.started_at OR (a.started_at = b.started_at AND a.id < b.id));
+CREATE UNIQUE INDEX IF NOT EXISTS run_steps_run_step_uq ON run_steps (run_id, step_index);
+DELETE FROM run_results a USING run_results b
+  WHERE a.run_id = b.run_id AND a.checkpoint_name = b.checkpoint_name
+    AND (a.created_at < b.created_at OR (a.created_at = b.created_at AND a.id < b.id));
+CREATE UNIQUE INDEX IF NOT EXISTS run_results_run_checkpoint_uq ON run_results (run_id, checkpoint_name);
 `;

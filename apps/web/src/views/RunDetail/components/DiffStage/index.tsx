@@ -1,5 +1,6 @@
 import type { CheckpointView } from "@varys/review-contract";
 import { Layers } from "@varys/ui";
+import { ZoomableImage } from "../../../../components/ZoomableImage";
 import styles from "./styles.module.scss";
 
 export type DiffMode = "side-by-side" | "diff-highlight" | "swipe" | "onion";
@@ -10,7 +11,11 @@ function Frame({ src, label, alt }: { src: string | null; label: string; alt: st
       <span className={styles.label} data-tone={label === "Actual" ? "actual" : "baseline"}>
         {label}
       </span>
-      {src ? <img className={styles.img} src={src} alt={alt} /> : <div className={styles.missing}>No image</div>}
+      {src ? (
+        <ZoomableImage src={src} alt={alt} imgClassName={styles.img} caption={`${label} · ${alt}`} />
+      ) : (
+        <div className={styles.missing}>No image</div>
+      )}
     </div>
   );
 }

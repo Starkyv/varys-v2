@@ -117,6 +117,15 @@ function EditorForm({
             <button key={t.id} type="button" className={cx(styles.row, sel && styles.rowSel)} onClick={() => toggle(t.id)}>
               <span className={cx(styles.check, sel && styles.checkOn)}>{sel && <Check size={11} />}</span>
               <span className={styles.testName}>{t.name}</span>
+              {t.tags.length > 0 && (
+                <span className={styles.tags}>
+                  {t.tags.map((tag) => (
+                    <span key={tag} className={styles.tag}>
+                      {tag}
+                    </span>
+                  ))}
+                </span>
+              )}
               {t.needsEnvironment && (
                 <span className={styles.envBadge}>
                   <Lock size={10} />

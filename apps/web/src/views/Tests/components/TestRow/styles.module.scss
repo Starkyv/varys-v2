@@ -43,10 +43,28 @@
 }
 
 .name {
+  display: inline-block;
+  max-width: 100%;
+  border: none;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
   font-size: var(--font-size-base);
   font-weight: var(--font-weight-semibold);
   color: var(--color-text-strong);
   @include truncate;
+
+  &:hover {
+    color: var(--color-primary);
+    text-decoration: underline;
+  }
+  &:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
 }
 
 .envBadge {
@@ -168,7 +186,13 @@
 
 .editorActions {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8);
+}
+
+.editorActionsRight {
+  display: flex;
   gap: var(--space-8);
 }
 

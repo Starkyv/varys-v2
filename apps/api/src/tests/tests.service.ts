@@ -1,14 +1,39 @@
 import {
   BadRequestException,
+  ConflictException,
   Inject,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import type { TestSummary } from "@varys/review-contract";
-import { parseTestDefinition, type TestDefinition } from "@varys/step-schema";
-import { asc, desc, eq, sql } from "drizzle-orm";
+import type {
+  ConfigWait,
+  EditableWait,
+  TestConfigPatch,
+  TestConfigStep,
+  TestConfigView,
+  TestSummary,
+} from "@varys/review-contract";
+import {
+  describeStep,
+  type Fingerprint,
+  parseTestDefinition,
+  type TestDefinition,
+  type Wait,
+} from "@varys/step-schema";
+import type { StorageAdapter } from "@varys/storage-adapter";
+import { asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
-import { folders, tests, testTags, testVersions } from "../db/schema";
+import {
+  baselines,
+  folders,
+  runResults,
+  runs,
+  runSteps,
+  tests,
+  testTags,
+  testVersions,
+} from "../db/schema";
+import { STORAGE } from "../storage/storage.module";
 
 /** Organization metadata only — `folderId: null` unfiles; `tags` REPLACES the whole
  *  list (add + remove in one write); absent fields are left untouched. Deliberately
@@ -35,6 +60,36 @@ function needsEnvironment(definition: TestDefinition): boolean {
   return JSON.stringify(definition).includes("{{");
 }
 
+/** A short human handle for a selector-wait's target fingerprint (display only). */
+function waitTargetLabel(fp: Fingerprint): string {
+  if (fp.testId) return `[data-testid="${fp.testId}"]`;
+  if (fp.accessibleName) return `"${fp.accessibleName}"`;
+  if (fp.text) return `"${fp.text}"`;
+  if (fp.attributes?.id) return `#${fp.attributes.id}`;
+  if (fp.role) return `<${fp.role}>`;
+  return `<${fp.tag}>`;
+}
+
+/** Project a stored wait to the editor's read-model — selector targets become a label. */
+function toConfigWait(w: Wait): ConfigWait {
+  if (w.kind === "selector") {
+    return {
+      kind: "selector",
+      state: w.state,
+      ...(w.timeoutMs !== undefined ? { timeoutMs: w.timeoutMs } : {}),
+      targetLabel: waitTargetLabel(w.target),
+    };
+  }
+  return w; // delay / networkIdle are structurally identical to ConfigWait
+}
+
+/** Replace the authorable (delay/networkIdle) waits while preserving any selector waits
+ *  the editor can't author — selectors keep their relative order, ahead of the new set. */
+function mergeWaits(existing: Wait[] | undefined, editable: EditableWait[]): Wait[] {
+  const preserved = (existing ?? []).filter((w) => w.kind === "selector");
+  return [...preserved, ...editable];
+}
+
 export interface CreatedTest {
   id: string;
   version: number;
@@ -49,7 +104,10 @@ export interface TestView {
 
 @Injectable()
 export class TestsService {
-  constructor(@Inject(DB) private readonly db: Db) {}
+  constructor(
+    @Inject(DB) private readonly db: Db,
+    @Inject(STORAGE) private readonly storage: StorageAdapter,
+  ) {}
 
   async create(input: unknown): Promise<CreatedTest> {
     const definition = parseTestDefinition(input);
@@ -190,5 +248,166 @@ export class TestsService {
       version: row.version,
       definition: row.definition as TestDefinition,
     };
+  }
+
+  /**
+   * The editable config surface of a test's LATEST version — the test-detail page's
+   * read-model: the test-level default waits plus, per step, its label, the waits
+   * before it, and (for screenshots) the threshold. A display projection only; the
+   * full fingerprints/definition aren't surfaced (v1 edits waits + threshold).
+   */
+  async getConfig(id: string): Promise<TestConfigView> {
+    const view = await this.getById(id); // latest version + definition (throws if none)
+    const def = view.definition;
+    return {
+      id: view.id,
+      name: view.name,
+      version: view.version,
+      defaults: (def.defaults?.waitBefore ?? []).map(toConfigWait),
+      steps: def.steps.map((s, index): TestConfigStep => ({
+        index,
+        type: s.type,
+        label: describeStep(s),
+        supportsWaits: s.type !== "navigate",
+        waitBefore: s.type === "navigate" ? [] : (s.waitBefore ?? []).map(toConfigWait),
+        checkpointName: s.type === "screenshot" ? s.name : null,
+        captureMode: s.type === "screenshot" ? (s.captureMode ?? "element") : null,
+        threshold: s.type === "screenshot" ? (s.threshold ?? null) : null,
+      })),
+    };
+  }
+
+  /**
+   * Apply a config patch (waits + threshold) onto the test's latest definition and
+   * write a NEW audited test_version (latest+1, `createdBy: "user"`). Optimistic
+   * concurrency: the patch's `baseVersion` must match the current latest, else 409 —
+   * so a stale editor can't silently clobber a newer version. Selector waits the
+   * editor can't author are preserved (it only replaces the delay/networkIdle ones).
+   * The assembled definition is re-validated by the schema before it's stored.
+   */
+  async saveConfig(id: string, patch: TestConfigPatch): Promise<{ version: number }> {
+    const [latest] = await this.db
+      .select({ version: testVersions.version, definition: testVersions.definition })
+      .from(testVersions)
+      .where(eq(testVersions.testId, id))
+      .orderBy(desc(testVersions.version))
+      .limit(1);
+    if (!latest) throw new NotFoundException(`Test ${id} not found`);
+    if (patch.baseVersion !== latest.version) {
+      throw new ConflictException(
+        `Test was changed since you opened it (now at v${latest.version}). Reload and re-apply your edits.`,
+      );
+    }
+    const def = latest.definition as TestDefinition;
+
+    // Default waits: replace the authorable set, keep any (rare) selector defaults.
+    const nextDefaults =
+      patch.defaults !== undefined
+        ? { waitBefore: mergeWaits(def.defaults?.waitBefore, patch.defaults) }
+        : def.defaults;
+
+    const stepPatch = new Map((patch.steps ?? []).map((p) => [p.index, p]));
+    const nextSteps = def.steps.map((s, index) => {
+      const p = stepPatch.get(index);
+      if (!p || s.type === "navigate") return s; // navigate has no waits/threshold
+      let out = s;
+      if (p.waitBefore !== undefined) {
+        out = { ...out, waitBefore: mergeWaits(out.waitBefore, p.waitBefore) };
+      }
+      if (p.threshold !== undefined && out.type === "screenshot") {
+        out = { ...out, threshold: p.threshold };
+      }
+      return out;
+    });
+
+    const nextDefinition = {
+      ...def,
+      ...(nextDefaults !== undefined ? { defaults: nextDefaults } : {}),
+      steps: nextSteps,
+    };
+
+    let validated: TestDefinition;
+    try {
+      validated = parseTestDefinition(nextDefinition);
+    } catch (err) {
+      throw new BadRequestException(
+        err instanceof Error ? err.message : "Invalid test configuration",
+      );
+    }
+
+    const nextVersion = latest.version + 1;
+    await this.db
+      .insert(testVersions)
+      .values({ testId: id, version: nextVersion, definition: validated, createdBy: "user" });
+    return { version: nextVersion };
+  }
+
+  /**
+   * Hard-delete a test and everything it owns — irreversible, no rollback. Removes
+   * the runs' results + steps, the runs themselves, the test's baselines, every
+   * test_version, then the test row (`test_tags` + `suite_tests` cascade in the DB).
+   * These FK chains don't cascade, so they're deleted explicitly in dependency order
+   * inside one transaction. Storage artifacts (screenshots, baselines, diffs, traces)
+   * are purged best-effort afterwards — the DB delete is the source of truth, and an
+   * orphaned blob is harmless whereas a dangling row is not.
+   */
+  async delete(id: string): Promise<{ ok: true }> {
+    const [exists] = await this.db
+      .select({ id: tests.id })
+      .from(tests)
+      .where(eq(tests.id, id))
+      .limit(1);
+    if (!exists) throw new NotFoundException(`Test ${id} not found`);
+
+    // The test's versions → their runs (the non-cascading FK chain).
+    const versionRows = await this.db
+      .select({ id: testVersions.id })
+      .from(testVersions)
+      .where(eq(testVersions.testId, id));
+    const versionIds = versionRows.map((v) => v.id);
+    const runRows = versionIds.length
+      ? await this.db.select({ id: runs.id }).from(runs).where(inArray(runs.testVersionId, versionIds))
+      : [];
+    const runIds = runRows.map((r) => r.id);
+
+    // Gather artifact keys to purge BEFORE deleting the rows that reference them.
+    const keys = new Set<string>();
+    if (runIds.length) {
+      const results = await this.db
+        .select({
+          actual: runResults.actualArtifactKey,
+          baseline: runResults.baselineArtifactKey,
+          diff: runResults.diffArtifactKey,
+        })
+        .from(runResults)
+        .where(inArray(runResults.runId, runIds));
+      for (const r of results) for (const k of [r.actual, r.baseline, r.diff]) if (k) keys.add(k);
+      const traces = await this.db
+        .select({ key: runs.traceArtifactKey })
+        .from(runs)
+        .where(inArray(runs.id, runIds));
+      for (const r of traces) if (r.key) keys.add(r.key);
+    }
+    const baselineRows = await this.db
+      .select({ key: baselines.artifactKey })
+      .from(baselines)
+      .where(eq(baselines.testId, id));
+    for (const r of baselineRows) if (r.key) keys.add(r.key);
+
+    await this.db.transaction(async (tx) => {
+      if (runIds.length) {
+        await tx.delete(runResults).where(inArray(runResults.runId, runIds));
+        await tx.delete(runSteps).where(inArray(runSteps.runId, runIds));
+        await tx.delete(runs).where(inArray(runs.id, runIds));
+      }
+      await tx.delete(baselines).where(eq(baselines.testId, id));
+      await tx.delete(testVersions).where(eq(testVersions.testId, id));
+      await tx.delete(tests).where(eq(tests.id, id)); // test_tags + suite_tests cascade
+    });
+
+    for (const key of keys) {
+      await this.storage.delete(key).catch(() => undefined);
+    }
+    return { ok: true };
   }
 }

@@ -26,6 +26,7 @@
   top: 10px;
   left: 10px;
   z-index: 2;
+  pointer-events: none; // let clicks fall through to the zoomable image beneath
   display: inline-flex;
   align-items: center;
   height: 20px;

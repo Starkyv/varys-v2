@@ -126,6 +126,17 @@
   color: var(--color-text-subtle);
 }
 
+.cookieField {
+  flex: 1;
+  min-width: 0;
+}
+
+.cookieNote {
+  margin: var(--space-12) 0 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+
 .secretsHead {
   display: flex;
   align-items: center;

@@ -1,5 +1,6 @@
 import type {
   DashboardView,
+  EnvCookie,
   EnvironmentView,
   FolderSummary,
   NeedsReviewItem,
@@ -7,10 +8,13 @@ import type {
   ReEvaluation,
   RunSummary,
   RunView,
+  SaveConfigResult,
   SuiteRunSummary,
   SuiteRunView,
   SuiteSummary,
   SuiteView,
+  TestConfigPatch,
+  TestConfigView,
   TestSummary,
   TuningInput,
 } from "@varys/review-contract";
@@ -89,6 +93,46 @@ export async function updateTest(id: string, body: UpdateTestBody): Promise<void
   if (!res.ok) {
     throw new Error(`Failed to update test (${res.status})`);
   }
+}
+
+/** Hard-delete a test — removes it and ALL its runs, baselines, and history. No
+ *  rollback. Throws on a non-2xx response. */
+export async function deleteTest(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/tests/${id}`, { method: "DELETE" });
+  if (!res.ok) {
+    throw new Error(`Failed to delete test (${res.status})`);
+  }
+}
+
+/** Fetch a test's editable config (waits + threshold of its latest version). */
+export async function fetchTestConfig(id: string): Promise<TestConfigView> {
+  const res = await fetch(`${API_BASE}/tests/${id}/config`);
+  if (!res.ok) {
+    throw new Error(`Failed to load test config (${res.status})`);
+  }
+  return (await res.json()) as TestConfigView;
+}
+
+/** Save a config patch — writes a new test version. A 409 means the test changed
+ *  since it was opened (stale baseVersion); surface that distinctly so the caller can
+ *  prompt a reload. Throws on any non-2xx. */
+export async function saveTestConfig(
+  id: string,
+  patch: TestConfigPatch,
+): Promise<SaveConfigResult> {
+  const res = await fetch(`${API_BASE}/tests/${id}/config`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) {
+    throw new Error(
+      res.status === 409
+        ? "This test changed since you opened it. Reload to get the latest, then re-apply your edits."
+        : `Failed to save test config (${res.status})`,
+    );
+  }
+  return (await res.json()) as SaveConfigResult;
 }
 
 /** Fetch the distinct tags currently in use (for pickers/filters). */
@@ -256,6 +300,7 @@ export interface CreateEnvironmentBody {
   name: string;
   values?: Record<string, string>;
   secrets?: Record<string, string>;
+  cookies?: EnvCookie[];
 }
 
 /** Create an environment. Returns the new id. Throws on a non-2xx response. */
@@ -278,6 +323,8 @@ export interface UpdateEnvironmentBody {
   values?: Record<string, string>;
   secrets?: Record<string, string>;
   removeSecrets?: string[];
+  /** Full-list replace of the env's pre-run cookies. */
+  cookies?: EnvCookie[];
 }
 
 /** Update an environment. Returns the redacted view (secret names only). Throws on

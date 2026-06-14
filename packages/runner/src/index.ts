@@ -14,8 +14,13 @@ import { diffPng } from "@varys/diff-engine";
 import { resolve } from "@varys/locator-engine";
 import { describeStep, type Fingerprint, type TestDefinition, type Wait } from "@varys/step-schema";
 import type { StorageAdapter } from "@varys/storage-adapter";
-import { type EnvironmentProfile, resolveStep } from "@varys/variable-resolver";
-import { and, eq } from "drizzle-orm";
+import {
+  type EnvironmentProfile,
+  resolveStep,
+  resolveString,
+  resolveWaits,
+} from "@varys/variable-resolver";
+import { and, eq, sql } from "drizzle-orm";
 import {
   type Browser,
   type BrowserContext,
@@ -30,6 +35,10 @@ export interface ReplayDeps {
 }
 
 const DEFAULT_THRESHOLD = 0.01;
+
+/** A cookie seeded onto the browser context before a run (env-scoped). Mirrors
+ *  `EnvCookie` in @varys/review-contract; inlined to avoid a runner→contract dep. */
+type EnvCookie = { name: string; value: string; domain?: string; path?: string };
 
 function viewportKey(vp: TestDefinition["viewport"]): string {
   return `${vp.width}x${vp.height}@${vp.deviceScaleFactor}`;
@@ -57,6 +66,23 @@ async function applyWaits(page: Page, waits: Wait[] | undefined): Promise<void> 
     }
   }
 }
+
+/** Upsert config so a re-executed run (e.g. a redelivered job) overwrites its prior
+ *  checkpoint row rather than inserting a duplicate — conflict target is the unique
+ *  index on (run_id, checkpoint_name). The human `resolution` and original `created_at`
+ *  are deliberately left untouched. */
+const RESULT_CONFLICT = {
+  target: [runResults.runId, runResults.checkpointName],
+  set: {
+    reviewState: sql`excluded.review_state`,
+    actualArtifactKey: sql`excluded.actual_artifact_key`,
+    baselineArtifactKey: sql`excluded.baseline_artifact_key`,
+    diffArtifactKey: sql`excluded.diff_artifact_key`,
+    diffScore: sql`excluded.diff_score`,
+    threshold: sql`excluded.threshold`,
+    healed: sql`excluded.healed`,
+  },
+};
 
 /**
  * Replay a run server-side: launch pinned chromium, walk the recorded steps,
@@ -125,12 +151,14 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
     // never persisted.
     let environment = "default";
     let profile: EnvironmentProfile | null = null;
+    let envCookies: EnvCookie[] = [];
     if (row.environmentId) {
       const [env] = await db
         .select({
           name: environments.name,
           values: environments.values,
           secrets: environments.secrets,
+          cookies: environments.cookies,
         })
         .from(environments)
         .where(eq(environments.id, row.environmentId))
@@ -141,6 +169,7 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
         secrets: (env.secrets ?? {}) as Record<string, string>,
       };
       environment = env.name;
+      envCookies = (env.cookies ?? []) as EnvCookie[];
     }
     const vpKey = viewportKey(recorded.viewport);
 
@@ -159,7 +188,40 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
       await context.tracing.start({ screenshots: true, snapshots: true });
       tracingStarted = true;
     }
+
+    // Seed the environment's cookies onto the context BEFORE any navigation, so a test
+    // that needs an existing session/consent cookie starts with it already set. Values
+    // resolve the same {{var}}/{{secret:NAME}} tokens steps do (keep real auth tokens in
+    // a write-only secret and reference them). Domain falls back to the run's baseUrl.
+    if (envCookies.length > 0) {
+      const baseUrl = profile?.values.baseUrl;
+      const toSet = envCookies.map((c) => {
+        const value = profile ? resolveString(c.value, profile) : c.value;
+        const cookie: { name: string; value: string; url?: string; domain?: string; path?: string } = {
+          name: c.name,
+          value,
+        };
+        if (c.domain) {
+          cookie.domain = c.domain;
+          cookie.path = c.path ?? "/";
+        } else if (baseUrl) {
+          cookie.url = baseUrl;
+        } else {
+          throw new Error(`cookie "${c.name}" needs a domain (the environment has no baseUrl to derive one)`);
+        }
+        return cookie;
+      });
+      await context.addCookies(toSet);
+    }
+
     const page = await context.newPage();
+
+    // Test-level default waits — applied before EVERY step that supports waits, ahead
+    // of the step's own `waitBefore` (a global "settle the network before each
+    // checkpoint" lives here, per-step waits layer on top). Resolved once like a step's
+    // waits so a tokenized selector-wait default resolves against the environment.
+    const defaultWaits = recorded.defaults?.waitBefore ?? [];
+    const resolvedDefaultWaits = profile ? resolveWaits(defaultWaits, profile) : defaultWaits;
 
     for (let i = 0; i < recorded.steps.length; i++) {
       const raw = recorded.steps[i];
@@ -179,7 +241,7 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
         continue;
       }
 
-      await applyWaits(page, step.waitBefore);
+      await applyWaits(page, [...resolvedDefaultWaits, ...(step.waitBefore ?? [])]);
 
       if (step.type === "click" || step.type === "type") {
         // A prior click may have triggered a navigation (e.g. an OAuth login redirect)
@@ -213,13 +275,32 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
       } else {
         if (!step.target) throw new Error(`element checkpoint "${step.name}" has no target`);
         const found = await resolve(page, step.target);
-        if (!found) {
-          throw new Error(
-            `could not locate checkpoint "${step.name}" — no fingerprint signal matched`,
-          );
+        if (found) {
+          actual = await found.locator.screenshot();
+          healed = found.healed;
+        } else {
+          // The scored matcher couldn't confidently resolve. For a screenshot a wrong
+          // region is far cheaper than a wrong click, so fall back to the recorded
+          // deterministic CSS path (first match) when one exists, and mark it healed.
+          // (Clicks deliberately have no such fallback.)
+          const cssPath = step.target.cssPath;
+          let fallbackShot: Buffer | null = null;
+          if (cssPath) {
+            try {
+              const loc = page.locator(cssPath).first();
+              if ((await loc.count()) > 0) fallbackShot = await loc.screenshot();
+            } catch {
+              fallbackShot = null; // malformed selector → treat as no fallback
+            }
+          }
+          if (!fallbackShot) {
+            throw new Error(
+              `could not locate checkpoint "${step.name}" — no fingerprint signal matched`,
+            );
+          }
+          actual = fallbackShot;
+          healed = true;
         }
-        actual = await found.locator.screenshot();
-        healed = found.healed;
       }
       const actualKey = `runs/${runId}/${step.name}.png`;
       await storage.put(actualKey, actual);
@@ -240,14 +321,17 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
 
       if (!baseline) {
         // Seed: nothing to compare against yet — awaits first approval.
-        await db.insert(runResults).values({
-          runId,
-          checkpointName: step.name,
-          reviewState: "pending-baseline",
-          actualArtifactKey: actualKey,
-          threshold,
-          healed,
-        });
+        await db
+          .insert(runResults)
+          .values({
+            runId,
+            checkpointName: step.name,
+            reviewState: "pending-baseline",
+            actualArtifactKey: actualKey,
+            threshold,
+            healed,
+          })
+          .onConflictDoUpdate(RESULT_CONFLICT);
         reviewStates.push("pending-baseline");
       } else {
         const baselineBytes = await storage.get(baseline.artifactKey);
@@ -260,31 +344,37 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
         );
 
         if (verdict === "match") {
-          await db.insert(runResults).values({
-            runId,
-            checkpointName: step.name,
-            reviewState: "passed",
-            actualArtifactKey: actualKey,
-            baselineArtifactKey: baseline.artifactKey,
-            diffScore: score,
-            threshold,
-            healed,
-          });
+          await db
+            .insert(runResults)
+            .values({
+              runId,
+              checkpointName: step.name,
+              reviewState: "passed",
+              actualArtifactKey: actualKey,
+              baselineArtifactKey: baseline.artifactKey,
+              diffScore: score,
+              threshold,
+              healed,
+            })
+            .onConflictDoUpdate(RESULT_CONFLICT);
           reviewStates.push("passed");
         } else {
           const diffKey = `runs/${runId}/${step.name}.diff.png`;
           await storage.put(diffKey, diffImage);
-          await db.insert(runResults).values({
-            runId,
-            checkpointName: step.name,
-            reviewState: "diff",
-            actualArtifactKey: actualKey,
-            baselineArtifactKey: baseline.artifactKey,
-            diffArtifactKey: diffKey,
-            diffScore: score,
-            threshold,
-            healed,
-          });
+          await db
+            .insert(runResults)
+            .values({
+              runId,
+              checkpointName: step.name,
+              reviewState: "diff",
+              actualArtifactKey: actualKey,
+              baselineArtifactKey: baseline.artifactKey,
+              diffArtifactKey: diffKey,
+              diffScore: score,
+              threshold,
+              healed,
+            })
+            .onConflictDoUpdate(RESULT_CONFLICT);
           reviewStates.push("diff");
         }
       }
@@ -315,17 +405,41 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
     ).slice(0, 2000);
     // Record the failing step in the timeline (with its duration-to-failure).
     recordStep("failed");
-    await db
-      .update(runs)
-      .set({ status: "failed", error: message, failedStepIndex, updatedAt: new Date() })
-      .where(eq(runs.id, runId));
-    throw err;
+    // A replay that reaches a verdict — a step threw, a locator missed, a diff over
+    // threshold — is a COMPLETED job whose run is terminally "failed", NOT a queue-level
+    // error. Record the verdict and return normally so pg-boss acks the job. Rethrowing
+    // would make the queue treat a normal failed run as a job failure and re-execute it,
+    // re-running the whole replay and (pre-idempotency) duplicating run_steps/run_results.
+    // Only an inability to record the verdict (e.g. the DB is unreachable) propagates, so
+    // the job can legitimately retry.
+    try {
+      await db
+        .update(runs)
+        .set({ status: "failed", error: message, failedStepIndex, updatedAt: new Date() })
+        .where(eq(runs.id, runId));
+    } catch (finalizeErr) {
+      // eslint-disable-next-line no-console
+      console.error(`[runner] could not finalize run ${runId} as failed:`, finalizeErr);
+      throw finalizeErr;
+    }
   } finally {
     // Persist the per-step timeline (every run). Best-effort — a valuable record,
     // but not worth masking the run outcome or crashing the worker.
     if (stepRuns.length > 0) {
       try {
-        await db.insert(runSteps).values(stepRuns);
+        await db
+          .insert(runSteps)
+          .values(stepRuns)
+          .onConflictDoUpdate({
+            target: [runSteps.runId, runSteps.stepIndex],
+            set: {
+              label: sql`excluded.label`,
+              checkpointName: sql`excluded.checkpoint_name`,
+              startedAt: sql`excluded.started_at`,
+              durationMs: sql`excluded.duration_ms`,
+              outcome: sql`excluded.outcome`,
+            },
+          });
       } catch (stepErr) {
         // eslint-disable-next-line no-console
         console.error(`[runner] step timeline persist failed for run ${runId}:`, stepErr);

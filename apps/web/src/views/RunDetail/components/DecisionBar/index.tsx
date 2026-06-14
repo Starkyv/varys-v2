@@ -38,14 +38,25 @@ export function DecisionBar({ checkpoint: cp, runId }: { checkpoint: CheckpointV
     );
   }
 
+  // A failed comparison (over threshold): the baseline may be the wrong/outdated image,
+  // so approving promotes THIS run's screenshot to be the new golden baseline.
+  const isDiff = cp.reviewState === "diff";
+
   return (
     <div className={styles.bar}>
-      <span className={styles.spacer} />
+      {isDiff ? (
+        <span className={styles.hint}>
+          Over threshold. If the baseline is outdated and this screenshot is correct, approve it to become the new
+          baseline; reject if it’s a regression.
+        </span>
+      ) : (
+        <span className={styles.spacer} />
+      )}
       <Button variant="secondary" iconLeft={<X size={15} />} disabled={decision.isPending} onClick={() => decide("reject")} className={styles.reject}>
         Reject
       </Button>
       <Button variant="primary" iconLeft={<Check size={15} />} disabled={decision.isPending} onClick={() => setConfirming(true)} className={styles.approve}>
-        Approve
+        {isDiff ? "Approve as new baseline" : "Approve"}
       </Button>
       <ApproveDialog open={confirming} name={cp.name} onClose={() => setConfirming(false)} onConfirm={() => decide("approve")} />
     </div>

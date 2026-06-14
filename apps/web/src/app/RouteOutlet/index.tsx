@@ -6,6 +6,7 @@ import { RunDetail } from "../../views/RunDetail";
 import { Runs } from "../../views/Runs";
 import { SuiteRuns } from "../../views/SuiteRuns";
 import { Suites } from "../../views/Suites";
+import { TestDetail } from "../../views/TestDetail";
 import { Tests } from "../../views/Tests";
 
 /** Renders the view for the current route. The page transition lives in AppShell. */
@@ -28,5 +29,7 @@ export function RouteOutlet() {
       return <Environments />;
     case "runDetail":
       return <RunDetail runId={route.runId} />;
+    case "testDetail":
+      return <TestDetail testId={route.testId} />;
   }
 }

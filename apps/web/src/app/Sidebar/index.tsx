@@ -95,11 +95,11 @@ export function Sidebar() {
 
       <div className={styles.footer}>
         <button type="button" className={styles.account}>
-          <span className={styles.avatar}>MK</span>
+          <span className={styles.avatar}>M</span>
           {!sidebarCollapsed && (
             <>
               <span className={styles.accountText}>
-                <span className={styles.accountName}>Mira Kessler</span>
+                <span className={styles.accountName}>Mothil V</span>
                 <span className={styles.accountRole}>QA · Platform</span>
               </span>
               <span className={styles.accountChevron}>

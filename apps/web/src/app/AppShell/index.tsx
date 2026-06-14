@@ -8,6 +8,7 @@ import styles from "./styles.module.scss";
 /** A stable key per "page", so switching views animates but in-view updates don't. */
 function pageKey(route: Route): string {
   if (route.name === "runDetail") return `runDetail:${route.runId}`;
+  if (route.name === "testDetail") return `testDetail:${route.testId}`;
   return route.name;
 }
 

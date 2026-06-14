@@ -1,8 +1,9 @@
 import type { FolderSummary, TestSummary } from "@varys/review-contract";
-import { Button, Folder, Grip, IconButton, Inbox, Input, Lock, MoreHorizontal, Play, Select } from "@varys/ui";
+import { Button, Folder, Grip, IconButton, Inbox, Input, Lock, MoreHorizontal, Play, Select, Trash } from "@varys/ui";
 import { useState } from "react";
+import { useRouter } from "../../../../context/router";
 import { useToast } from "../../../../context/toast";
-import { useUpdateTest } from "../../../../queries";
+import { useDeleteTest, useUpdateTest } from "../../../../queries";
 import { shortDate } from "../../../../lib/format";
 import styles from "./styles.module.scss";
 
@@ -24,6 +25,7 @@ export function TestRow({
   onRun: (id: string) => void;
 }) {
   const [organizing, setOrganizing] = useState(false);
+  const { navigate } = useRouter();
 
   return (
     <div className={styles.wrap}>
@@ -43,7 +45,14 @@ export function TestRow({
         </span>
         <div className={styles.main}>
           <div className={styles.titleRow}>
-            <span className={styles.name}>{test.name}</span>
+            <button
+              type="button"
+              className={styles.name}
+              title={`Open “${test.name}” — waits & thresholds`}
+              onClick={() => navigate({ name: "testDetail", testId: test.id })}
+            >
+              {test.name}
+            </button>
             {test.needsEnvironment && (
               <span className={styles.envBadge} title="References variables — needs an environment">
                 <Lock size={11} />
@@ -99,11 +108,29 @@ function OrganizeEditor({
   onDone: () => void;
 }) {
   const update = useUpdateTest();
+  const del = useDeleteTest();
   const { toast } = useToast();
   const [name, setName] = useState(test.name);
   const [folderId, setFolderId] = useState(test.folderId ?? "");
   const [tags, setTags] = useState<string[]>(test.tags);
   const [tagInput, setTagInput] = useState("");
+
+  function onDelete() {
+    if (
+      !window.confirm(
+        `Delete “${test.name}”? This permanently removes the test and all of its runs, baselines, and history. This can’t be undone.`,
+      )
+    ) {
+      return;
+    }
+    del.mutate(test.id, {
+      onSuccess: () => {
+        toast(`Deleted “${test.name}”`);
+        onDone();
+      },
+      onError: (e) => toast(e instanceof Error ? e.message : "Delete failed"),
+    });
+  }
 
   function addTag() {
     const t = tagInput.trim();
@@ -168,12 +195,23 @@ function OrganizeEditor({
         </datalist>
       </div>
       <div className={styles.editorActions}>
-        <Button variant="ghost" size="sm" onClick={onDone}>
-          Cancel
+        <Button
+          variant="danger"
+          size="sm"
+          iconLeft={<Trash size={13} />}
+          loading={del.isPending}
+          onClick={onDelete}
+        >
+          Delete
         </Button>
-        <Button variant="primary" size="sm" loading={update.isPending} onClick={save}>
-          Save
-        </Button>
+        <div className={styles.editorActionsRight}>
+          <Button variant="ghost" size="sm" onClick={onDone}>
+            Cancel
+          </Button>
+          <Button variant="primary" size="sm" loading={update.isPending} onClick={save}>
+            Save
+          </Button>
+        </div>
       </div>
     </div>
   );

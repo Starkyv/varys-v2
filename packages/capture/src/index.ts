@@ -185,6 +185,46 @@ export function captureFingerprint(el: Element, opts?: CaptureOptions): Fingerpr
     if (distinguishing) scope = { container, text: distinguishing };
   }
 
+  // A deterministic structural CSS path (classic getSelector ladder), stored as a
+  // last-resort fallback the runner uses ONLY for element screenshots when the scored
+  // matcher can't confidently resolve. This restores positional addressing for the
+  // generic containers (no id/role/testid, hashed classes) that screenshots usually
+  // target — where a `.first()` match (maybe wrong region) beats a hard failure.
+  const cssPathOf = (target: Element): string | undefined => {
+    const doc = target.ownerDocument;
+    if (usableId && doc.querySelectorAll(`#${CSS.escape(usableId)}`).length === 1) {
+      return `#${CSS.escape(usableId)}`;
+    }
+    const tid = target.getAttribute("data-testid");
+    if (tid) return `[data-testid="${CSS.escape(tid)}"]`;
+    const parts: string[] = [];
+    let cur: Element | null = target;
+    while (cur && cur !== doc.body) {
+      const node: Element = cur;
+      const tag = node.tagName.toLowerCase();
+      const cid = node.getAttribute("id") ?? "";
+      // Anchor at the nearest stable ancestor id and stop climbing (shortens the path).
+      if (node !== target && cid && isUsableId(cid)) {
+        parts.unshift(`${tag}#${CSS.escape(cid)}`);
+        break;
+      }
+      let part = tag;
+      const classes = (node.getAttribute("class") ?? "")
+        .split(/\s+/)
+        .filter((c) => c && !/^\d+$/.test(c) && !looksHashed(c));
+      if (classes.length > 0 && classes.length <= 2) {
+        part += `.${classes.slice(0, 2).map((c) => CSS.escape(c)).join(".")}`;
+      }
+      const sibs = node.parentElement
+        ? Array.from(node.parentElement.children).filter((c) => c.tagName === node.tagName)
+        : [];
+      if (sibs.length > 1) part += `:nth-of-type(${sibs.indexOf(node) + 1})`;
+      parts.unshift(part);
+      cur = node.parentElement;
+    }
+    return parts.length ? parts.join(" > ") : undefined;
+  };
+
   const rect = el.getBoundingClientRect();
 
   return {
@@ -207,5 +247,6 @@ export function captureFingerprint(el: Element, opts?: CaptureOptions): Fingerpr
       width: rect.width,
       height: rect.height,
     },
+    cssPath: cssPathOf(el),
   };
 }

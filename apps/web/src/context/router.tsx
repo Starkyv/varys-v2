@@ -14,6 +14,7 @@ import {
  * existing same-origin deep links working behind the dev proxy / prod ingress:
  *
  *   ?run=<id>        → the run detail / diff viewer
+ *   ?test=<id>       → the test detail / config page
  *   ?suiteRun=<id>   → suite runs, with that report selected
  *   ?view=<name>     → a top-level view
  */
@@ -34,7 +35,8 @@ export type Route =
   | { name: "suiteRuns"; suiteRunId?: string }
   | { name: "needsReview" }
   | { name: "environments" }
-  | { name: "runDetail"; runId: string };
+  | { name: "runDetail"; runId: string }
+  | { name: "testDetail"; testId: string };
 
 const VIEW_PARAM: Record<NavKey, string> = {
   dashboard: "dashboard",
@@ -53,6 +55,8 @@ export function parseRoute(loc: Location = window.location): Route {
   const q = new URLSearchParams(loc.search);
   const run = q.get("run");
   if (run) return { name: "runDetail", runId: run };
+  const test = q.get("test");
+  if (test) return { name: "testDetail", testId: test };
   const suiteRun = q.get("suiteRun");
   if (suiteRun) return { name: "suiteRuns", suiteRunId: suiteRun };
   const view = q.get("view");
@@ -66,6 +70,8 @@ export function routeToUrl(route: Route): string {
   switch (route.name) {
     case "runDetail":
       return `?run=${encodeURIComponent(route.runId)}`;
+    case "testDetail":
+      return `?test=${encodeURIComponent(route.testId)}`;
     case "suiteRuns":
       return route.suiteRunId
         ? `?view=suite-runs&suiteRun=${encodeURIComponent(route.suiteRunId)}`
@@ -75,9 +81,12 @@ export function routeToUrl(route: Route): string {
   }
 }
 
-/** The sidebar nav item a route belongs under (run detail lives under Runs). */
+/** The sidebar nav item a route belongs under (run detail lives under Runs; test
+ *  detail under Tests). */
 export function activeNav(route: Route): NavKey {
-  return route.name === "runDetail" ? "runs" : (route.name as NavKey);
+  if (route.name === "runDetail") return "runs";
+  if (route.name === "testDetail") return "tests";
+  return route.name as NavKey;
 }
 
 interface RouterValue {
@@ -132,5 +141,7 @@ export function routeHeading(route: Route): { title: string; subtitle: string } 
       return { title: "Environments", subtitle: "Per-deployment variables & secrets" };
     case "runDetail":
       return { title: "Run detail", subtitle: "Replay timeline & diff review" };
+    case "testDetail":
+      return { title: "Test detail", subtitle: "Waits & thresholds — applied on the next run" };
   }
 }

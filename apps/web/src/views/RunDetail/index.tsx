@@ -123,6 +123,7 @@ export function RunDetail({ runId }: { runId: string }) {
                     key={`${selectedRow.checkpoint.name}-${selectedRow.index}`}
                     checkpoint={selectedRow.checkpoint}
                     runId={data.runId}
+                    target={data.fingerprints[selectedRow.index] ?? null}
                   />
                 ) : selectedRow ? (
                   <StepDetail
@@ -136,6 +137,7 @@ export function RunDetail({ runId }: { runId: string }) {
                     error={data.error}
                     traceUrl={data.traceUrl}
                     onOpenTrace={openTrace}
+                    target={data.fingerprints[selectedRow.index] ?? null}
                   />
                 ) : null}
               </motion.div>

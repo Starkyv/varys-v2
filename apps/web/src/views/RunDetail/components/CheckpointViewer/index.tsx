@@ -1,4 +1,4 @@
-import type { CaptureMode, CheckpointView } from "@varys/review-contract";
+import type { CaptureMode, CheckpointView, FingerprintSummary } from "@varys/review-contract";
 import {
   Badge,
   Columns,
@@ -13,6 +13,7 @@ import { useState } from "react";
 import { scorePct } from "../../../../lib/format";
 import { DecisionBar } from "../DecisionBar";
 import { DiffStage, type DiffMode } from "../DiffStage";
+import { LocatorDetail } from "../LocatorDetail";
 import { MaskTuning } from "../MaskTuning";
 import styles from "./styles.module.scss";
 
@@ -22,7 +23,16 @@ const CAPTURE_LABEL: Record<CaptureMode, string> = {
   region: "Region",
 };
 
-export function CheckpointViewer({ checkpoint: cp, runId }: { checkpoint: CheckpointView; runId: string }) {
+export function CheckpointViewer({
+  checkpoint: cp,
+  runId,
+  target,
+}: {
+  checkpoint: CheckpointView;
+  runId: string;
+  /** The recorded element fingerprint this checkpoint's screenshot was located by. */
+  target?: FingerprintSummary | null;
+}) {
   const [mode, setMode] = useState<DiffMode>("side-by-side");
   const [swipe, setSwipe] = useState(50);
   const [onion, setOnion] = useState(50);
@@ -93,6 +103,8 @@ export function CheckpointViewer({ checkpoint: cp, runId }: { checkpoint: Checkp
         {hasBaseline && cp.diffUrl && <MaskTuning checkpoint={cp} runId={runId} />}
 
         <DecisionBar checkpoint={cp} runId={runId} />
+
+        {target && <LocatorDetail target={target} />}
       </div>
     </div>
   );

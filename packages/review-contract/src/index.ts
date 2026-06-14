@@ -74,6 +74,85 @@ export interface TestSummary {
   tags: string[];
 }
 
+/**
+ * A wait primitive as surfaced for the test-config editor. Mirrors the step schema's
+ * wait union (kept here as a pure type, like Rect/CaptureMode, so the SPA needs no
+ * step-schema/zod dependency). `delay` and `networkIdle` are authorable in the editor;
+ * `selector` is display-only in v1 — shown as a locked row and preserved untouched on
+ * save (its target is summarized as `targetLabel`).
+ */
+export type ConfigWait =
+  | { kind: "delay"; ms: number }
+  | { kind: "networkIdle"; timeoutMs?: number }
+  | { kind: "selector"; state: "visible" | "hidden"; timeoutMs?: number; targetLabel: string };
+
+/** The subset of waits the editor writes back. Selector waits are NOT editable in v1
+ *  (the server preserves them), so only the two number-only kinds appear here. */
+export type EditableWait =
+  | { kind: "delay"; ms: number }
+  | { kind: "networkIdle"; timeoutMs?: number };
+
+/** One step as the test-config editor renders it — label + the waits before it, plus
+ *  the screenshot-only knobs (threshold). `supportsWaits` is false for navigate. */
+export interface TestConfigStep {
+  /** 0-based position in the definition's step list — the stable key the patch uses
+   *  (v1 never reorders/adds/deletes steps). */
+  index: number;
+  type: "navigate" | "click" | "type" | "screenshot";
+  /** Human label (same `describeStep` vocabulary as the run timeline). */
+  label: string;
+  /** False for navigate (no `waitBefore` in the schema); true otherwise. */
+  supportsWaits: boolean;
+  /** The waits the runner applies before this step (after the test-level defaults). */
+  waitBefore: ConfigWait[];
+  /** Screenshot-only: the checkpoint name; null for non-screenshot steps. */
+  checkpointName: string | null;
+  /** Screenshot-only: how it's captured. */
+  captureMode: CaptureMode | null;
+  /** Screenshot-only: the explicit per-checkpoint threshold, or null when it inherits
+   *  the runner default (shown as a placeholder in the editor). */
+  threshold: number | null;
+}
+
+/** The test-config read-model — the latest version's editable surface (waits +
+ *  threshold). Produced by `GET /tests/:id/config`. */
+export interface TestConfigView {
+  id: string;
+  name: string;
+  /** The latest version number this config reflects — echoed back as `baseVersion`
+   *  in a save so the server can reject a stale edit (optimistic concurrency). */
+  version: number;
+  /** Test-level default waits applied before every wait-supporting step. */
+  defaults: ConfigWait[];
+  steps: TestConfigStep[];
+}
+
+/** A per-step edit in a config patch — keyed by `index`. Omitted fields are left as-is. */
+export interface TestConfigStepPatch {
+  index: number;
+  /** Replace this step's authorable (delay/networkIdle) waits; any existing selector
+   *  waits are preserved server-side. */
+  waitBefore?: EditableWait[];
+  /** Screenshot-only: set the per-checkpoint threshold (0..1). */
+  threshold?: number;
+}
+
+/** The body of `PUT /tests/:id/config`: a targeted patch the server applies onto the
+ *  latest definition, writing a new audited test version. */
+export interface TestConfigPatch {
+  /** The version the edit was based on — the server returns 409 if a newer one exists. */
+  baseVersion: number;
+  /** Replace the test-level default waits (authorable kinds only). Omit to leave as-is. */
+  defaults?: EditableWait[];
+  /** Per-step edits. Omit to leave all steps as-is. */
+  steps?: TestConfigStepPatch[];
+}
+
+/** Result of a config save: the version number of the newly written test_version. */
+export interface SaveConfigResult {
+  version: number;
+}
+
 /** A flat folder — each test's one browsable home (DESIGN §5). */
 export interface FolderSummary {
   id: string;
@@ -100,6 +179,23 @@ export interface SuiteView {
 }
 
 /**
+ * A cookie seeded into the browser context BEFORE a run, so a test that needs an
+ * existing session/consent cookie starts with it already set. `value` supports the
+ * same `{{var}}` / `{{secret:NAME}}` tokens steps do — keep a real auth token in a
+ * write-only secret and reference it here rather than pasting it in plain.
+ */
+export interface EnvCookie {
+  /** Cookie name. */
+  name: string;
+  /** Cookie value; may contain `{{var}}` / `{{secret:NAME}}` tokens (resolved at run). */
+  value: string;
+  /** Cookie domain. Defaults to the run's `baseUrl` host when omitted. */
+  domain?: string;
+  /** Cookie path. Defaults to `/`. */
+  path?: string;
+}
+
+/**
  * An environment as the API returns it (list + get). Secret VALUES are never
  * returned — only their names — so a leaked screen or response can't expose them.
  * The same shape the env management UI renders and the Run picker lists.
@@ -111,6 +207,10 @@ export interface EnvironmentView {
   values: Record<string, string>;
   /** Names of the environment's secrets — values are write-only and never returned. */
   secretNames: string[];
+  /** Cookies seeded onto the browser context before each run against this environment.
+   *  Definitions are returned plain; put sensitive values in a secret and reference it
+   *  via `{{secret:NAME}}` in the cookie value. */
+  cookies: EnvCookie[];
 }
 
 /** One checkpoint within a run, as the reviewer sees it. */
@@ -241,6 +341,42 @@ export interface StepRun {
   outcome: "passed" | "failed";
 }
 
+/**
+ * A distilled, display-oriented view of the recorded element fingerprint the worker
+ * resolves a step against. Surfaced behind the run viewer's on-demand "what the locator
+ * was looking for" panel — shown for every step/checkpoint that has a target, so both a
+ * clean match and a failed locate are explainable without re-running a trace. A subset
+ * of the full step-schema fingerprint — only the human-meaningful signals.
+ */
+export interface FingerprintSummary {
+  /** The element's tag, e.g. `div`, `button`. */
+  tag: string;
+  /** ARIA role, explicit or implicit; null when none. */
+  role: string | null;
+  /** The accessible name the matcher recorded; null when the element had none. */
+  accessibleName: string | null;
+  /** Whether the accessible name came from a stable attribute (aria-label/title) rather
+   *  than volatile visible text — a durable-name signal. */
+  nameFromAttr: boolean;
+  /** Visible text snapshot — may be long or carry volatile data (dates, live numbers);
+   *  truncated for display. */
+  text: string | null;
+  /** `data-testid`, if recorded — the strongest, most durable signal. */
+  testId: string | null;
+  /** The element's `id` attribute, if any. */
+  elementId: string | null;
+  /** Other identifying attributes (id excluded — surfaced separately); null when none. */
+  attributes: Record<string, string> | null;
+  /** Durable (non-build-hashed) classes the matcher prefers; null when none. */
+  stableClasses: string[] | null;
+  /** All raw classes — includes build-hashed ones that rotate per deploy; null when none. */
+  moduleClasses: string[] | null;
+  /** Ancestor chain, nearest first, as compact `tag[role]#id` labels; null when none. */
+  ancestors: string[] | null;
+  /** Recorded position + size in screenshot pixels; null when not captured. */
+  boundingBox: Rect | null;
+}
+
 /** A run and its checkpoints, with the identifying context the reviewer needs. */
 export interface RunView {
   runId: string;
@@ -261,6 +397,11 @@ export interface RunView {
   /** For a `failed` run: 0-based index into `steps` of the step that failed, or null
    *  when it failed before any step ran (e.g. environment resolution). */
   failedStepIndex: number | null;
+  /** The recorded target fingerprint per step, indexed by step position (0-based) — what
+   *  the locator was looking for. `null` for steps with no element target (navigate, or a
+   *  full-page / region screenshot). Powers the viewer's on-demand "what the locator was
+   *  looking for" panel for EVERY step/checkpoint, passed or failed. */
+  fingerprints: (FingerprintSummary | null)[];
   /** Artifact URL of the kept Playwright trace zip, or null when the trigger
    *  didn't request one (traces are per-trigger on demand only). */
   traceUrl: string | null;

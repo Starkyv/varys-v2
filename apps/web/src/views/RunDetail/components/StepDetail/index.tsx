@@ -1,6 +1,8 @@
+import type { FingerprintSummary } from "@varys/review-contract";
 import { AlertTriangle, Button, cx, ExternalLink } from "@varys/ui";
 import type { ReactNode } from "react";
 import { absoluteTime, duration } from "../../../../lib/format";
+import { LocatorDetail } from "../LocatorDetail";
 import styles from "./styles.module.scss";
 
 type Outcome = "passed" | "failed" | "never";
@@ -13,8 +15,9 @@ const OUTCOME_LABEL: Record<Outcome, string> = {
 
 /**
  * The right-pane surface when a non-checkpoint step is selected. A compact
- * "Step detail" card; for the failing step it surfaces the full error and the
- * Open-Playwright-trace affordance.
+ * "Step detail" card; it always offers the on-demand "what the locator looked for"
+ * panel when the step has a target, and for the failing step it also surfaces the
+ * full error and the Open-Playwright-trace affordance.
  */
 export function StepDetail({
   icon,
@@ -25,6 +28,7 @@ export function StepDetail({
   error,
   traceUrl,
   onOpenTrace,
+  target,
 }: {
   icon: ReactNode;
   label: string;
@@ -34,6 +38,8 @@ export function StepDetail({
   error?: string | null;
   traceUrl?: string | null;
   onOpenTrace?: () => void;
+  /** The recorded element fingerprint this step's locator was matched against. */
+  target?: FingerprintSummary | null;
 }) {
   const failing = outcome === "failed";
   const never = outcome === "never";
@@ -66,24 +72,25 @@ export function StepDetail({
         )}
 
         {failing && (
-          <>
-            <div className={styles.errorCard}>
-              <span className={styles.errorIcon}>
-                <AlertTriangle size={20} />
-              </span>
-              <div className={styles.errorText}>
-                <div className={styles.errorTitle}>This step failed the run</div>
-                <div className={styles.errorMessage}>{error ?? "No error message was recorded."}</div>
-              </div>
+          <div className={styles.errorCard}>
+            <span className={styles.errorIcon}>
+              <AlertTriangle size={20} />
+            </span>
+            <div className={styles.errorText}>
+              <div className={styles.errorTitle}>This step failed the run</div>
+              <div className={styles.errorMessage}>{error ?? "No error message was recorded."}</div>
             </div>
-            {traceUrl && (
-              <div>
-                <Button variant="secondary" iconLeft={<ExternalLink size={15} />} onClick={onOpenTrace}>
-                  Open Playwright trace
-                </Button>
-              </div>
-            )}
-          </>
+          </div>
+        )}
+
+        {target && <LocatorDetail target={target} unmatched={failing} />}
+
+        {failing && traceUrl && (
+          <div>
+            <Button variant="secondary" iconLeft={<ExternalLink size={15} />} onClick={onOpenTrace}>
+              Open Playwright trace
+            </Button>
+          </div>
         )}
       </div>
     </div>

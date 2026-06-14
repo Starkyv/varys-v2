@@ -166,6 +166,59 @@ export interface RecordedSession {
 }
 
 /**
+ * Query params that capture "where to go next" after an auth bounce, or are
+ * single-use OAuth/OIDC artifacts. If one is baked into the entry navigate it sends a
+ * replay to the wrong page (or hangs on an expired code), so they're stripped
+ * (case-insensitive) from the recorded entry URL — the test starts at the clean page
+ * however you arrived there. Other query params (real app state like `?tab=`) are kept.
+ */
+const VOLATILE_ENTRY_PARAMS: ReadonlySet<string> = new Set([
+  "next",
+  "redirect",
+  "redirect_uri",
+  "redirect_url",
+  "redirecturl",
+  "redirectto",
+  "returnurl",
+  "return_to",
+  "returnto",
+  "return",
+  "continue",
+  "from",
+  "dest",
+  "destination",
+  "callback",
+  "callbackurl",
+  "goto",
+  "code",
+  "state",
+  "session_state",
+  "nonce",
+  "iss",
+  "id_token",
+  "access_token",
+  "prompt",
+  "login_hint",
+]);
+
+/** Build the recorded entry URL: drop volatile auth/redirect query params, then
+ *  parameterize the origin to `{{baseUrl}}`. Falls back to a plain origin-swap when the
+ *  href can't be parsed. */
+function sanitizeEntryUrl(href: string, origin: string): string {
+  let cleaned = href;
+  try {
+    const u = new URL(href);
+    for (const key of [...u.searchParams.keys()]) {
+      if (VOLATILE_ENTRY_PARAMS.has(key.toLowerCase())) u.searchParams.delete(key);
+    }
+    cleaned = u.toString();
+  } catch {
+    // Non-absolute / unparseable href — fall back to the raw value.
+  }
+  return cleaned.replace(origin, "{{baseUrl}}");
+}
+
+/**
  * Start recording interactions on a page into a step definition. Runs in the
  * browser (the extension's content script). `capture` is injected (rather than
  * imported) so this stays self-contained and serializable into a page.
@@ -193,9 +246,13 @@ export function startRecorder(
     onStep?.(s);
   };
 
-  const href = doc.location.href;
   const origin = doc.location.origin;
-  push({ type: "navigate", url: href.replace(origin, "{{baseUrl}}") });
+  // The entry navigate is the test's ONLY navigate (later ones are dropped as
+  // redirect/click effects), so its URL must be the clean canonical page — not
+  // whatever auth detour you happened to start on. Strip "where to go next" / single-use
+  // OAuth params so a recording begun on (or bounced through) e.g. `…/login?next=/page`
+  // doesn't replay straight to that stale destination.
+  push({ type: "navigate", url: sanitizeEntryUrl(doc.location.href, origin) });
 
   const onClick = (e: Event) => {
     if (ignore?.(e)) return;

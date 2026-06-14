@@ -34,8 +34,10 @@ function resolveFingerprint(fp: Fingerprint, profile: EnvironmentProfile): Finge
   return out;
 }
 
-/** Resolve fingerprint tokens inside selector waits; other wait kinds are untouched. */
-function resolveWaits(waits: Wait[], profile: EnvironmentProfile): Wait[] {
+/** Resolve fingerprint tokens inside selector waits; other wait kinds are untouched.
+ *  Exported so the runner can resolve test-level default waits (which aren't attached
+ *  to any single step) the same way it resolves a step's own `waitBefore`. */
+export function resolveWaits(waits: Wait[], profile: EnvironmentProfile): Wait[] {
   return waits.map((w) =>
     w.kind === "selector" ? { ...w, target: resolveFingerprint(w.target, profile) } : w,
   );

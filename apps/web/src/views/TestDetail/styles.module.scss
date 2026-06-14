@@ -1,0 +1,217 @@
+@use "../../styles/mixins" as *;
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+  padding-bottom: var(--space-32);
+}
+
+/* --- header --- */
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+}
+
+.titleBlock {
+  display: flex;
+  align-items: center;
+  gap: var(--space-10);
+  min-width: 0;
+}
+
+.title {
+  margin: 0;
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+  @include truncate;
+}
+
+/* --- card heads --- */
+.cardHead {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-12);
+  margin-bottom: var(--space-16);
+}
+
+.cardIcon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-inset);
+  color: var(--color-text-muted);
+}
+
+.cardTitle {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+}
+
+.cardSub {
+  margin-top: 2px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  max-width: 64ch;
+}
+
+/* --- steps --- */
+.steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+}
+
+.step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-10);
+  padding: var(--space-12) var(--space-14);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-subtle);
+}
+
+.stepHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.stepIcon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  color: var(--color-text-subtle);
+}
+
+.stepLabel {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-strong);
+  font-family: var(--font-mono);
+  @include truncate;
+}
+
+.stepTag {
+  flex: 0 0 auto;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--space-6);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-inset);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+}
+
+.stepNote {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+  font-style: italic;
+}
+
+/* --- threshold --- */
+.thresholdRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-10);
+  flex-wrap: wrap;
+  padding-top: var(--space-8);
+  border-top: 1px dashed var(--color-border);
+}
+
+.thresholdLabel {
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+}
+
+.thresholdInput {
+  width: 96px;
+}
+
+.thresholdHelp {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+
+/* --- wait editor --- */
+.waits {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+.waitRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.waitKind {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6);
+  min-width: 132px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+}
+
+.waitLockedNote {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+  font-style: italic;
+}
+
+.waitInput {
+  width: 110px;
+}
+
+.waitUnit {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+
+.waitEmpty {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+
+.waitAdd {
+  display: flex;
+  gap: var(--space-8);
+  margin-top: var(--space-4);
+}
+
+/* --- save bar --- */
+.saveBar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-16);
+  padding: var(--space-12) var(--space-16);
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.saveHint {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  margin-right: auto;
+}
+
+@include mq-down("sm") {
+  .waitKind {
+    min-width: 0;
+  }
+}

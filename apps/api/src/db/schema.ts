@@ -1,7 +1,9 @@
 // Re-export the shared schema so existing intra-app imports keep working.
 export {
+  baselines,
   DDL,
   folders,
+  runResults,
   runs,
   runSteps,
   schema,

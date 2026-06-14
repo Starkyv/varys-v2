@@ -1,11 +1,21 @@
 .bar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-12);
+  row-gap: var(--space-8);
 }
 
 .spacer {
   flex: 1;
+}
+
+.hint {
+  flex: 1 1 220px;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  line-height: var(--line-height-snug);
 }
 
 .decided {

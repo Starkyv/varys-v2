@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { TuningInput } from "@varys/review-contract";
+import type { TestConfigPatch, TuningInput } from "@varys/review-contract";
 import {
   approveAllInRun,
   type CreateEnvironmentBody,
@@ -10,7 +10,9 @@ import {
   deleteEnvironment,
   deleteFolder,
   deleteSuite,
+  deleteTest,
   fetchDashboard,
+  fetchTestConfig,
   fetchEnvironments,
   fetchFolders,
   fetchNeedsReview,
@@ -27,6 +29,7 @@ import {
   reEvaluateCheckpoint,
   renameFolder,
   runTest,
+  saveTestConfig,
   triggerSuiteRun,
   updateSuite,
   type UpdateEnvironmentBody,
@@ -95,6 +98,29 @@ export function useNeedsReview() {
 
 export function useTests() {
   return useQuery({ queryKey: testsQueryKey(), queryFn: fetchTests });
+}
+
+export function testConfigQueryKey(id: string) {
+  return ["test-config", id] as const;
+}
+
+/** A test's editable config (waits + threshold) — the test-detail page's read. */
+export function useTestConfig(id: string) {
+  return useQuery({ queryKey: testConfigQueryKey(id), queryFn: () => fetchTestConfig(id) });
+}
+
+/** Save a config patch (new test version). On success, refresh this test's config (so
+ *  the editor rebases on the new version) and the tests list (its needs-environment
+ *  flag is derived from the latest definition). */
+export function useSaveTestConfig(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (patch: TestConfigPatch) => saveTestConfig(id, patch),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: testConfigQueryKey(id) });
+      qc.invalidateQueries({ queryKey: testsQueryKey() });
+    },
+  });
 }
 
 export function foldersQueryKey() {
@@ -218,6 +244,24 @@ export function useUpdateTest() {
       qc.invalidateQueries({ queryKey: testsQueryKey() });
       qc.invalidateQueries({ queryKey: foldersQueryKey() });
       qc.invalidateQueries({ queryKey: tagsQueryKey() });
+    },
+  });
+}
+
+/** Hard-delete a test (and all its runs/baselines/history), then refresh every
+ *  surface it appears on: the tests list, folder counts, tags-in-use, and the
+ *  run/review/dashboard read-models its runs fed. */
+export function useDeleteTest() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => deleteTest(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: testsQueryKey() });
+      qc.invalidateQueries({ queryKey: foldersQueryKey() });
+      qc.invalidateQueries({ queryKey: tagsQueryKey() });
+      qc.invalidateQueries({ queryKey: runsQueryKey() });
+      qc.invalidateQueries({ queryKey: needsReviewQueryKey() });
+      qc.invalidateQueries({ queryKey: dashboardQueryKey() });
     },
   });
 }

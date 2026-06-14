@@ -1,4 +1,4 @@
-import type { EnvironmentView } from "@varys/review-contract";
+import type { EnvCookie, EnvironmentView } from "@varys/review-contract";
 import { Button, Database, Input, Lock, Trash } from "@varys/ui";
 import { useState } from "react";
 import { useToast } from "../../../../context/toast";
@@ -12,18 +12,41 @@ export function EnvEditor({ env, onDeleted }: { env: EnvironmentView; onDeleted:
 
   const [name, setName] = useState(env.name);
   const [values, setValues] = useState<Record<string, string>>({ ...env.values });
+  const [cookies, setCookies] = useState<EnvCookie[]>(env.cookies ?? []);
   const [newVarKey, setNewVarKey] = useState("");
   const [newVarVal, setNewVarVal] = useState("");
   const [newSecretName, setNewSecretName] = useState("");
   const [newSecretVal, setNewSecretVal] = useState("");
+  const [newCookieName, setNewCookieName] = useState("");
+  const [newCookieVal, setNewCookieVal] = useState("");
+  const [newCookieDomain, setNewCookieDomain] = useState("");
 
   const onError = (e: unknown) => toast(e instanceof Error ? e.message : "Update failed");
 
   function save() {
     update.mutate(
-      { id: env.id, body: { name: name.trim() || env.name, values } },
+      { id: env.id, body: { name: name.trim() || env.name, values, cookies } },
       { onSuccess: () => toast("Environment saved"), onError },
     );
+  }
+
+  function patchCookie(cookieName: string, patch: Partial<EnvCookie>) {
+    setCookies((cs) => cs.map((c) => (c.name === cookieName ? { ...c, ...patch } : c)));
+  }
+
+  function addCookie() {
+    const cn = newCookieName.trim();
+    if (!cn) return;
+    const cookie: EnvCookie = { name: cn, value: newCookieVal };
+    if (newCookieDomain.trim()) cookie.domain = newCookieDomain.trim();
+    setCookies((cs) => [...cs.filter((c) => c.name !== cn), cookie]);
+    setNewCookieName("");
+    setNewCookieVal("");
+    setNewCookieDomain("");
+  }
+
+  function removeCookie(cookieName: string) {
+    setCookies((cs) => cs.filter((c) => c.name !== cookieName));
   }
 
   function addVariable() {
@@ -145,6 +168,49 @@ export function EnvEditor({ env, onDeleted }: { env: EnvironmentView; onDeleted:
             Add secret
           </Button>
         </div>
+
+        <div className={styles.secretsHead}>
+          <span className={styles.sectionTitle}>Cookies</span>
+          <span className={styles.secretsHint}>set before each run · value supports {"{{secret:NAME}}"}</span>
+        </div>
+        <div className={styles.rows}>
+          {cookies.map((c) => (
+            <div key={c.name} className={styles.varRow}>
+              <span className={styles.varKey}>{c.name}</span>
+              <Input
+                className={styles.cookieField}
+                mono
+                inputSize="sm"
+                value={c.value}
+                placeholder="value or {{secret:NAME}}"
+                onChange={(e) => patchCookie(c.name, { value: e.target.value })}
+                aria-label={`${c.name} value`}
+              />
+              <Input
+                className={styles.cookieField}
+                mono
+                inputSize="sm"
+                value={c.domain ?? ""}
+                placeholder="domain (defaults to baseUrl)"
+                onChange={(e) => patchCookie(c.name, { domain: e.target.value.trim() || undefined })}
+                aria-label={`${c.name} domain`}
+              />
+              <button type="button" className={styles.remove} aria-label={`Remove ${c.name}`} onClick={() => removeCookie(c.name)}>
+                <Trash size={14} />
+              </button>
+            </div>
+          ))}
+          {cookies.length === 0 && <div className={styles.none}>No cookies yet.</div>}
+        </div>
+        <div className={styles.addRow}>
+          <input className={styles.addKey} placeholder="cookie name" value={newCookieName} onChange={(e) => setNewCookieName(e.target.value)} />
+          <input className={styles.addVal} placeholder="value or {{secret:NAME}}" value={newCookieVal} onChange={(e) => setNewCookieVal(e.target.value)} />
+          <input className={styles.addVal} placeholder="domain (optional)" value={newCookieDomain} onChange={(e) => setNewCookieDomain(e.target.value)} />
+          <Button variant="secondary" size="sm" onClick={addCookie} disabled={!newCookieName.trim()}>
+            Add cookie
+          </Button>
+        </div>
+        <p className={styles.cookieNote}>Cookies are saved with the environment — click Save to apply.</p>
       </div>
     </div>
   );
