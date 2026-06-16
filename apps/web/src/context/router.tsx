@@ -21,6 +21,7 @@ import {
 export type NavKey =
   | "dashboard"
   | "tests"
+  | "drafts"
   | "suites"
   | "runs"
   | "suiteRuns"
@@ -30,6 +31,7 @@ export type NavKey =
 export type Route =
   | { name: "dashboard" }
   | { name: "tests" }
+  | { name: "drafts" }
   | { name: "suites" }
   | { name: "runs" }
   | { name: "suiteRuns"; suiteRunId?: string }
@@ -41,6 +43,7 @@ export type Route =
 const VIEW_PARAM: Record<NavKey, string> = {
   dashboard: "dashboard",
   tests: "tests",
+  drafts: "drafts",
   suites: "suites",
   runs: "runs",
   suiteRuns: "suite-runs",
@@ -129,6 +132,8 @@ export function routeHeading(route: Route): { title: string; subtitle: string } 
       return { title: "Dashboard", subtitle: "Visual regression health across every environment" };
     case "tests":
       return { title: "Tests", subtitle: "Organize, file and run your recordings" };
+    case "drafts":
+      return { title: "Review queue", subtitle: "AI-authored drafts awaiting review & promotion" };
     case "suites":
       return { title: "Suites", subtitle: "Saved selections you run against environments" };
     case "runs":

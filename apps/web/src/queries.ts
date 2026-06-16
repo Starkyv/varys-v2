@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { TestConfigPatch, TuningInput } from "@varys/review-contract";
+import type { PromoteDraftBody, TestConfigPatch, TuningInput } from "@varys/review-contract";
 import {
   approveAllInRun,
   type CreateEnvironmentBody,
@@ -11,7 +11,9 @@ import {
   deleteFolder,
   deleteSuite,
   deleteTest,
+  discardDraft,
   fetchDashboard,
+  fetchDrafts,
   fetchTestConfig,
   fetchEnvironments,
   fetchFolders,
@@ -26,6 +28,7 @@ import {
   fetchTests,
   persistCheckpointMasks,
   postDecision,
+  promoteDraft,
   reEvaluateCheckpoint,
   renameFolder,
   runTest,
@@ -98,6 +101,40 @@ export function useNeedsReview() {
 
 export function useTests() {
   return useQuery({ queryKey: testsQueryKey(), queryFn: fetchTests });
+}
+
+export function draftsQueryKey() {
+  return ["drafts"] as const;
+}
+
+/** The AI-authored Draft review queue. Polled so a draft Claude just finished appears
+ *  without a manual refresh. */
+export function useDrafts() {
+  return useQuery({ queryKey: draftsQueryKey(), queryFn: fetchDrafts, refetchInterval: 5000 });
+}
+
+/** Promote a draft (folder + tags + active). On success it leaves the review queue and
+ *  joins the active Tests list, so refresh both (plus folder counts + tags-in-use). */
+export function usePromoteDraft() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { id: string; body: PromoteDraftBody }) => promoteDraft(vars.id, vars.body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: draftsQueryKey() });
+      qc.invalidateQueries({ queryKey: testsQueryKey() });
+      qc.invalidateQueries({ queryKey: foldersQueryKey() });
+      qc.invalidateQueries({ queryKey: tagsQueryKey() });
+    },
+  });
+}
+
+/** Discard a draft (hard-delete), then refresh the review queue. */
+export function useDiscardDraft() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => discardDraft(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: draftsQueryKey() }),
+  });
 }
 
 export function testConfigQueryKey(id: string) {

@@ -1,6 +1,12 @@
-import type { Fingerprint, Rect, Step, TestDefinition, Variable, Viewport } from "@varys/step-schema";
+import type { Fingerprint, Rect, Step, TestDefinition, Variable, Viewport, Wait } from "@varys/step-schema";
 
-export type CaptureFn = (el: Element, opts?: { climb?: boolean }) => Fingerprint;
+/**
+ * `@varys/recorder` is split so its entry (`index.ts`) is the **DOM-free shared core**
+ * — pure step factories + the accumulator + the variable/selector heuristics — that the
+ * server-side MCP authoring layer can import without a DOM lib (ADR 0001). The browser
+ * DOM-listener driver (`startRecorder`, `CaptureFn`, `CheckpointSpec`, `RecordedSession`)
+ * lives in `./dom`, which the Chrome extension imports.
+ */
 
 /**
  * The "ambiguous middle" heuristic (DESIGN §2): is a typed value environment-specific
@@ -145,71 +151,26 @@ export function isWeakFingerprint(fp: Fingerprint): boolean {
  *  navigation-surviving store, so a recording outlives full page loads). */
 export type OnStep = (step: Step) => void;
 
-/**
- * How to capture a checkpoint: an element (default), a drawn region, or the full
- * page. `masks` (optional, per checkpoint) are rectangles in screenshot-pixel space
- * the diff ignores — drawn over volatile sub-regions while designating the target.
- */
-export type CheckpointSpec =
-  // `target` overrides the captured fingerprint — the extension uses it to commit a
-  // selector-guard remedy (a bound token or a structural-only locator).
-  | { mode?: "element"; el: Element; target?: Fingerprint; masks?: Rect[] }
-  | { mode: "region"; rect: Rect; masks?: Rect[] }
-  | { mode: "fullpage"; masks?: Rect[] };
-
-export interface RecordedSession {
-  checkpoint(name: string, spec: CheckpointSpec): void;
-  getDefinition(name: string, viewport: Viewport): TestDefinition;
-  /** Number of steps recorded so far (navigate + clicks + types + screenshots). */
-  stepCount(): number;
-  stop(): void;
-}
-
-/**
- * Query params that capture "where to go next" after an auth bounce, or are
- * single-use OAuth/OIDC artifacts. If one is baked into the entry navigate it sends a
- * replay to the wrong page (or hangs on an expired code), so they're stripped
- * (case-insensitive) from the recorded entry URL — the test starts at the clean page
- * however you arrived there. Other query params (real app state like `?tab=`) are kept.
- */
-const VOLATILE_ENTRY_PARAMS: ReadonlySet<string> = new Set([
-  "next",
-  "redirect",
-  "redirect_uri",
-  "redirect_url",
-  "redirecturl",
-  "redirectto",
-  "returnurl",
-  "return_to",
-  "returnto",
-  "return",
-  "continue",
-  "from",
-  "dest",
-  "destination",
-  "callback",
-  "callbackurl",
-  "goto",
-  "code",
-  "state",
-  "session_state",
-  "nonce",
-  "iss",
-  "id_token",
-  "access_token",
-  "prompt",
-  "login_hint",
-]);
-
 /** Build the recorded entry URL: drop volatile auth/redirect query params, then
  *  parameterize the origin to `{{baseUrl}}`. Falls back to a plain origin-swap when the
- *  href can't be parsed. */
-function sanitizeEntryUrl(href: string, origin: string): string {
+ *  href can't be parsed. Self-contained (the volatile-param set is inlined) so it
+ *  survives being injected into a page via `.toString()` alongside `startRecorder`. */
+export function sanitizeEntryUrl(href: string, origin: string): string {
+  // Query params that capture "where to go next" after an auth bounce, or are single-use
+  // OAuth/OIDC artifacts. Baked into the entry navigate they'd send a replay to the wrong
+  // page (or hang on an expired code), so they're stripped (case-insensitive); real app
+  // state (`?tab=`) is kept.
+  const VOLATILE = new Set([
+    "next", "redirect", "redirect_uri", "redirect_url", "redirecturl", "redirectto",
+    "returnurl", "return_to", "returnto", "return", "continue", "from", "dest",
+    "destination", "callback", "callbackurl", "goto", "code", "state", "session_state",
+    "nonce", "iss", "id_token", "access_token", "prompt", "login_hint",
+  ]);
   let cleaned = href;
   try {
     const u = new URL(href);
     for (const key of [...u.searchParams.keys()]) {
-      if (VOLATILE_ENTRY_PARAMS.has(key.toLowerCase())) u.searchParams.delete(key);
+      if (VOLATILE.has(key.toLowerCase())) u.searchParams.delete(key);
     }
     cleaned = u.toString();
   } catch {
@@ -218,88 +179,94 @@ function sanitizeEntryUrl(href: string, origin: string): string {
   return cleaned.replace(origin, "{{baseUrl}}");
 }
 
-/**
- * Start recording interactions on a page into a step definition. Runs in the
- * browser (the extension's content script). `capture` is injected (rather than
- * imported) so this stays self-contained and serializable into a page.
- *
- * Records: an initial navigate (origin auto-parameterized to {{baseUrl}}),
- * clicks, and typed values (password fields become {{secret:…}} references).
- * Checkpoints (screenshot targets) are designated explicitly.
- *
- * `onStep`, if given, fires for every step the instant it is recorded — including
- * the initial navigate. The extension uses it to forward each step to a store that
- * survives full page navigations, so a recording can span a login redirect.
- */
-export function startRecorder(
-  capture: CaptureFn,
-  doc: Document = document,
-  ignore?: (e: Event) => boolean,
-  onStep?: OnStep,
-  classifyTyped: ClassifyTyped = classifyTypedValue,
-): RecordedSession {
-  const steps: TestDefinition["steps"] = [];
+/* ─────────────────────────── Shared step-building core ───────────────────────────
+ * Pure, DOM-free factories + a driver-agnostic accumulator. BOTH drivers build steps
+ * through these — the human DOM-listener driver (`startRecorder`, below) and the
+ * server-side MCP agent orchestrator — so AI-authored and human-authored tests are
+ * identical in schema and quality by construction (ADR 0001). The factories are
+ * self-contained, so they also survive `.toString()` injection on the human path. */
 
-  // Append + notify in one place so every recorded step is shipped to onStep.
+/** The value-classification inputs `buildType` needs — read off a live `<input>` by the
+ *  human driver, or via `page.evaluate` by the agent driver. Carries no DOM reference. */
+export interface TypedField {
+  type?: string;
+  id?: string;
+  name?: string;
+  value: string;
+}
+
+/** How the agent declares a typed value's nature (the analog of the human's one-tap
+ *  confirm). Omitted ⇒ fall back to the `classify` heuristic. */
+export type TypedKind = "variable" | "static" | "secret";
+
+/** A click step from an already-captured fingerprint. */
+export function buildClick(target: Fingerprint): Step {
+  return { type: "click", target };
+}
+
+/** A type step, applying the secret/variable/literal policy. A `type=password` field —
+ *  or an explicitly-declared `secret` kind — always tokenizes to `{{secret:NAME}}` (the
+ *  live value never enters the recording). Otherwise the declared kind, or the heuristic
+ *  fallback, decides `{{variable}}` vs a literal. */
+export function buildType(
+  target: Fingerprint,
+  field: TypedField,
+  opts?: { kind?: TypedKind; classify?: ClassifyTyped },
+): Step {
+  const isPassword = field.type === "password";
+  if (isPassword || (opts && opts.kind === "secret")) {
+    const name = field.id || field.name || (isPassword ? "password" : "secret");
+    return { type: "type", target, value: `{{secret:${name}}}` };
+  }
+  const classify = (opts && opts.classify) || classifyTypedValue;
+  const kind = (opts && opts.kind) || classify(field.value);
+  const value = kind === "variable" ? `{{${variableNameFor(field)}}}` : field.value;
+  return { type: "type", target, value };
+}
+
+/** The test's entry navigate (origin → `{{baseUrl}}`, volatile auth params stripped). */
+export function buildEntryNavigate(href: string, origin: string): Step {
+  return { type: "navigate", url: sanitizeEntryUrl(href, origin) };
+}
+
+/** A checkpoint spec AFTER capture — element mode carries an already-captured
+ *  `Fingerprint` (not a live element), keeping the accumulator DOM-free. `waitBefore`
+ *  (optional) lets a driver attach settle waits ahead of the screenshot. */
+export type RecordedCheckpoint =
+  | { mode?: "element"; target: Fingerprint; masks?: Rect[]; waitBefore?: Wait[] }
+  | { mode: "region"; rect: Rect; masks?: Rect[]; waitBefore?: Wait[] }
+  | { mode: "fullpage"; masks?: Rect[]; waitBefore?: Wait[] };
+
+/** A driver-agnostic recording: holds the ordered steps, shapes checkpoints, and
+ *  assembles the definition (deriving variables from the recorded tokens). */
+export interface Recording {
+  push(step: Step): void;
+  checkpoint(name: string, spec: RecordedCheckpoint): void;
+  getDefinition(name: string, viewport: Viewport): TestDefinition;
+  stepCount(): number;
+  /** Count of screenshot (checkpoint) steps — for the zero-checkpoint warning. */
+  checkpointCount(): number;
+}
+
+export function createRecording(onStep?: OnStep): Recording {
+  const steps: Step[] = [];
   const push = (s: Step) => {
     steps.push(s);
     onStep?.(s);
   };
-
-  const origin = doc.location.origin;
-  // The entry navigate is the test's ONLY navigate (later ones are dropped as
-  // redirect/click effects), so its URL must be the clean canonical page — not
-  // whatever auth detour you happened to start on. Strip "where to go next" / single-use
-  // OAuth params so a recording begun on (or bounced through) e.g. `…/login?next=/page`
-  // doesn't replay straight to that stale destination.
-  push({ type: "navigate", url: sanitizeEntryUrl(doc.location.href, origin) });
-
-  const onClick = (e: Event) => {
-    if (ignore?.(e)) return;
-    const el = e.target as Element | null;
-    // Climb to the actionable control — you usually click an inner icon/span, not the button.
-    if (el) push({ type: "click", target: capture(el, { climb: true }) });
-  };
-
-  const onChange = (e: Event) => {
-    if (ignore?.(e)) return;
-    const el = e.target as HTMLInputElement | null;
-    if (!el) return;
-    // Password ⇒ always a secret reference; the value never enters the recording.
-    if (el.type === "password") {
-      const name = el.id || el.name || "password";
-      push({ type: "type", target: capture(el), value: `{{secret:${name}}}` });
-      return;
-    }
-    // The ambiguous middle: tokenize when classified as a variable, else keep literal.
-    const value =
-      classifyTyped(el.value) === "variable"
-        ? `{{${variableNameFor(el)}}}`
-        : el.value;
-    push({ type: "type", target: capture(el), value });
-  };
-
-  doc.addEventListener("click", onClick, true);
-  doc.addEventListener("change", onChange, true);
-
   return {
+    push,
     checkpoint(name, spec) {
-      // Carry masks only when present, so simple checkpoints stay clean (and old
-      // definitions without masks are unchanged).
+      // Carry masks / waits only when present, so simple checkpoints stay clean (and old
+      // definitions without them are unchanged).
       const masks = spec.masks && spec.masks.length ? { masks: spec.masks } : {};
+      const waits = spec.waitBefore && spec.waitBefore.length ? { waitBefore: spec.waitBefore } : {};
       if (spec.mode === "fullpage") {
-        push({ type: "screenshot", name, captureMode: "fullpage", ...masks });
+        push({ type: "screenshot", name, captureMode: "fullpage", ...masks, ...waits });
       } else if (spec.mode === "region") {
-        push({ type: "screenshot", name, captureMode: "region", rect: spec.rect, ...masks });
+        push({ type: "screenshot", name, captureMode: "region", rect: spec.rect, ...masks, ...waits });
       } else {
-        // spec.target lets the extension commit a selector-guard remedy; else capture.
-        push({
-          type: "screenshot",
-          name,
-          captureMode: "element",
-          target: spec.target ?? capture(spec.el),
-          ...masks,
-        });
+        push({ type: "screenshot", name, captureMode: "element", target: spec.target, ...masks, ...waits });
       }
     },
     getDefinition(name, viewport) {
@@ -310,9 +277,9 @@ export function startRecorder(
     stepCount() {
       return steps.length;
     },
-    stop() {
-      doc.removeEventListener("click", onClick, true);
-      doc.removeEventListener("change", onChange, true);
+    checkpointCount() {
+      return steps.filter((s) => s.type === "screenshot").length;
     },
   };
 }
+

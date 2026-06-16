@@ -24,6 +24,14 @@ export const tests = pgTable("tests", {
   name: text("name").notNull(),
   /** The test's folder; null = Unfiled. Folder deletion unfiles (SET NULL). */
   folderId: uuid("folder_id").references(() => folders.id, { onDelete: "set null" }),
+  /** Lifecycle: `draft` = an un-promoted AI authoring output, held out of suites and
+   *  schedules and surfaced in the review queue; `active` = a normal test. Human
+   *  recordings are `active` on create — the draft gate is AI-only (Slice 14). */
+  status: text("status").notNull().default("active"),
+  /** Author: `human` (extension recording) or `ai` (Claude via the MCP authoring layer). */
+  origin: text("origin").notNull().default("human"),
+  /** The steering instruction that produced an AI draft (review-queue context); null otherwise. */
+  intent: text("intent"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -236,6 +244,11 @@ CREATE TABLE IF NOT EXISTS folders (
 );
 -- Bring an existing tests table up to date; folder deletion unfiles via SET NULL.
 ALTER TABLE tests ADD COLUMN IF NOT EXISTS folder_id uuid REFERENCES folders(id) ON DELETE SET NULL;
+-- Draft lifecycle (Slice 14 — Claude/MCP authoring): existing rows default to an
+-- active human test, so the gate is AI-only and human recordings are untouched.
+ALTER TABLE tests ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'active';
+ALTER TABLE tests ADD COLUMN IF NOT EXISTS origin text NOT NULL DEFAULT 'human';
+ALTER TABLE tests ADD COLUMN IF NOT EXISTS intent text;
 CREATE TABLE IF NOT EXISTS test_tags (
   test_id uuid NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
   tag text NOT NULL,

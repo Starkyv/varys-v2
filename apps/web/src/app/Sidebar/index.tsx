@@ -7,6 +7,7 @@ import {
   Eye,
   Flask,
   type IconProps,
+  Inbox,
   ListRun,
   Squares,
 } from "@varys/ui";
@@ -14,7 +15,7 @@ import { motion } from "framer-motion";
 import type { ComponentType } from "react";
 import { activeNav, type NavKey, type Route, useRouter } from "../../context/router";
 import { useUI } from "../../context/ui";
-import { useNeedsReview } from "../../queries";
+import { useDrafts, useNeedsReview } from "../../queries";
 import styles from "./styles.module.scss";
 
 interface NavGroup {
@@ -28,6 +29,7 @@ const GROUPS: NavGroup[] = [
     label: "Library",
     items: [
       { key: "tests", name: "Tests", Icon: Flask },
+      { key: "drafts", name: "Review queue", Icon: Inbox },
       { key: "suites", name: "Suites", Icon: Squares },
     ],
   },
@@ -46,8 +48,10 @@ export function Sidebar() {
   const { route, navigate } = useRouter();
   const { sidebarCollapsed } = useUI();
   const needsReview = useNeedsReview();
+  const drafts = useDrafts();
   const active = activeNav(route);
   const reviewCount = needsReview.data?.length ?? 0;
+  const draftCount = drafts.data?.length ?? 0;
 
   return (
     <aside className={cx(styles.sidebar, sidebarCollapsed && styles.collapsed)}>
@@ -67,7 +71,7 @@ export function Sidebar() {
             {!sidebarCollapsed && <div className={styles.groupLabel}>{group.label}</div>}
             {group.items.map(({ key, name, Icon }) => {
               const isActive = active === key;
-              const count = key === "needsReview" ? reviewCount : 0;
+              const count = key === "needsReview" ? reviewCount : key === "drafts" ? draftCount : 0;
               return (
                 <button
                   key={key}

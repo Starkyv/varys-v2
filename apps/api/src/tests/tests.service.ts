@@ -7,10 +7,14 @@ import {
 } from "@nestjs/common";
 import type {
   ConfigWait,
+  DraftSummary,
   EditableWait,
+  PromoteDraftBody,
   TestConfigPatch,
   TestConfigStep,
   TestConfigView,
+  TestOrigin,
+  TestStatus,
   TestSummary,
 } from "@varys/review-contract";
 import {
@@ -58,6 +62,11 @@ function normalizeTags(tags: string[]): string[] {
 function needsEnvironment(definition: TestDefinition): boolean {
   if (definition.variables && definition.variables.length > 0) return true;
   return JSON.stringify(definition).includes("{{");
+}
+
+/** How many checkpoints (screenshot steps) a definition asserts — 0 ⇒ a no-op test. */
+function checkpointCount(definition: TestDefinition): number {
+  return definition.steps.filter((s) => s.type === "screenshot").length;
 }
 
 /** A short human handle for a selector-wait's target fingerprint (display only). */
@@ -121,8 +130,10 @@ export class TestsService {
     return { id: created.id, version: 1 };
   }
 
-  /** All saved tests (recordings), newest first — each tagged with whether it needs
-   *  an environment to run (from its latest version's definition) and its folder. */
+  /** All ACTIVE tests (recordings), newest first — each tagged with whether it needs
+   *  an environment to run (from its latest version's definition) and its folder.
+   *  Un-promoted AI drafts are excluded — they live in the review queue (`listDrafts`)
+   *  and are not suite/schedule eligible. */
   async list(): Promise<TestSummary[]> {
     // One row per test = its latest version (max version), via a correlated subquery.
     const rows = await this.db
@@ -130,6 +141,8 @@ export class TestsService {
         id: tests.id,
         name: tests.name,
         createdAt: tests.createdAt,
+        status: tests.status,
+        origin: tests.origin,
         folderId: tests.folderId,
         folderName: folders.name,
         definition: testVersions.definition,
@@ -138,7 +151,7 @@ export class TestsService {
       .innerJoin(testVersions, eq(testVersions.testId, tests.id))
       .leftJoin(folders, eq(folders.id, tests.folderId))
       .where(
-        sql`${testVersions.version} = (select max(v.version) from test_versions v where v.test_id = ${tests.id})`,
+        sql`${tests.status} = 'active' and ${testVersions.version} = (select max(v.version) from test_versions v where v.test_id = ${tests.id})`,
       )
       .orderBy(desc(tests.createdAt));
 
@@ -158,11 +171,107 @@ export class TestsService {
       id: r.id,
       name: r.name,
       createdAt: r.createdAt.toISOString(),
+      status: r.status as TestStatus,
+      origin: r.origin as TestOrigin,
       needsEnvironment: needsEnvironment(r.definition as TestDefinition),
       folderId: r.folderId,
       folderName: r.folderName,
       tags: tagsByTest.get(r.id) ?? [],
     }));
+  }
+
+  /**
+   * Persist an AI-authored definition as a Draft (`status: "draft"`, `origin: "ai"`):
+   * a first-class test (full definition, individually runnable for baseline preview)
+   * but held out of suites/schedules and surfaced in the review queue until a human
+   * promotes it. Mirrors `create`, plus the draft flags + steering `intent`.
+   */
+  async createDraft(input: unknown, opts?: { intent?: string | null }): Promise<CreatedTest> {
+    const definition = parseTestDefinition(input);
+    const [created] = await this.db
+      .insert(tests)
+      .values({
+        name: definition.name,
+        status: "draft",
+        origin: "ai",
+        intent: opts?.intent ?? null,
+      })
+      .returning({ id: tests.id });
+    await this.db
+      .insert(testVersions)
+      .values({ testId: created.id, version: 1, definition });
+    return { id: created.id, version: 1 };
+  }
+
+  /** The AI-authored Draft review queue, newest first — each draft's checkpoint count
+   *  (from its latest definition) and steering intent, so a reviewer can triage and open it. */
+  async listDrafts(): Promise<DraftSummary[]> {
+    const rows = await this.db
+      .select({
+        id: tests.id,
+        name: tests.name,
+        origin: tests.origin,
+        intent: tests.intent,
+        createdAt: tests.createdAt,
+        definition: testVersions.definition,
+      })
+      .from(tests)
+      .innerJoin(testVersions, eq(testVersions.testId, tests.id))
+      .where(
+        sql`${tests.status} = 'draft' and ${testVersions.version} = (select max(v.version) from test_versions v where v.test_id = ${tests.id})`,
+      )
+      .orderBy(desc(tests.createdAt));
+
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      origin: r.origin as TestOrigin,
+      createdAt: r.createdAt.toISOString(),
+      checkpointCount: checkpointCount(r.definition as TestDefinition),
+      intent: r.intent,
+    }));
+  }
+
+  /**
+   * Promote a Draft into the active corpus: assign a folder + tags and flip
+   * `status: "active"` so it becomes suite/schedule eligible. The one human gate on AI
+   * output — web-UI only; never an agent tool. Baseline approval stays the separate
+   * per-environment gate (this does not touch baselines or write a test_version).
+   * 409 if the test is already active (only a draft can be promoted).
+   */
+  async promote(id: string, body: PromoteDraftBody): Promise<{ ok: true }> {
+    const tags = body.tags !== undefined ? normalizeTags(body.tags) : undefined;
+    try {
+      await this.db.transaction(async (tx) => {
+        const [row] = await tx
+          .select({ status: tests.status })
+          .from(tests)
+          .where(eq(tests.id, id))
+          .limit(1);
+        if (!row) throw new NotFoundException(`Test ${id} not found`);
+        if (row.status !== "draft") {
+          throw new ConflictException(`Test ${id} is not a draft (already promoted)`);
+        }
+        await tx
+          .update(tests)
+          .set({ status: "active", folderId: body.folderId ?? null })
+          .where(eq(tests.id, id));
+        if (tags !== undefined) {
+          await tx.delete(testTags).where(eq(testTags.testId, id));
+          if (tags.length > 0) {
+            await tx.insert(testTags).values(tags.map((tag) => ({ testId: id, tag })));
+          }
+        }
+      });
+    } catch (err) {
+      if (err instanceof NotFoundException || err instanceof ConflictException) throw err;
+      const code =
+        (err as { code?: string; cause?: { code?: string } })?.code ??
+        (err as { cause?: { code?: string } })?.cause?.code;
+      if (code === "23503") throw new NotFoundException(`Folder ${body.folderId} not found`);
+      throw err;
+    }
+    return { ok: true };
   }
 
   /** The distinct tags currently in use (alphabetical) — feeds pickers/filters. */

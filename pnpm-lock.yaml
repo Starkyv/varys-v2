@@ -35,6 +35,9 @@ importers:
       '@nestjs/platform-express':
         specifier: ^11.0.6
         version: 11.1.26(@nestjs/common@11.1.26(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.1.26)
+      '@varys/capture':
+        specifier: workspace:*
+        version: link:../../packages/capture
       '@varys/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -44,6 +47,9 @@ importers:
       '@varys/queue':
         specifier: workspace:*
         version: link:../../packages/queue
+      '@varys/recorder':
+        specifier: workspace:*
+        version: link:../../packages/recorder
       '@varys/review-contract':
         specifier: workspace:*
         version: link:../../packages/review-contract

@@ -3,7 +3,12 @@
   "compilerOptions": {
     "rootDir": ".",
     "outDir": "dist",
-    "types": ["node"]
+    "types": ["node"],
+    // DOM lib: the authoring layer drives a server-side browser and serializes in-page
+    // functions (reusing @varys/capture's captureFingerprint), so it needs DOM types.
+    // Node + DOM coexist here under skipLibCheck. Keep DOM usage confined to the
+    // authoring in-page helpers — the rest of the API is server code.
+    "lib": ["ES2022", "DOM"]
   },
   "include": ["src/**/*.ts", "test/**/*.ts"]
 }

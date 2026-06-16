@@ -4,11 +4,10 @@ import {
   classifyTypedValue,
   isWeakFingerprint,
   type OnStep,
-  type RecordedSession,
   selectorDependsOnVariable,
-  startRecorder,
   variableNameFor,
 } from "@varys/recorder";
+import { type RecordedSession, startRecorder } from "@varys/recorder/dom";
 
 type CaptureMode = "element" | "region" | "fullpage";
 

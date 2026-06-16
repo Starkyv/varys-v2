@@ -37,13 +37,18 @@
   margin-bottom: var(--space-16);
 }
 
+.cardHeadText {
+  flex: 1;
+  min-width: 0;
+}
+
 .cardIcon {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   border-radius: var(--radius-md);
   background: var(--color-bg-inset);
   color: var(--color-text-muted);
@@ -59,30 +64,95 @@
   margin-top: 2px;
   font-size: var(--font-size-xs);
   color: var(--color-text-muted);
-  max-width: 64ch;
+  line-height: 1.45;
+  max-width: 70ch;
+}
+
+.cardCount {
+  flex: 0 0 auto;
+  align-self: center;
+  padding: var(--space-4) var(--space-10);
+  border-radius: var(--radius-full);
+  background: var(--color-bg-inset);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* --- steps --- */
 .steps {
   display: flex;
   flex-direction: column;
-  gap: var(--space-12);
+  gap: var(--space-10);
 }
 
 .step {
   display: flex;
-  flex-direction: column;
   gap: var(--space-10);
-  padding: var(--space-12) var(--space-14);
+  padding: var(--space-12) var(--space-16);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  background: var(--color-bg-subtle);
+  background: var(--color-bg-surface);
+  min-width: 0;
+}
+
+/* A faint vertical connector through the number chips so the steps read as a sequence. */
+.stepRail {
+  position: relative;
+  flex: 0 0 auto;
+  width: 24px;
+  display: flex;
+  justify-content: center;
+
+  &::after {
+    content: "";
+    position: absolute;
+    top: 26px;
+    bottom: calc(var(--space-14) * -1 - var(--space-10));
+    left: 50%;
+    width: 1px;
+    transform: translateX(-50%);
+    background: var(--color-border);
+  }
+}
+
+.stepLast .stepRail::after {
+  display: none;
+}
+
+.stepNum {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-full);
+  background: var(--color-bg-inset);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+
+.stepBody {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
 }
 
 .stepHead {
   display: flex;
   align-items: center;
   gap: var(--space-8);
+  min-width: 0;
+  min-height: 24px;
 }
 
 .stepIcon {
@@ -92,6 +162,7 @@
 }
 
 .stepLabel {
+  min-width: 0;
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
   color: var(--color-text-strong);
@@ -109,6 +180,7 @@
   background: var(--color-bg-inset);
   color: var(--color-text-muted);
   font-size: var(--font-size-xs);
+  text-transform: lowercase;
 }
 
 .stepNote {
@@ -121,19 +193,27 @@
 .thresholdRow {
   display: flex;
   align-items: center;
-  gap: var(--space-10);
+  gap: var(--space-8);
   flex-wrap: wrap;
-  padding-top: var(--space-8);
-  border-top: 1px dashed var(--color-border);
+  padding: var(--space-10) var(--space-12);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-subtle);
+  color: var(--color-text-subtle);
+}
+
+.thresholdRowError {
+  background: var(--color-danger-soft);
+  color: var(--color-danger-fg);
 }
 
 .thresholdLabel {
   font-size: var(--font-size-sm);
   color: var(--color-text);
+  font-weight: var(--font-weight-medium);
 }
 
 .thresholdInput {
-  width: 96px;
+  width: 88px;
 }
 
 .thresholdHelp {
@@ -145,6 +225,7 @@
 .waits {
   display: flex;
   flex-direction: column;
+  align-items: flex-start; // rows hug their content rather than stretching full-width
   gap: var(--space-8);
 }
 
@@ -152,25 +233,44 @@
   display: flex;
   align-items: center;
   gap: var(--space-8);
+  max-width: 100%;
+}
+
+/* Selector waits are display-only: a dashed pill that reads as "locked, kept on save". */
+.lockedRow {
+  padding: var(--space-6) var(--space-10);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-subtle);
 }
 
 .waitKind {
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   gap: var(--space-6);
-  min-width: 132px;
   font-size: var(--font-size-sm);
   color: var(--color-text);
 }
 
+.lockedRow .waitKind {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.lockedText {
+  @include truncate;
+}
+
 .waitLockedNote {
+  flex: 0 0 auto;
   font-size: var(--font-size-xs);
   color: var(--color-text-subtle);
   font-style: italic;
 }
 
 .waitInput {
-  width: 110px;
+  width: 92px;
 }
 
 .waitUnit {
@@ -178,15 +278,69 @@
   color: var(--color-text-subtle);
 }
 
+.waitRemove {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-subtle);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard);
+
+  &:hover {
+    color: var(--color-danger-fg);
+    background: var(--color-bg-inset);
+  }
+}
+
 .waitEmpty {
   font-size: var(--font-size-xs);
   color: var(--color-text-subtle);
+  align-self: center;
 }
 
 .waitAdd {
   display: flex;
+  align-items: center;
   gap: var(--space-8);
   margin-top: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.addChip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6);
+  height: 28px;
+  padding: 0 var(--space-10);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard);
+
+  &:hover {
+    border-color: var(--color-primary);
+    color: var(--color-primary);
+    background: var(--color-bg-subtle);
+  }
+  &:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
 }
 
 /* --- save bar --- */
@@ -201,7 +355,7 @@
   background: var(--color-bg-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-md);
 }
 
 .saveHint {
@@ -213,5 +367,8 @@
 @include mq-down("sm") {
   .waitKind {
     min-width: 0;
+  }
+  .step {
+    padding: var(--space-12);
   }
 }

@@ -1,9 +1,11 @@
 import type {
   DashboardView,
+  DraftSummary,
   EnvCookie,
   EnvironmentView,
   FolderSummary,
   NeedsReviewItem,
+  PromoteDraftBody,
   PersistResult,
   ReEvaluation,
   RunSummary,
@@ -72,6 +74,40 @@ export async function fetchTests(): Promise<TestSummary[]> {
     throw new Error(`Failed to load tests (${res.status})`);
   }
   return (await res.json()) as TestSummary[];
+}
+
+/** Fetch the AI-authored Draft review queue (newest first). Throws on a non-2xx. */
+export async function fetchDrafts(): Promise<DraftSummary[]> {
+  const res = await fetch(`${API_BASE}/drafts`);
+  if (!res.ok) {
+    throw new Error(`Failed to load the review queue (${res.status})`);
+  }
+  return (await res.json()) as DraftSummary[];
+}
+
+/** Promote a draft into the active corpus (folder + tags + active). 409 if it's not a
+ *  draft (already promoted). Throws on a non-2xx response. */
+export async function promoteDraft(id: string, body: PromoteDraftBody): Promise<void> {
+  const res = await fetch(`${API_BASE}/drafts/${id}/promote`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(
+      res.status === 409
+        ? "This draft was already promoted — reload the review queue."
+        : `Failed to promote draft (${res.status})`,
+    );
+  }
+}
+
+/** Discard a draft — hard-delete (irreversible). Throws on a non-2xx response. */
+export async function discardDraft(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/drafts/${id}`, { method: "DELETE" });
+  if (!res.ok) {
+    throw new Error(`Failed to discard draft (${res.status})`);
+  }
 }
 
 /** Organization metadata for a test — name, folder (null unfiles), and/or tags

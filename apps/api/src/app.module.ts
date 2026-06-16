@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { ArtifactsModule } from "./artifacts/artifacts.module";
+import { AuthoringModule } from "./authoring/authoring.module";
 import { DashboardModule } from "./dashboard/dashboard.module";
 import { DbModule } from "./db/db.module";
 import { EnvironmentsModule } from "./environments/environments.module";
@@ -22,6 +23,7 @@ import { TestsModule } from "./tests/tests.module";
     SuitesModule,
     SuiteRunsModule,
     DashboardModule,
+    AuthoringModule,
   ],
 })
 export class AppModule {}

@@ -56,11 +56,23 @@ export interface PersistResult {
   version: number;
 }
 
+/** Who authored a test: a human extension recording, or Claude via the MCP authoring
+ *  layer (Slice 14). */
+export type TestOrigin = "human" | "ai";
+
+/** A test's lifecycle: `draft` = an un-promoted AI authoring output (held out of suites
+ *  and schedules, surfaced in the review queue); `active` = a normal, runnable test. */
+export type TestStatus = "draft" | "active";
+
 /** A saved test (recording), as listed in the Tests view. */
 export interface TestSummary {
   id: string;
   name: string;
   createdAt: string;
+  /** Lifecycle state — the Tests view lists only `active`; drafts live in the review queue. */
+  status: TestStatus;
+  /** Who authored it (a promoted AI test keeps `origin: "ai"`). */
+  origin: TestOrigin;
   /** True when the test references variables/secrets — it declares `variables`, or
    *  its definition still contains an unresolved `{{token}}`. The Run UI uses this to
    *  require an environment before the test can run (a no-variable test runs without
@@ -151,6 +163,31 @@ export interface TestConfigPatch {
 /** Result of a config save: the version number of the newly written test_version. */
 export interface SaveConfigResult {
   version: number;
+}
+
+/**
+ * One row in the AI-authored Draft review queue (`GET /drafts`, Slice 14). A draft is a
+ * first-class test held out of suites/schedules until a human reviews and promotes it.
+ */
+export interface DraftSummary {
+  id: string;
+  name: string;
+  origin: TestOrigin;
+  createdAt: string;
+  /** Number of checkpoints (screenshot steps) the draft asserts — 0 ⇒ flagged (a test
+   *  that asserts nothing). */
+  checkpointCount: number;
+  /** The steering instruction that produced the draft, if any (review-queue context). */
+  intent: string | null;
+}
+
+/** Body of `POST /drafts/:id/promote` — assign a folder + tags and make the test active
+ *  (suite/schedule eligible). Promotion is web-UI only and never an agent tool. */
+export interface PromoteDraftBody {
+  /** The folder to file the promoted test into; null/omitted leaves it unfiled. */
+  folderId?: string | null;
+  /** Tags to apply on promotion (full-list replace, normalized). */
+  tags?: string[];
 }
 
 /** A flat folder — each test's one browsable home (DESIGN §5). */

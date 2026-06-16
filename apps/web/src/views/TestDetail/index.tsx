@@ -20,7 +20,6 @@ import {
   Input,
   Lock,
   Pencil,
-  Plus,
   Skeleton,
   Sliders,
 } from "@varys/ui";
@@ -181,11 +180,11 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
           <span className={styles.cardIcon}>
             <Sliders size={15} />
           </span>
-          <div>
+          <div className={styles.cardHeadText}>
             <div className={styles.cardTitle}>Default waits</div>
             <div className={styles.cardSub}>
-              Applied before every step that supports waits (clicks, typing, checkpoints — not the
-              opening navigation), ahead of each step’s own waits.
+              Run before every step that supports waits — clicks, typing, checkpoints (not the
+              opening navigation) — ahead of each step’s own waits.
             </div>
           </div>
         </div>
@@ -193,7 +192,7 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
           waits={defaultWaits}
           locked={initialDefaults.locked}
           onChange={setDefaultWaits}
-          emptyHint="No default waits. Add one to settle the page before every step."
+          emptyHint="None yet — add one to settle every step."
         />
       </Card>
 
@@ -202,64 +201,76 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
           <span className={styles.cardIcon}>
             <Eye size={15} />
           </span>
-          <div>
+          <div className={styles.cardHeadText}>
             <div className={styles.cardTitle}>Steps</div>
             <div className={styles.cardSub}>
               Per-step waits layer on top of the defaults. Thresholds apply to that checkpoint only.
             </div>
           </div>
+          <span className={styles.cardCount}>
+            {config.steps.length} step{config.steps.length === 1 ? "" : "s"}
+          </span>
         </div>
         <div className={styles.steps}>
           {config.steps.map((s, i) => {
             const Icon = STEP_ICON[s.type];
             const locked = splitWaits(s.waitBefore).locked;
+            const isLast = i === config.steps.length - 1;
             return (
-              <div key={s.index} className={styles.step}>
-                <div className={styles.stepHead}>
-                  <span className={styles.stepIcon}>
-                    <Icon size={14} />
-                  </span>
-                  <span className={styles.stepLabel}>{s.label}</span>
-                  {s.type === "screenshot" && s.captureMode && (
-                    <span className={styles.stepTag}>{s.captureMode}</span>
+              <div key={s.index} className={`${styles.step} ${isLast ? styles.stepLast : ""}`}>
+                <div className={styles.stepRail}>
+                  <span className={styles.stepNum}>{i + 1}</span>
+                </div>
+                <div className={styles.stepBody}>
+                  <div className={styles.stepHead}>
+                    <span className={styles.stepIcon}>
+                      <Icon size={14} />
+                    </span>
+                    <span className={styles.stepLabel}>{s.label}</span>
+                    {s.type === "screenshot" && s.captureMode && (
+                      <span className={styles.stepTag}>{s.captureMode}</span>
+                    )}
+                  </div>
+
+                  {s.supportsWaits ? (
+                    <WaitListEditor
+                      waits={stepWaits[i]}
+                      locked={locked}
+                      onChange={(next) => setStepWait(i, next)}
+                      emptyHint="Only the test defaults run here."
+                    />
+                  ) : (
+                    <div className={styles.stepNote}>Navigation settles on network idle automatically.</div>
+                  )}
+
+                  {s.type === "screenshot" && (
+                    <div className={`${styles.thresholdRow} ${thresholdInvalid(s) ? styles.thresholdRowError : ""}`}>
+                      <Sliders size={13} />
+                      <span className={styles.thresholdLabel}>Diff threshold</span>
+                      <Input
+                        inputSize="sm"
+                        mono
+                        type="number"
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        placeholder="0.01"
+                        aria-label={`Threshold for ${s.checkpointName ?? "checkpoint"}`}
+                        invalid={thresholdInvalid(s)}
+                        className={styles.thresholdInput}
+                        value={thresholds[s.index] ?? ""}
+                        onChange={(e) =>
+                          setThresholds((prev) => ({ ...prev, [s.index]: e.target.value }))
+                        }
+                      />
+                      <span className={styles.thresholdHelp}>
+                        {thresholdInvalid(s)
+                          ? "Enter a value between 0 and 1"
+                          : "max mismatched-pixel ratio · blank = default 0.01"}
+                      </span>
+                    </div>
                   )}
                 </div>
-
-                {s.supportsWaits ? (
-                  <WaitListEditor
-                    waits={stepWaits[i]}
-                    locked={locked}
-                    onChange={(next) => setStepWait(i, next)}
-                    emptyHint="No waits on this step (defaults still apply)."
-                  />
-                ) : (
-                  <div className={styles.stepNote}>Navigation waits for network idle automatically.</div>
-                )}
-
-                {s.type === "screenshot" && (
-                  <div className={styles.thresholdRow}>
-                    <span className={styles.thresholdLabel}>Diff threshold</span>
-                    <Input
-                      inputSize="sm"
-                      mono
-                      type="number"
-                      min={0}
-                      max={1}
-                      step={0.01}
-                      placeholder="0.01"
-                      aria-label={`Threshold for ${s.checkpointName ?? "checkpoint"}`}
-                      invalid={thresholdInvalid(s)}
-                      className={styles.thresholdInput}
-                      value={thresholds[s.index] ?? ""}
-                      onChange={(e) =>
-                        setThresholds((prev) => ({ ...prev, [s.index]: e.target.value }))
-                      }
-                    />
-                    <span className={styles.thresholdHelp}>
-                      {thresholdInvalid(s) ? "Enter a value between 0 and 1" : "max mismatched-pixel ratio (0–1)"}
-                    </span>
-                  </div>
-                )}
               </div>
             );
           })}
@@ -301,11 +312,14 @@ function WaitListEditor({
   return (
     <div className={styles.waits}>
       {locked.map((w, i) => (
-        <div key={`locked-${i}`} className={styles.waitRow}>
+        <div key={`locked-${i}`} className={`${styles.waitRow} ${styles.lockedRow}`}>
           <span className={styles.waitKind}>
-            <Lock size={13} /> Wait for {w.targetLabel} {w.state}
+            <Lock size={13} />
+            <span className={styles.lockedText}>
+              Wait for {w.targetLabel} {w.state}
+            </span>
           </span>
-          <span className={styles.waitLockedNote}>recorded — kept on save</span>
+          <span className={styles.waitLockedNote}>recorded · kept on save</span>
         </div>
       ))}
 
@@ -334,35 +348,30 @@ function WaitListEditor({
             }}
           />
           <span className={styles.waitUnit}>ms</span>
-          <IconButton
-            variant="ghost"
-            size="sm"
-            icon={<Plus style={{ transform: "rotate(45deg)" }} />}
-            label="Remove wait"
-            onClick={() => remove(i)}
-          />
+          <button type="button" className={styles.waitRemove} aria-label="Remove wait" onClick={() => remove(i)}>
+            ×
+          </button>
         </div>
       ))}
 
-      {locked.length === 0 && waits.length === 0 && <div className={styles.waitEmpty}>{emptyHint}</div>}
-
       <div className={styles.waitAdd}>
-        <Button
-          variant="secondary"
-          size="sm"
-          iconLeft={<Activity size={13} />}
+        <button
+          type="button"
+          className={styles.addChip}
           onClick={() => onChange([...waits, { kind: "networkIdle", timeoutMs: 10000 }])}
         >
-          Network idle
-        </Button>
-        <Button
-          variant="secondary"
-          size="sm"
-          iconLeft={<Clock size={13} />}
+          <Activity size={13} /> Network idle
+        </button>
+        <button
+          type="button"
+          className={styles.addChip}
           onClick={() => onChange([...waits, { kind: "delay", ms: 500 }])}
         >
-          Delay
-        </Button>
+          <Clock size={13} /> Delay
+        </button>
+        {locked.length === 0 && waits.length === 0 && (
+          <span className={styles.waitEmpty}>{emptyHint}</span>
+        )}
       </div>
     </div>
   );

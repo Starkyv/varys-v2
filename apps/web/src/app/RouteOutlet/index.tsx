@@ -1,5 +1,6 @@
 import { useRouter } from "../../context/router";
 import { Dashboard } from "../../views/Dashboard";
+import { Drafts } from "../../views/Drafts";
 import { Environments } from "../../views/Environments";
 import { NeedsReview } from "../../views/NeedsReview";
 import { RunDetail } from "../../views/RunDetail";
@@ -17,6 +18,8 @@ export function RouteOutlet() {
       return <Dashboard />;
     case "tests":
       return <Tests />;
+    case "drafts":
+      return <Drafts />;
     case "suites":
       return <Suites />;
     case "runs":

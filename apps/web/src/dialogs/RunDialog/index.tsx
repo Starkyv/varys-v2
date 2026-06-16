@@ -2,7 +2,7 @@ import { Button, cx, Info, Modal, ModalBody, ModalFooter, ModalHeader, Play, Sel
 import { useEffect, useId, useMemo, useState } from "react";
 import { useRouter } from "../../context/router";
 import { useToast } from "../../context/toast";
-import { useEnvironments, useRunTest, useTests } from "../../queries";
+import { useDrafts, useEnvironments, useRunTest, useTests } from "../../queries";
 import styles from "./styles.module.scss";
 
 const NO_ENV = "__none__";
@@ -24,6 +24,7 @@ export function RunDialog({ open, initialTestId, onClose }: RunDialogProps) {
   const { navigate } = useRouter();
   const { toast } = useToast();
   const tests = useTests();
+  const drafts = useDrafts();
   const environments = useEnvironments();
   const runMutation = useRunTest();
 
@@ -31,24 +32,39 @@ export function RunDialog({ open, initialTestId, onClose }: RunDialogProps) {
   const [envId, setEnvId] = useState<string | null>(null);
   const [trace, setTrace] = useState(false);
 
+  // Runnable candidates: the active tests, plus — when the dialog was opened for a
+  // specific draft (a baseline-preview run before promotion) — that draft, which is
+  // otherwise held out of the active list. AI drafts carry {{baseUrl}}, so they need an
+  // environment.
+  const candidates = useMemo(() => {
+    const active = (tests.data ?? []).map((t) => ({
+      id: t.id,
+      name: t.name,
+      needsEnvironment: t.needsEnvironment,
+    }));
+    const draft = (drafts.data ?? []).find((d) => d.id === initialTestId);
+    return draft
+      ? [{ id: draft.id, name: `${draft.name} (draft preview)`, needsEnvironment: true }, ...active]
+      : active;
+  }, [tests.data, drafts.data, initialTestId]);
+
   // Seed selection when the dialog opens.
   useEffect(() => {
     if (!open) return;
-    const list = tests.data ?? [];
-    const seed = initialTestId ?? list[0]?.id ?? "";
+    const seed = initialTestId ?? candidates[0]?.id ?? "";
     setTestId(seed);
-    const t = list.find((x) => x.id === seed);
+    const t = candidates.find((x) => x.id === seed);
     setEnvId(t && t.needsEnvironment ? null : NO_ENV);
     setTrace(false);
-  }, [open, initialTestId, tests.data]);
+  }, [open, initialTestId, candidates]);
 
-  const selected = useMemo(() => (tests.data ?? []).find((t) => t.id === testId), [tests.data, testId]);
+  const selected = useMemo(() => candidates.find((t) => t.id === testId), [candidates, testId]);
   const needsEnv = !!selected?.needsEnvironment;
   const disabled = !selected || (needsEnv && !envId) || runMutation.isPending;
 
   function selectTest(id: string) {
     setTestId(id);
-    const t = (tests.data ?? []).find((x) => x.id === id);
+    const t = candidates.find((x) => x.id === id);
     setEnvId(t && t.needsEnvironment ? null : NO_ENV);
   }
 
@@ -89,9 +105,9 @@ export function RunDialog({ open, initialTestId, onClose }: RunDialogProps) {
             ariaLabel="Test"
             value={testId}
             onValueChange={selectTest}
-            disabled={(tests.data ?? []).length === 0}
+            disabled={candidates.length === 0}
             placeholder="Select a test"
-            options={(tests.data ?? []).map((t) => ({ value: t.id, label: t.name }))}
+            options={candidates.map((t) => ({ value: t.id, label: t.name }))}
           />
         </div>
 

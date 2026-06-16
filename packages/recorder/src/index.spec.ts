@@ -6,13 +6,18 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Fingerprint } from "@varys/step-schema";
 import {
   applySelectorRemedy,
+  buildClick,
+  buildEntryNavigate,
+  buildType,
   classifyTypedValue,
+  createRecording,
   isWeakFingerprint,
+  sanitizeEntryUrl,
   selectorDependsOnVariable,
-  startRecorder,
   variableNameFor,
   variablesFromSteps,
 } from "./index";
+import { startRecorder } from "./dom";
 
 // Inject capture + recorder + the helpers it references (all self-contained), then
 // start a session on the page. The helpers must be injected because `startRecorder`
@@ -21,8 +26,18 @@ const INJECT = `
   ${classifyTypedValue.toString()}
   ${variableNameFor.toString()}
   ${variablesFromSteps.toString()}
+  ${sanitizeEntryUrl.toString()}
+  ${buildClick.toString()}
+  ${buildType.toString()}
+  ${buildEntryNavigate.toString()}
+  ${createRecording.toString()}
   ${captureFingerprint.toString()}
   ${startRecorder.toString()}
+  // startRecorder lives in ./dom and references the core via cross-module imports, which
+  // vitest's SSR transform rewrites to \`__vite_ssr_import_0__.X\`. Those bindings don't
+  // exist in the page, so shim the namespace to the injected globals. (In the real
+  // extension build these imports are bundled — this is purely a unit-test artifact.)
+  var __vite_ssr_import_0__ = { buildClick, buildType, buildEntryNavigate, createRecording, classifyTypedValue };
   window.__rec = startRecorder(captureFingerprint);
 `;
 
@@ -376,5 +391,124 @@ describe("applySelectorRemedy", () => {
     expect(out).toEqual({ tag: "h1", testId: "title" });
     expect(out.text).toBeUndefined();
     expect(out.accessibleName).toBeUndefined();
+  });
+});
+
+// Slice 1 — the shared step-building core, exercised directly in Node (no browser).
+// These pin the factory rules and the human↔agent parity guarantee (ADR 0001).
+describe("shared core — step factories", () => {
+  const fp: Fingerprint = { tag: "input", attributes: { id: "q" } };
+  const valueOf = (s: ReturnType<typeof buildType>) => (s as { value: string }).value;
+
+  it("buildClick wraps a fingerprint into a click step", () => {
+    expect(buildClick(fp)).toEqual({ type: "click", target: fp });
+  });
+
+  it("buildType always tokenizes a password field as a secret (live value never recorded)", () => {
+    expect(buildType(fp, { type: "password", id: "pw", value: "hunter2" })).toEqual({
+      type: "type",
+      target: fp,
+      value: "{{secret:pw}}",
+    });
+    expect(valueOf(buildType(fp, { type: "password", value: "hunter2" }))).toBe("{{secret:password}}");
+    // A declared kind can't downgrade a password field away from secret.
+    expect(valueOf(buildType(fp, { type: "password", id: "pw", value: "x" }, { kind: "static" }))).toBe(
+      "{{secret:pw}}",
+    );
+  });
+
+  it("buildType honors the agent's declared kind, with the heuristic as fallback", () => {
+    // Declared variable overrides the static heuristic for a short token.
+    expect(valueOf(buildType(fp, { id: "account", value: "alice" }, { kind: "variable" }))).toBe(
+      "{{account}}",
+    );
+    // Declared static overrides the variable heuristic for a data-shaped value.
+    expect(valueOf(buildType(fp, { id: "account", value: "Q3 sales" }, { kind: "static" }))).toBe(
+      "Q3 sales",
+    );
+    // Declared secret on a non-password field tokenizes as a secret.
+    expect(valueOf(buildType(fp, { id: "token", value: "abc" }, { kind: "secret" }))).toBe(
+      "{{secret:token}}",
+    );
+    // No declared kind ⇒ heuristic: data-shaped ⇒ variable, short token ⇒ literal.
+    expect(valueOf(buildType(fp, { id: "account", value: "Q3 sales" }))).toBe("{{account}}");
+    expect(valueOf(buildType(fp, { id: "account", value: "alice" }))).toBe("alice");
+  });
+
+  it("buildEntryNavigate strips volatile auth params and parameterizes the origin", () => {
+    expect(
+      buildEntryNavigate("https://app.example.com/login?next=/dash&tab=2", "https://app.example.com"),
+    ).toEqual({ type: "navigate", url: "{{baseUrl}}/login?tab=2" });
+  });
+});
+
+describe("createRecording accumulator", () => {
+  const fp: Fingerprint = { tag: "button", role: "button", accessibleName: "Save" };
+
+  it("accumulates steps, derives variables, and counts steps + checkpoints", () => {
+    const rec = createRecording();
+    rec.push(buildEntryNavigate("https://app.example.com/", "https://app.example.com"));
+    rec.push(buildType({ tag: "input", attributes: { id: "u" } }, { id: "username", value: "Q3 sales" }));
+    rec.push(buildType({ tag: "input" }, { type: "password", id: "password", value: "hunter2" }));
+    rec.push(buildClick(fp));
+    rec.checkpoint("after-login", { mode: "fullpage" });
+
+    expect(rec.stepCount()).toBe(5);
+    expect(rec.checkpointCount()).toBe(1);
+
+    const def = rec.getDefinition("login flow", { width: 800, height: 600, deviceScaleFactor: 1 });
+    expect(() => parseTestDefinition(def)).not.toThrow();
+    expect(def.variables).toEqual(
+      expect.arrayContaining([
+        { name: "baseUrl", kind: "url" },
+        { name: "username", kind: "data" },
+        { name: "password", kind: "secret" },
+      ]),
+    );
+  });
+
+  it("shapes element / region / fullpage checkpoints and keeps masks only when present", () => {
+    const rec = createRecording();
+    rec.checkpoint("el", { mode: "element", target: fp, masks: [{ x: 1, y: 2, width: 3, height: 4 }] });
+    rec.checkpoint("area", { mode: "region", rect: { x: 0, y: 0, width: 10, height: 10 } });
+    rec.checkpoint("page", { mode: "fullpage" });
+    const def = rec.getDefinition("modes", { width: 800, height: 600, deviceScaleFactor: 1 });
+    const shots = def.steps.filter((s) => s.type === "screenshot") as Array<{
+      name: string;
+      captureMode?: string;
+      target?: unknown;
+      rect?: unknown;
+      masks?: unknown;
+    }>;
+    expect(shots.find((s) => s.name === "el")).toMatchObject({
+      captureMode: "element",
+      masks: [{ x: 1, y: 2, width: 3, height: 4 }],
+    });
+    expect(shots.find((s) => s.name === "el")?.target).toEqual(fp);
+    expect(shots.find((s) => s.name === "area")).toMatchObject({
+      captureMode: "region",
+      rect: { x: 0, y: 0, width: 10, height: 10 },
+    });
+    expect(shots.find((s) => s.name === "area")?.masks).toBeUndefined();
+    expect(shots.find((s) => s.name === "page")).toMatchObject({ captureMode: "fullpage" });
+    expect(shots.find((s) => s.name === "page")?.target).toBeUndefined();
+  });
+});
+
+describe("human <-> agent parity", () => {
+  // The divergence guarantee: the same (fingerprint, field) inputs produce identical steps
+  // whichever driver supplies them — because both call the same factories (ADR 0001).
+  it("the agent driver and the human driver build identical steps from equivalent inputs", () => {
+    const fp: Fingerprint = { tag: "input", attributes: { id: "password" } };
+    // Human driver reads { type, id, name, value } off the live <input>.
+    const human = buildType(
+      fp,
+      { type: "password", id: "password", name: "password", value: "hunter2" },
+      { classify: classifyTypedValue },
+    );
+    // Agent driver supplies the same field bits (captured via page.evaluate).
+    const agent = buildType(fp, { type: "password", id: "password", name: "password", value: "hunter2" });
+    expect(agent).toEqual(human);
+    expect((human as { value: string }).value).toBe("{{secret:password}}");
   });
 });
