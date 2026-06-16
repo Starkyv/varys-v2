@@ -388,13 +388,17 @@ export class TestsService {
 
   /**
    * Apply a config patch (waits + threshold) onto the test's latest definition and
-   * write a NEW audited test_version (latest+1, `createdBy: "user"`). Optimistic
+   * write a NEW audited test_version (latest+1, `createdBy` = the editing user). Optimistic
    * concurrency: the patch's `baseVersion` must match the current latest, else 409 —
    * so a stale editor can't silently clobber a newer version. Selector waits the
    * editor can't author are preserved (it only replaces the delay/networkIdle ones).
    * The assembled definition is re-validated by the schema before it's stored.
    */
-  async saveConfig(id: string, patch: TestConfigPatch): Promise<{ version: number }> {
+  async saveConfig(
+    id: string,
+    patch: TestConfigPatch,
+    createdBy: string,
+  ): Promise<{ version: number }> {
     const [latest] = await this.db
       .select({ version: testVersions.version, definition: testVersions.definition })
       .from(testVersions)
@@ -447,7 +451,7 @@ export class TestsService {
     const nextVersion = latest.version + 1;
     await this.db
       .insert(testVersions)
-      .values({ testId: id, version: nextVersion, definition: validated, createdBy: "user" });
+      .values({ testId: id, version: nextVersion, definition: validated, createdBy });
     return { version: nextVersion };
   }
 

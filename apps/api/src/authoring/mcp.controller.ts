@@ -1,4 +1,5 @@
 import { Body, Controller, Get, HttpException, Inject, Post, Res } from "@nestjs/common";
+import { Public } from "../auth/public.decorator";
 import { AuthoringSessionService, type CheckpointInput } from "./authoring-session.service";
 
 /** The slice of the HTTP response we touch — avoids depending on express types directly
@@ -45,6 +46,9 @@ interface McpTool {
 
 class MethodNotFound extends Error {}
 
+// Unauthenticated this slice (locked decision): Claude Code is a separate process with
+// no browser cookie, and per-client tokens were declined. Accepted risk, DESIGN §11.
+@Public()
 @Controller("mcp")
 export class McpController {
   constructor(

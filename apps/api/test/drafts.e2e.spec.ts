@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import request from "supertest";
+import { authed, prepareAuth } from "./auth-harness";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
 import { TestsService } from "../src/tests/tests.service";
@@ -41,6 +42,7 @@ describe("Draft lifecycle", () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleRef.createNestApplication();
     await app.init();
+    await prepareAuth();
     tests = app.get(TestsService);
   }, 60_000);
 
@@ -50,7 +52,7 @@ describe("Draft lifecycle", () => {
     if (storageDir) await rm(storageDir, { recursive: true, force: true });
   });
 
-  const http = () => request(app.getHttpServer());
+  const http = () => authed(app);
 
   it("a draft is in the review queue and excluded from the active Tests list", async () => {
     const { id } = await tests.createDraft(DEFINITION, { intent: "verify the home page" });

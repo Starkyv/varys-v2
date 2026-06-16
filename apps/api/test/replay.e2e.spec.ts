@@ -10,6 +10,7 @@ import { type Boss, createBoss, startBoss, workRuns } from "@varys/queue";
 import { processRun } from "@varys/runner";
 import { LocalFsAdapter } from "@varys/storage-adapter";
 import request from "supertest";
+import { authed, prepareAuth } from "./auth-harness";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
 import { startTestDb, type TestDb } from "./db-harness";
@@ -46,6 +47,7 @@ describe("Replay → screenshot → artifact", () => {
     }).compile();
     app = moduleRef.createNestApplication();
     await app.init();
+    await prepareAuth();
 
     consumerDb = createDb(db.connectionString);
     consumerBoss = createBoss(db.connectionString);
@@ -76,12 +78,12 @@ describe("Replay → screenshot → artifact", () => {
       ],
     };
 
-    const test = await request(app.getHttpServer())
+    const test = await authed(app)
       .post("/tests")
       .send(definition)
       .expect(201);
 
-    const run = await request(app.getHttpServer())
+    const run = await authed(app)
       .post("/runs")
       .send({ testId: test.body.id })
       .expect(201);
@@ -91,7 +93,7 @@ describe("Replay → screenshot → artifact", () => {
       checkpoints?: Array<{ name: string; reviewState: string; actualUrl: string }>;
     } = { status: "queued" };
     for (let i = 0; i < 100; i++) {
-      const res = await request(app.getHttpServer())
+      const res = await authed(app)
         .get(`/runs/${run.body.runId}`)
         .expect(200);
       body = res.body;
@@ -106,7 +108,7 @@ describe("Replay → screenshot → artifact", () => {
     expect(checkpoint).toMatchObject({ name: "hero", reviewState: "pending-baseline" });
     expect(checkpoint?.actualUrl).toEqual(expect.any(String));
 
-    const img = await request(app.getHttpServer())
+    const img = await authed(app)
       .get(checkpoint!.actualUrl)
       .buffer()
       .parse(binaryParser as never)

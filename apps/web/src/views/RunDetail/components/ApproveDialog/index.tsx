@@ -1,5 +1,6 @@
 import { AlertTriangle, Button, Modal } from "@varys/ui";
 import { useId } from "react";
+import { useSession } from "../../../../lib/auth";
 import styles from "./styles.module.scss";
 
 /**
@@ -22,6 +23,7 @@ export function ApproveDialog({
 }) {
   const titleId = useId();
   const isAll = count != null;
+  const { data } = useSession();
   return (
     <Modal open={open} onClose={onClose} width={420} labelledBy={titleId}>
       <div className={styles.body}>
@@ -46,6 +48,9 @@ export function ApproveDialog({
             )}
             <strong className={styles.warn}>This cannot be undone.</strong>
           </p>
+          {data?.user?.email && (
+            <p className={styles.actor}>Approving as {data.user.email} — this is recorded.</p>
+          )}
         </div>
       </div>
       <div className={styles.actions}>

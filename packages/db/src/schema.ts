@@ -353,4 +353,57 @@ DELETE FROM run_results a USING run_results b
   WHERE a.run_id = b.run_id AND a.checkpoint_name = b.checkpoint_name
     AND (a.created_at < b.created_at OR (a.created_at = b.created_at AND a.id < b.id));
 CREATE UNIQUE INDEX IF NOT EXISTS run_results_run_checkpoint_uq ON run_results (run_id, checkpoint_name);
+-- Auth & multi-user (Slice 10 — better-auth-owned tables). These back Varys's OWN
+-- user authentication (who can use Varys), distinct from the per-environment
+-- app-under-test login vault. better-auth manages these tables itself (via its kysely
+-- pg adapter); they are NOT queried through Drizzle, so they have no pgTable object
+-- above — only this DDL so they exist at bootstrap. Generated verbatim by
+-- better-auth's schema CLI and made idempotent here (\`IF NOT EXISTS\`) to match the
+-- repo's bootstrap-DDL convention. The quoted camelCase identifiers are REQUIRED —
+-- better-auth queries them case-sensitively; do not snake_case them.
+CREATE TABLE IF NOT EXISTS "user" (
+  "id" text NOT NULL PRIMARY KEY,
+  "name" text NOT NULL,
+  "email" text NOT NULL UNIQUE,
+  "emailVerified" boolean NOT NULL,
+  "image" text,
+  "createdAt" timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt" timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS "session" (
+  "id" text NOT NULL PRIMARY KEY,
+  "expiresAt" timestamptz NOT NULL,
+  "token" text NOT NULL UNIQUE,
+  "createdAt" timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt" timestamptz NOT NULL,
+  "ipAddress" text,
+  "userAgent" text,
+  "userId" text NOT NULL REFERENCES "user" ("id") ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS "account" (
+  "id" text NOT NULL PRIMARY KEY,
+  "accountId" text NOT NULL,
+  "providerId" text NOT NULL,
+  "userId" text NOT NULL REFERENCES "user" ("id") ON DELETE CASCADE,
+  "accessToken" text,
+  "refreshToken" text,
+  "idToken" text,
+  "accessTokenExpiresAt" timestamptz,
+  "refreshTokenExpiresAt" timestamptz,
+  "scope" text,
+  "password" text,
+  "createdAt" timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt" timestamptz NOT NULL
+);
+CREATE TABLE IF NOT EXISTS "verification" (
+  "id" text NOT NULL PRIMARY KEY,
+  "identifier" text NOT NULL,
+  "value" text NOT NULL,
+  "expiresAt" timestamptz NOT NULL,
+  "createdAt" timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt" timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS "session_userId_idx" ON "session" ("userId");
+CREATE INDEX IF NOT EXISTS "account_userId_idx" ON "account" ("userId");
+CREATE INDEX IF NOT EXISTS "verification_identifier_idx" ON "verification" ("identifier");
 `;

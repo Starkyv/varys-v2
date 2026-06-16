@@ -10,6 +10,7 @@ import { type Boss, createBoss, startBoss, workRuns } from "@varys/queue";
 import { processRun } from "@varys/runner";
 import { LocalFsAdapter } from "@varys/storage-adapter";
 import request from "supertest";
+import { authed, prepareAuth } from "./auth-harness";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
 import { startTestDb, type TestDb } from "./db-harness";
@@ -55,6 +56,7 @@ describe("Baseline lifecycle", () => {
     }).compile();
     app = moduleRef.createNestApplication();
     await app.init();
+    await prepareAuth();
 
     consumerDb = createDb(db.connectionString);
     consumerBoss = createBoss(db.connectionString);
@@ -78,14 +80,14 @@ describe("Baseline lifecycle", () => {
     testId: string,
     environmentId?: string,
   ): Promise<RunView & { runId: string }> {
-    const run = await request(app.getHttpServer())
+    const run = await authed(app)
       .post("/runs")
       .send({ testId, environmentId })
       .expect(201);
     const runId = run.body.runId as string;
     let body: RunView = { status: "queued", checkpoints: [] };
     for (let i = 0; i < 100; i++) {
-      const res = await request(app.getHttpServer()).get(`/runs/${runId}`);
+      const res = await authed(app).get(`/runs/${runId}`);
       if (res.status !== 200) {
         throw new Error(
           `GET /runs/${runId} -> ${res.status}: ${res.text ?? JSON.stringify(res.body)}`,
@@ -107,7 +109,7 @@ describe("Baseline lifecycle", () => {
         { type: "screenshot", name: "hero", target: { tag: "div", attributes: { id: "hero" }, text: "Hero" } },
       ],
     };
-    const res = await request(app.getHttpServer())
+    const res = await authed(app)
       .post("/tests")
       .send(definition)
       .expect(201);
@@ -124,7 +126,7 @@ describe("Baseline lifecycle", () => {
         { type: "screenshot", name: "hero", target: { tag: "div", attributes: { id: "hero" }, text: "Hero" } },
       ],
     };
-    const test = await request(app.getHttpServer())
+    const test = await authed(app)
       .post("/tests")
       .send(definition)
       .expect(201);
@@ -146,7 +148,7 @@ describe("Baseline lifecycle", () => {
     const seed = await runToCompletion(testId);
     expect(seed.checkpoints[0].reviewState).toBe("pending-baseline");
 
-    await request(app.getHttpServer())
+    await authed(app)
       .post(`/runs/${seed.runId}/checkpoints/hero/approve`)
       .expect(201);
 
@@ -164,7 +166,7 @@ describe("Baseline lifecycle", () => {
     const testId = await createTest();
 
     const seed = await runToCompletion(testId);
-    await request(app.getHttpServer())
+    await authed(app)
       .post(`/runs/${seed.runId}/checkpoints/hero/approve`)
       .expect(201);
 
@@ -181,7 +183,7 @@ describe("Baseline lifecycle", () => {
   });
 
   async function decide(runId: string, action: "approve" | "reject") {
-    await request(app.getHttpServer())
+    await authed(app)
       .post(`/runs/${runId}/checkpoints/hero/${action}`)
       .expect(201);
   }
@@ -236,7 +238,7 @@ describe("Baseline lifecycle", () => {
         },
       ],
     };
-    const test = await request(app.getHttpServer())
+    const test = await authed(app)
       .post("/tests")
       .send(definition)
       .expect(201);
@@ -260,7 +262,7 @@ describe("Baseline lifecycle", () => {
         },
       ],
     };
-    const test = await request(app.getHttpServer())
+    const test = await authed(app)
       .post("/tests")
       .send(definition)
       .expect(201);
@@ -279,7 +281,7 @@ describe("Baseline lifecycle", () => {
   it("runs against an environment, logs in with a resolved secret, and never leaks it", async () => {
     fixture.setVariant("login");
 
-    const env = await request(app.getHttpServer())
+    const env = await authed(app)
       .post("/environments")
       .send({
         name: "demo",
@@ -299,7 +301,7 @@ describe("Baseline lifecycle", () => {
         { type: "screenshot", name: "app", target: { tag: "div", attributes: { id: "app" } } },
       ],
     };
-    const test = await request(app.getHttpServer())
+    const test = await authed(app)
       .post("/tests")
       .send(definition)
       .expect(201);
@@ -313,7 +315,7 @@ describe("Baseline lifecycle", () => {
 
     // The secret must not leak into run data or the stored (tokenized) definition.
     expect(JSON.stringify(run)).not.toContain("s3cr3t");
-    const testGet = await request(app.getHttpServer())
+    const testGet = await authed(app)
       .get(`/tests/${test.body.id}`)
       .expect(200);
     expect(JSON.stringify(testGet.body)).not.toContain("s3cr3t");
@@ -327,7 +329,7 @@ describe("Baseline lifecycle", () => {
     fixture.setVariant("default");
 
     const mkEnv = (name: string) =>
-      request(app.getHttpServer())
+      authed(app)
         .post("/environments")
         .send({ name, values: { baseUrl: fixture.url } })
         .expect(201)
@@ -343,10 +345,10 @@ describe("Baseline lifecycle", () => {
         { type: "screenshot", name: "hero", target: { tag: "div", attributes: { id: "hero" }, text: "Hero" } },
       ],
     };
-    const test = await request(app.getHttpServer()).post("/tests").send(definition).expect(201);
+    const test = await authed(app).post("/tests").send(definition).expect(201);
     const testId = test.body.id as string;
     const approveHero = (runId: string) =>
-      request(app.getHttpServer()).post(`/runs/${runId}/checkpoints/hero/approve`).expect(201);
+      authed(app).post(`/runs/${runId}/checkpoints/hero/approve`).expect(201);
 
     // Seed + approve against env A ("dev").
     const seedA = await runToCompletion(testId, envA);
@@ -376,7 +378,7 @@ describe("Baseline lifecycle", () => {
   it("fails legibly when the environment is missing a variable the test uses", async () => {
     fixture.setVariant("default");
     // An environment with NO baseUrl, so {{baseUrl}} cannot resolve.
-    const env = await request(app.getHttpServer())
+    const env = await authed(app)
       .post("/environments")
       .send({ name: "empty", values: {} })
       .expect(201);
@@ -390,7 +392,7 @@ describe("Baseline lifecycle", () => {
       ],
       variables: [{ name: "baseUrl", kind: "url" }],
     };
-    const test = await request(app.getHttpServer()).post("/tests").send(definition).expect(201);
+    const test = await authed(app).post("/tests").send(definition).expect(201);
 
     const run = await runToCompletion(test.body.id, env.body.id);
     expect(run.status).toBe("failed");
@@ -417,7 +419,7 @@ describe("Baseline lifecycle", () => {
         },
       ],
     };
-    const test = await request(app.getHttpServer())
+    const test = await authed(app)
       .post("/tests")
       .send(definition)
       .expect(201);
@@ -443,12 +445,12 @@ describe("Baseline lifecycle", () => {
         { type: "screenshot", name: "page", captureMode: "fullpage" },
       ],
     };
-    const test = await request(app.getHttpServer())
+    const test = await authed(app)
       .post("/tests")
       .send(definition)
       .expect(201);
     const approvePage = (runId: string) =>
-      request(app.getHttpServer())
+      authed(app)
         .post(`/runs/${runId}/checkpoints/page/approve`)
         .expect(201);
 
@@ -482,12 +484,12 @@ describe("Baseline lifecycle", () => {
         },
       ],
     };
-    const test = await request(app.getHttpServer())
+    const test = await authed(app)
       .post("/tests")
       .send(definition)
       .expect(201);
     const approveArea = (runId: string) =>
-      request(app.getHttpServer())
+      authed(app)
         .post(`/runs/${runId}/checkpoints/area/approve`)
         .expect(201);
 
@@ -522,7 +524,7 @@ describe("Baseline lifecycle", () => {
         },
       ],
     };
-    const test = await request(app.getHttpServer())
+    const test = await authed(app)
       .post("/tests")
       .send(definition)
       .expect(201);

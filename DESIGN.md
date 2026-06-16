@@ -337,10 +337,10 @@ email notifications · "existing tests as examples" for AI · in-product embedde
 | 4  | Full multi-environment + variable UX ✅ | Env management, per-env profiles, inline variable confirm, env-agnostic guarantees | 1               |
 | 5  | Organization ✅                       | Folders + tags + suites (saved selection = run unit)                            | —                  |
 | 6  | Suite runs + parallelism 🟡           | Fan-out/fan-in, suite × env(s), aggregated run reports ✅ — worker parallelism deliberately deferred (children drain sequentially; more worker processes = parallel today) | 4, 5               |
-| 7  | Dashboard                             | Test × env matrix, runs activity feed, per-checkpoint trend sparklines          | 6                  |
+| 7  | Dashboard ✅                          | Test × env matrix, runs activity feed, per-checkpoint trend sparklines          | 6                  |
 | 8  | Scheduling + notifications            | Cron triggers + Slack/in-app alerts on diffs/failures                           | 6                  |
 | 9  | Timeline + traces ✅                  | On-demand Playwright trace capture + embedded Trace Viewer; per-step run_steps timeline (retention = per-trigger toggle, not auto) | 1 |
-| 10 | Auth & multi-user                     | Google SSO + email/password + OIDC, flat authz, audit surfacing                 | —                  |
+| 10 | Auth & multi-user ✅                  | Google SSO + email/password + OIDC, flat authz, audit surfacing (better-auth; live Google OAuth smoke pending) | —                  |
 | 11 | Cloud storage + retention enforcement | Azure Blob + S3 adapters + tiered cleanup job                                   | —                  |
 | 12 | CI/webhook triggers                   | Pipeline-driven runs                                                            | 6                  |
 | 13 | Scored-locator upgrade ✅             | Replace ranked matcher with confidence scoring (no re-record)                   | 1                  |

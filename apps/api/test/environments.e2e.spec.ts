@@ -2,6 +2,7 @@ import "reflect-metadata";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import request from "supertest";
+import { authed, prepareAuth } from "./auth-harness";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
 import { startTestDb, type TestDb } from "./db-harness";
@@ -18,6 +19,7 @@ describe("Environments API", () => {
     }).compile();
     app = moduleRef.createNestApplication();
     await app.init();
+    await prepareAuth();
   });
 
   afterAll(async () => {
@@ -27,7 +29,7 @@ describe("Environments API", () => {
 
   // Issue 4 TB2 — environments store secrets but never return their values.
   it("stores an environment and never returns secret values", async () => {
-    const created = await request(app.getHttpServer())
+    const created = await authed(app)
       .post("/environments")
       .send({
         name: "demo",
@@ -36,7 +38,7 @@ describe("Environments API", () => {
       })
       .expect(201);
 
-    const got = await request(app.getHttpServer())
+    const got = await authed(app)
       .get(`/environments/${created.body.id}`)
       .expect(200);
 
@@ -52,7 +54,7 @@ describe("Environments API", () => {
   // Slice 1 — GET /environments lists envs as { id, name, values, secretNames }
   // and never leaks a secret value.
   it("lists environments without ever returning secret values", async () => {
-    const created = await request(app.getHttpServer())
+    const created = await authed(app)
       .post("/environments")
       .send({
         name: "list-me",
@@ -61,7 +63,7 @@ describe("Environments API", () => {
       })
       .expect(201);
 
-    const listed = await request(app.getHttpServer()).get("/environments").expect(200);
+    const listed = await authed(app).get("/environments").expect(200);
 
     expect(Array.isArray(listed.body)).toBe(true);
     const mine = listed.body.find((e: { id: string }) => e.id === created.body.id);
@@ -77,7 +79,7 @@ describe("Environments API", () => {
   // Slice 1 — PUT /environments/:id renames, replaces values, sets new secrets,
   // and clears named secrets — never echoing a secret value.
   it("updates an environment: rename, replace values, set + clear secrets", async () => {
-    const created = await request(app.getHttpServer())
+    const created = await authed(app)
       .post("/environments")
       .send({
         name: "before",
@@ -87,7 +89,7 @@ describe("Environments API", () => {
       .expect(201);
     const id = created.body.id;
 
-    const updated = await request(app.getHttpServer())
+    const updated = await authed(app)
       .put(`/environments/${id}`)
       .send({
         name: "after",
@@ -114,16 +116,16 @@ describe("Environments API", () => {
   // Slice 1 — DELETE /environments/:id removes the env (allowed regardless of
   // referencing runs — no FK) and it leaves the list.
   it("deletes an environment", async () => {
-    const created = await request(app.getHttpServer())
+    const created = await authed(app)
       .post("/environments")
       .send({ name: "delete-me", values: { baseUrl: "https://del.example.com" } })
       .expect(201);
     const id = created.body.id;
 
-    await request(app.getHttpServer()).delete(`/environments/${id}`).expect(200);
-    await request(app.getHttpServer()).get(`/environments/${id}`).expect(404);
+    await authed(app).delete(`/environments/${id}`).expect(200);
+    await authed(app).get(`/environments/${id}`).expect(404);
 
-    const listed = await request(app.getHttpServer()).get("/environments").expect(200);
+    const listed = await authed(app).get("/environments").expect(200);
     expect(listed.body.find((e: { id: string }) => e.id === id)).toBeUndefined();
   });
 });

@@ -71,7 +71,20 @@ async function save(
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(definition),
+      // Reuse the logged-in web session: send the API-origin session cookie so the
+      // guarded route accepts the save (Slice 10 / Issue 2). The API allows credentialed
+      // CORS for chrome-extension:// origins.
+      //
+      // KNOWN CAVEAT (cross-origin cookie): a SameSite=Lax cookie isn't sent on the
+      // extension's cross-site request, and in local dev the session cookie is scoped to
+      // the web origin (:5200), not the API port (:4000). If a logged-in save returns 401,
+      // the fallback is `chrome.cookies` (host permission) → read the session cookie and
+      // attach it explicitly. Verify with a manual smoke once the guard is live.
+      credentials: "include",
     });
+    if (res.status === 401) {
+      return { ok: false, status: 401, error: "not signed in (open the Varys web app and sign in first)" };
+    }
     const body = (await res.json().catch(() => ({}))) as { id?: string };
     return { ok: res.ok, status: res.status, id: body.id };
   } catch (err) {

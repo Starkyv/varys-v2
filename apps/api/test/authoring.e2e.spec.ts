@@ -6,6 +6,7 @@ import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { type FixtureServer, startFixtureServer } from "@varys/fixture-app";
 import request from "supertest";
+import { authed, prepareAuth } from "./auth-harness";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
 import { startTestDb, type TestDb } from "./db-harness";
@@ -32,6 +33,7 @@ describe("Authoring → MCP → Draft", () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleRef.createNestApplication();
     await app.init();
+    await prepareAuth();
   }, 60_000);
 
   afterAll(async () => {
@@ -42,7 +44,7 @@ describe("Authoring → MCP → Draft", () => {
   });
 
   const rpc = (method: string, params: unknown, id: number | null = 1) =>
-    request(app.getHttpServer()).post("/mcp").send({ jsonrpc: "2.0", id, method, params });
+    authed(app).post("/mcp").send({ jsonrpc: "2.0", id, method, params });
 
   // Call a tool and return its parsed JSON result (failing the test on a tool error).
   const callTool = async (name: string, args: unknown) => {
@@ -82,7 +84,7 @@ describe("Authoring → MCP → Draft", () => {
     expect(finished.warning).toMatch(/no checkpoints/i);
 
     // The draft is in the review queue: AI-authored, zero checkpoints, with the intent.
-    const drafts = await request(app.getHttpServer()).get("/drafts").expect(200);
+    const drafts = await authed(app).get("/drafts").expect(200);
     const draft = (drafts.body as Array<{ id: string }>).find((d) => d.id === finished.testId);
     expect(draft).toMatchObject({
       origin: "ai",
@@ -91,7 +93,7 @@ describe("Authoring → MCP → Draft", () => {
     });
 
     // ...and it is NOT in the active Tests list (drafts are held out of suites/schedules).
-    const tests = await request(app.getHttpServer()).get("/tests").expect(200);
+    const tests = await authed(app).get("/tests").expect(200);
     expect((tests.body as Array<{ id: string }>).find((t) => t.id === finished.testId)).toBeUndefined();
   });
 
@@ -134,7 +136,7 @@ describe("Authoring → MCP → Draft", () => {
     expect(finished.warning).toBeNull();
 
     // Inspect the persisted draft definition: env-agnostic + correctly tokenized.
-    const test = await request(app.getHttpServer()).get(`/tests/${finished.testId}`).expect(200);
+    const test = await authed(app).get(`/tests/${finished.testId}`).expect(200);
     const def = test.body.definition as {
       steps: Array<{ type: string; url?: string; value?: string; name?: string; captureMode?: string }>;
       variables: Array<{ name: string; kind: string }>;

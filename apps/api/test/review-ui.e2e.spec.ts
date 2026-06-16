@@ -15,6 +15,7 @@ import { processRun } from "@varys/runner";
 import { LocalFsAdapter } from "@varys/storage-adapter";
 import { type Browser, chromium } from "playwright";
 import request from "supertest";
+import { authed, prepareAuth } from "./auth-harness";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
 import { startTestDb, type TestDb } from "./db-harness";
@@ -76,6 +77,7 @@ describe("Visual review UI (browser E2E)", () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleRef.createNestApplication();
     await app.init();
+    await prepareAuth();
 
     consumerDb = createDb(db.connectionString);
     consumerBoss = createBoss(db.connectionString);
@@ -126,14 +128,14 @@ describe("Visual review UI (browser E2E)", () => {
   });
 
   async function runToCompletion(testId: string): Promise<{ runId: string; status: string }> {
-    const run = await request(app.getHttpServer())
+    const run = await authed(app)
       .post("/runs")
       .send({ testId })
       .expect(201);
     const runId = run.body.runId as string;
     let status = "queued";
     for (let i = 0; i < 100; i++) {
-      const res = await request(app.getHttpServer()).get(`/runs/${runId}`).expect(200);
+      const res = await authed(app).get(`/runs/${runId}`).expect(200);
       status = res.body.status;
       if (TERMINAL.includes(status)) break;
       await sleep(200);
@@ -150,7 +152,7 @@ describe("Visual review UI (browser E2E)", () => {
         { type: "screenshot", name: "hero", target: { tag: "div", attributes: { id: "hero" }, text: "Hero" } },
       ],
     };
-    const res = await request(app.getHttpServer()).post("/tests").send(definition).expect(201);
+    const res = await authed(app).post("/tests").send(definition).expect(201);
     return res.body.id as string;
   }
 
@@ -159,7 +161,7 @@ describe("Visual review UI (browser E2E)", () => {
     fixture.setVariant("default");
     const testId = await createTest();
     const seed = await runToCompletion(testId);
-    await request(app.getHttpServer())
+    await authed(app)
       .post(`/runs/${seed.runId}/checkpoints/hero/approve`)
       .expect(201);
 
@@ -196,7 +198,7 @@ describe("Visual review UI (browser E2E)", () => {
 
   async function approveSeed(testId: string): Promise<void> {
     const seed = await runToCompletion(testId);
-    await request(app.getHttpServer())
+    await authed(app)
       .post(`/runs/${seed.runId}/checkpoints/hero/approve`)
       .expect(201);
   }

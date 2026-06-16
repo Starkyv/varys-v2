@@ -4,7 +4,7 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "dev": "DATABASE_URL=${DATABASE_URL:-postgres://varys:varys@localhost:5433/varys} VARYS_STORAGE_DIR=${VARYS_STORAGE_DIR:-../../.varys-artifacts} PORT=${PORT:-4000} tsx watch src/main.ts",
+    "dev": "DATABASE_URL=${DATABASE_URL:-postgres://varys:varys@localhost:5433/varys} VARYS_STORAGE_DIR=${VARYS_STORAGE_DIR:-../../.varys-artifacts} PORT=${PORT:-4000} BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:-varys-dev-insecure-secret-change-me} BETTER_AUTH_URL=${BETTER_AUTH_URL:-http://localhost:5200} tsx watch src/main.ts",
     "start": "node dist/main.js",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -14,6 +14,7 @@
     "@nestjs/common": "^11.0.6",
     "@nestjs/core": "^11.0.6",
     "@nestjs/platform-express": "^11.0.6",
+    "@varys/capture": "workspace:*",
     "@varys/db": "workspace:*",
     "@varys/diff-engine": "workspace:*",
     "@varys/queue": "workspace:*",
@@ -21,13 +22,13 @@
     "@varys/review-contract": "workspace:*",
     "@varys/step-schema": "workspace:*",
     "@varys/storage-adapter": "workspace:*",
+    "better-auth": "^1.6.19",
     "drizzle-orm": "^0.39.1",
     "pg": "^8.13.1",
     "playwright-core": "^1.50.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
-    "zod": "^3.24.1",
-    "@varys/capture": "workspace:*"
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "@nestjs/testing": "^11.0.6",

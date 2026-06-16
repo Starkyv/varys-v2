@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Inject, Param, Post } from "@nestjs/common";
 import type { TuningInput } from "@varys/review-contract";
+import { type AuthUser, CurrentUser } from "../auth/current-user.decorator";
 import { RunsService } from "./runs.service";
 
 @Controller("runs")
@@ -35,13 +36,13 @@ export class RunsController {
   }
 
   @Post(":id/approve-all")
-  approveAll(@Param("id") id: string) {
-    return this.runs.approveAll(id);
+  approveAll(@Param("id") id: string, @CurrentUser() user: AuthUser) {
+    return this.runs.approveAll(id, user.email);
   }
 
   @Post(":id/checkpoints/:name/approve")
-  approve(@Param("id") id: string, @Param("name") name: string) {
-    return this.runs.approve(id, name);
+  approve(@Param("id") id: string, @Param("name") name: string, @CurrentUser() user: AuthUser) {
+    return this.runs.approve(id, name, user.email);
   }
 
   @Post(":id/checkpoints/:name/reject")
@@ -67,7 +68,8 @@ export class RunsController {
     @Param("id") id: string,
     @Param("name") name: string,
     @Body() body: TuningInput,
+    @CurrentUser() user: AuthUser,
   ) {
-    return this.runs.persistMasks(id, name, body ?? {});
+    return this.runs.persistMasks(id, name, body ?? {}, user.email);
   }
 }

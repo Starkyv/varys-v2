@@ -34,6 +34,12 @@
   color: var(--color-danger-fg);
 }
 
+.actor {
+  margin: var(--space-12) 0 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
 .actions {
   display: flex;
   justify-content: flex-end;

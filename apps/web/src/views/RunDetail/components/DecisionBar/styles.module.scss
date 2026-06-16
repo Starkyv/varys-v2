@@ -23,6 +23,13 @@
   color: var(--color-text-muted);
 }
 
+/* Baseline audit trail: who approved the current golden, and when. */
+.audit {
+  flex-basis: 100%;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+
 /* Reject reads as a danger-tinted secondary; approve is the success affordance. */
 .reject {
   color: var(--color-danger-fg);

@@ -272,6 +272,10 @@ export interface CheckpointView {
   actualUrl: string | null;
   baselineUrl: string | null;
   diffUrl: string | null;
+  /** Audit trail of the current approved baseline for this checkpoint+environment:
+   *  who approved it and when (ISO). Null until a baseline has been approved (Slice 10). */
+  baselineApprovedBy: string | null;
+  baselineApprovedAt: string | null;
 }
 
 /**

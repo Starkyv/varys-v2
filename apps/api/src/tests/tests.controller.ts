@@ -1,5 +1,6 @@
 import { Body, Controller, Delete, Get, Inject, Param, Patch, Post, Put } from "@nestjs/common";
 import type { TestConfigPatch } from "@varys/review-contract";
+import { type AuthUser, CurrentUser } from "../auth/current-user.decorator";
 import { TestsService, type UpdateTestInput } from "./tests.service";
 
 @Controller("tests")
@@ -30,8 +31,8 @@ export class TestsController {
 
   // Apply a config patch → write a new audited test_version. 409 on a stale baseVersion.
   @Put(":id/config")
-  saveConfig(@Param("id") id: string, @Body() body: TestConfigPatch) {
-    return this.tests.saveConfig(id, body);
+  saveConfig(@Param("id") id: string, @Body() body: TestConfigPatch, @CurrentUser() user: AuthUser) {
+    return this.tests.saveConfig(id, body, user.email);
   }
 
   // Organization metadata only ({ name?, folderId? — null unfiles }); never the

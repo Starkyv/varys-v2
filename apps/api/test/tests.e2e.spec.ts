@@ -3,6 +3,7 @@ import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { parseTestDefinition } from "@varys/step-schema";
 import request from "supertest";
+import { authed, prepareAuth } from "./auth-harness";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
 import { startTestDb, type TestDb } from "./db-harness";
@@ -21,6 +22,7 @@ describe("Tests API", () => {
 
     app = moduleRef.createNestApplication();
     await app.init();
+    await prepareAuth();
   });
 
   afterAll(async () => {
@@ -39,14 +41,14 @@ describe("Tests API", () => {
       ],
     };
 
-    const created = await request(app.getHttpServer())
+    const created = await authed(app)
       .post("/tests")
       .send(definition)
       .expect(201);
 
     expect(created.body).toMatchObject({ id: expect.any(String), version: 1 });
 
-    const fetched = await request(app.getHttpServer())
+    const fetched = await authed(app)
       .get(`/tests/${created.body.id}`)
       .expect(200);
 
@@ -68,10 +70,10 @@ describe("Tests API", () => {
       ],
     });
 
-    const a = await request(app.getHttpServer()).post("/tests").send(mk("list-a")).expect(201);
-    const b = await request(app.getHttpServer()).post("/tests").send(mk("list-b")).expect(201);
+    const a = await authed(app).post("/tests").send(mk("list-a")).expect(201);
+    const b = await authed(app).post("/tests").send(mk("list-b")).expect(201);
 
-    const listed = await request(app.getHttpServer()).get("/tests").expect(200);
+    const listed = await authed(app).get("/tests").expect(200);
     const items = listed.body as { id: string; name: string; createdAt: string }[];
 
     const mine = items.filter((i) => i.id === a.body.id || i.id === b.body.id);
@@ -102,10 +104,10 @@ describe("Tests API", () => {
         { type: "screenshot", name: "hero", target: { tag: "div", attributes: { id: "hero" } } },
       ],
     };
-    const a = await request(app.getHttpServer()).post("/tests").send(withToken).expect(201);
-    const b = await request(app.getHttpServer()).post("/tests").send(noToken).expect(201);
+    const a = await authed(app).post("/tests").send(withToken).expect(201);
+    const b = await authed(app).post("/tests").send(noToken).expect(201);
 
-    const listed = await request(app.getHttpServer()).get("/tests").expect(200);
+    const listed = await authed(app).get("/tests").expect(200);
     const items = listed.body as { id: string; needsEnvironment: boolean }[];
     expect(items.find((i) => i.id === a.body.id)?.needsEnvironment).toBe(true);
     expect(items.find((i) => i.id === b.body.id)?.needsEnvironment).toBe(false);

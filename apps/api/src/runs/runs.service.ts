@@ -194,6 +194,25 @@ export class RunsService {
 
     const url = (key: string | null) => (key ? this.storage.getUrl(key) : null);
 
+    // Baseline audit trail per checkpoint: who approved the current golden for this
+    // (test, checkpoint, env, viewport) and when. Surfaces the real approver (Slice 10).
+    const vpKey = viewportKey((row.definition as TestDefinition).viewport);
+    const baselineRows = await this.db
+      .select({
+        checkpointName: baselines.checkpointName,
+        approvedBy: baselines.approvedBy,
+        approvedAt: baselines.approvedAt,
+      })
+      .from(baselines)
+      .where(
+        and(
+          eq(baselines.testId, row.testId),
+          eq(baselines.environment, environment),
+          eq(baselines.viewportKey, vpKey),
+        ),
+      );
+    const baselineByName = new Map(baselineRows.map((b) => [b.checkpointName, b]));
+
     // For a failed run there are no checkpoints — instead give the viewer the run's
     // step sequence (labels) so it can show which step failed and which never ran.
     const steps: StepLabel[] =
@@ -262,6 +281,8 @@ export class RunsService {
           actualUrl: url(r.actualArtifactKey),
           baselineUrl: url(r.baselineArtifactKey),
           diffUrl: url(r.diffArtifactKey),
+          baselineApprovedBy: baselineByName.get(r.name)?.approvedBy ?? null,
+          baselineApprovedAt: baselineByName.get(r.name)?.approvedAt?.toISOString() ?? null,
         }),
       ),
     };
@@ -427,8 +448,9 @@ export class RunsService {
     await this.db.update(runs).set({ status: next, updatedAt: new Date() }).where(eq(runs.id, runId));
   }
 
-  /** Approve a checkpoint: promote a pending seed (or replace an active baseline) and audit it. */
-  async approve(runId: string, checkpointName: string): Promise<{ ok: true }> {
+  /** Approve a checkpoint: promote a pending seed (or replace an active baseline) and audit it.
+   *  `approvedBy` is the signed-in user (the irreversible action's audit trail, DESIGN §4). */
+  async approve(runId: string, checkpointName: string, approvedBy: string): Promise<{ ok: true }> {
     const [result] = await this.db
       .select({
         id: runResults.id,
@@ -475,7 +497,7 @@ export class RunsService {
         environment,
         viewportKey: vpKey,
         artifactKey: result.actualArtifactKey,
-        approvedBy: "system",
+        approvedBy,
         approvedAt: new Date(),
       });
     } else if (result.reviewState === "diff") {
@@ -500,7 +522,7 @@ export class RunsService {
         .update(baselines)
         .set({
           artifactKey: result.actualArtifactKey,
-          approvedBy: "system",
+          approvedBy,
           approvedAt: new Date(),
           updatedAt: new Date(),
         })
@@ -530,7 +552,7 @@ export class RunsService {
    * baseline identically. Passing and already-decided checkpoints are left
    * untouched. Bulk reject is intentionally out of scope.
    */
-  async approveAll(runId: string): Promise<{ approved: number }> {
+  async approveAll(runId: string, approvedBy: string): Promise<{ approved: number }> {
     const candidates = await this.db
       .select({ name: runResults.checkpointName })
       .from(runResults)
@@ -542,7 +564,7 @@ export class RunsService {
         ),
       );
     for (const c of candidates) {
-      await this.approve(runId, c.name);
+      await this.approve(runId, c.name, approvedBy);
     }
     return { approved: candidates.length };
   }
@@ -617,6 +639,7 @@ export class RunsService {
     runId: string,
     checkpointName: string,
     input: TuningInput,
+    createdBy: string,
   ): Promise<PersistResult> {
     const [ctx] = await this.db
       .select({
@@ -661,7 +684,7 @@ export class RunsService {
       testId: ctx.testId,
       version: nextVersion,
       definition: nextDefinition,
-      createdBy: "system",
+      createdBy,
     });
 
     // 2. Re-judge ONLY this run_result against the stored artifacts.

@@ -4,6 +4,7 @@ import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { Pool } from "pg";
 import request from "supertest";
+import { authed, prepareAuth } from "./auth-harness";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
 import { startTestDb, type TestDb } from "./db-harness";
@@ -40,6 +41,7 @@ describe("Suite runs API", () => {
     }).compile();
     app = moduleRef.createNestApplication();
     await app.init();
+    await prepareAuth();
   });
 
   afterAll(async () => {
@@ -57,12 +59,12 @@ describe("Suite runs API", () => {
         { type: "screenshot", name: "hero", target: { tag: "div", attributes: { id: "hero" } } },
       ],
     };
-    const res = await request(app.getHttpServer()).post("/tests").send(definition).expect(201);
+    const res = await authed(app).post("/tests").send(definition).expect(201);
     return res.body.id as string;
   };
 
   const mkEnv = async (name: string): Promise<string> => {
-    const res = await request(app.getHttpServer())
+    const res = await authed(app)
       .post("/environments")
       .send({ name, values: { baseUrl: `http://${name}.local` } })
       .expect(201);
@@ -70,7 +72,7 @@ describe("Suite runs API", () => {
   };
 
   const mkSuite = async (name: string, testIds: string[]): Promise<string> => {
-    const res = await request(app.getHttpServer())
+    const res = await authed(app)
       .post("/suites")
       .send({ name, testIds })
       .expect(201);
@@ -78,7 +80,7 @@ describe("Suite runs API", () => {
   };
 
   const getView = async (suiteRunId: string): Promise<View> => {
-    const res = await request(app.getHttpServer()).get(`/suite-runs/${suiteRunId}`).expect(200);
+    const res = await authed(app).get(`/suite-runs/${suiteRunId}`).expect(200);
     return res.body as View;
   };
 
@@ -89,7 +91,7 @@ describe("Suite runs API", () => {
     const acme = await mkEnv("acme-prod");
     const suiteId = await mkSuite("release", [a, b]);
 
-    const triggered = await request(app.getHttpServer())
+    const triggered = await authed(app)
       .post(`/suites/${suiteId}/runs`)
       .send({ environmentIds: [staging, acme] })
       .expect(201);
@@ -112,17 +114,17 @@ describe("Suite runs API", () => {
     expect(view.environments).toEqual(["acme-prod", "staging"]);
 
     // Children surface through the parent only — the flat runs history excludes them.
-    const flat = await request(app.getHttpServer()).get("/runs").expect(200);
+    const flat = await authed(app).get("/runs").expect(200);
     const flatIds = new Set((flat.body as { runId: string }[]).map((r) => r.runId));
     for (const child of view.children) expect(flatIds.has(child.runId)).toBe(false);
 
     // The aggregate listing carries the fan-out.
-    const listed = await request(app.getHttpServer()).get("/suite-runs").expect(200);
+    const listed = await authed(app).get("/suite-runs").expect(200);
     const mine = (listed.body as View[]).find((s) => s.suiteRunId === suiteRunId);
     expect(mine?.counts.total).toBe(4);
 
     // No environments selected ⇒ one env-less ("default") child per member test.
-    const envless = await request(app.getHttpServer())
+    const envless = await authed(app)
       .post(`/suites/${suiteId}/runs`)
       .send({})
       .expect(201);
@@ -136,7 +138,7 @@ describe("Suite runs API", () => {
     const t2 = await mkTest("agg-2");
     const suiteId = await mkSuite("nightly", [t1, t2]);
 
-    const triggered = await request(app.getHttpServer())
+    const triggered = await authed(app)
       .post(`/suites/${suiteId}/runs`)
       .send({})
       .expect(201);
@@ -165,7 +167,7 @@ describe("Suite runs API", () => {
 
     // Deleting the suite never deletes its history: the report keeps working
     // under the trigger-time name snapshot (FK is SET NULL).
-    await request(app.getHttpServer()).delete(`/suites/${suiteId}`).expect(200);
+    await authed(app).delete(`/suites/${suiteId}`).expect(200);
     const survived = await getView(suiteRunId);
     expect(survived.suiteName).toBe("nightly");
     expect(survived.status).toBe("passed");
@@ -173,19 +175,19 @@ describe("Suite runs API", () => {
 
   it("guards the trigger: empty suite, unknown suite, unknown environment", async () => {
     const emptySuite = await mkSuite("empty", []);
-    await request(app.getHttpServer()).post(`/suites/${emptySuite}/runs`).send({}).expect(400);
+    await authed(app).post(`/suites/${emptySuite}/runs`).send({}).expect(400);
 
-    await request(app.getHttpServer()).post(`/suites/${randomUUID()}/runs`).send({}).expect(404);
+    await authed(app).post(`/suites/${randomUUID()}/runs`).send({}).expect(404);
 
     // A bogus environment fails the whole trigger up front — no half-created fan-out.
     const member = await mkTest("guarded");
     const suiteId = await mkSuite("guarded-suite", [member]);
-    const before = await request(app.getHttpServer()).get("/suite-runs").expect(200);
-    await request(app.getHttpServer())
+    const before = await authed(app).get("/suite-runs").expect(200);
+    await authed(app)
       .post(`/suites/${suiteId}/runs`)
       .send({ environmentIds: [randomUUID()] })
       .expect(404);
-    const after = await request(app.getHttpServer()).get("/suite-runs").expect(200);
+    const after = await authed(app).get("/suite-runs").expect(200);
     expect((after.body as View[]).length).toBe((before.body as View[]).length);
   });
 });

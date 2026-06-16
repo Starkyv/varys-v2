@@ -11,10 +11,20 @@ export function DecisionBar({ checkpoint: cp, runId }: { checkpoint: CheckpointV
   const { toast } = useToast();
   const [confirming, setConfirming] = useState(false);
 
+  // Audit trail of the current golden baseline (who approved it, when), shown wherever
+  // a baseline already exists for this checkpoint.
+  const audit = cp.baselineApprovedBy ? (
+    <span className={styles.audit}>
+      Baseline approved by {cp.baselineApprovedBy}
+      {cp.baselineApprovedAt ? ` · ${new Date(cp.baselineApprovedAt).toLocaleString()}` : ""}
+    </span>
+  ) : null;
+
   if (cp.resolution) {
     return (
       <div className={styles.bar}>
         <span className={styles.decided}>Decision recorded · {cp.resolution}</span>
+        {audit}
       </div>
     );
   }
@@ -24,6 +34,7 @@ export function DecisionBar({ checkpoint: cp, runId }: { checkpoint: CheckpointV
     return (
       <div className={styles.bar}>
         <span className={styles.decided}>Within threshold — no action needed</span>
+        {audit}
       </div>
     );
   }
@@ -58,6 +69,7 @@ export function DecisionBar({ checkpoint: cp, runId }: { checkpoint: CheckpointV
       <Button variant="primary" iconLeft={<Check size={15} />} disabled={decision.isPending} onClick={() => setConfirming(true)} className={styles.approve}>
         {isDiff ? "Approve as new baseline" : "Approve"}
       </Button>
+      {audit}
       <ApproveDialog open={confirming} name={cp.name} onClose={() => setConfirming(false)} onConfirm={() => decide("approve")} />
     </div>
   );

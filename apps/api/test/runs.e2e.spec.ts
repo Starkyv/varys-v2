@@ -11,6 +11,7 @@ import { processRun } from "@varys/runner";
 import { LocalFsAdapter } from "@varys/storage-adapter";
 import { eq } from "drizzle-orm";
 import request from "supertest";
+import { authed, authEmail, prepareAuth } from "./auth-harness";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
 import { startTestDb, type TestDb } from "./db-harness";
@@ -37,6 +38,7 @@ describe("Runs API", () => {
     }).compile();
     app = moduleRef.createNestApplication();
     await app.init();
+    await prepareAuth();
 
     consumerDb = createDb(db.connectionString);
     consumerBoss = createBoss(db.connectionString);
@@ -67,12 +69,12 @@ describe("Runs API", () => {
       ],
     };
 
-    const test = await request(app.getHttpServer())
+    const test = await authed(app)
       .post("/tests")
       .send(definition)
       .expect(201);
 
-    const run = await request(app.getHttpServer())
+    const run = await authed(app)
       .post("/runs")
       .send({ testId: test.body.id })
       .expect(201);
@@ -81,7 +83,7 @@ describe("Runs API", () => {
 
     let status = "queued";
     for (let i = 0; i < 100; i++) {
-      const res = await request(app.getHttpServer())
+      const res = await authed(app)
         .get(`/runs/${run.body.runId}`)
         .expect(200);
       status = res.body.status;
@@ -105,12 +107,12 @@ describe("Runs API", () => {
         { type: "screenshot", name: "hero", target: { tag: "div", attributes: { id: "hero" } } },
       ],
     };
-    const test = await request(app.getHttpServer())
+    const test = await authed(app)
       .post("/tests")
       .send(definition)
       .expect(201);
 
-    const created = await request(app.getHttpServer())
+    const created = await authed(app)
       .post("/runs")
       .send({ testId: test.body.id })
       .expect(201);
@@ -121,7 +123,7 @@ describe("Runs API", () => {
       checkpoints: [],
     };
     for (let i = 0; i < 100; i++) {
-      const res = await request(app.getHttpServer()).get(`/runs/${runId}`).expect(200);
+      const res = await authed(app).get(`/runs/${runId}`).expect(200);
       body = res.body;
       if (["passed", "needs_review", "failed"].includes(body.status)) break;
       await sleep(200);
@@ -147,10 +149,10 @@ describe("Runs API", () => {
         { type: "screenshot", name: "beta", target },
       ],
     };
-    const test = await request(app.getHttpServer()).post("/tests").send(definition).expect(201);
+    const test = await authed(app).post("/tests").send(definition).expect(201);
     const testId = test.body.id as string;
 
-    const created = await request(app.getHttpServer())
+    const created = await authed(app)
       .post("/runs")
       .send({ testId })
       .expect(201);
@@ -161,7 +163,7 @@ describe("Runs API", () => {
       checkpoints: [],
     };
     for (let i = 0; i < 100; i++) {
-      const res = await request(app.getHttpServer()).get(`/runs/${runId}`).expect(200);
+      const res = await authed(app).get(`/runs/${runId}`).expect(200);
       body = res.body;
       if (["passed", "needs_review", "failed"].includes(body.status)) break;
       await sleep(200);
@@ -170,15 +172,15 @@ describe("Runs API", () => {
     expect(body.checkpoints).toHaveLength(2);
 
     // Decide one individually first; bulk approve must skip it.
-    await request(app.getHttpServer())
+    await authed(app)
       .post(`/runs/${runId}/checkpoints/alpha/approve`)
       .expect(201);
 
-    const bulk = await request(app.getHttpServer()).post(`/runs/${runId}/approve-all`).expect(201);
+    const bulk = await authed(app).post(`/runs/${runId}/approve-all`).expect(201);
     expect(bulk.body.approved).toBe(1); // only beta still needed review
 
     // Both checkpoints are now approved.
-    const after = await request(app.getHttpServer()).get(`/runs/${runId}`).expect(200);
+    const after = await authed(app).get(`/runs/${runId}`).expect(200);
     const byName = Object.fromEntries(
       (after.body.checkpoints as { name: string; resolution: string | null }[]).map((c) => [
         c.name,
@@ -189,7 +191,7 @@ describe("Runs API", () => {
     expect(byName.beta).toBe("approved");
 
     // The run leaves the needs-review list.
-    const list = await request(app.getHttpServer()).get("/runs/needs-review").expect(200);
+    const list = await authed(app).get("/runs/needs-review").expect(200);
     expect((list.body as { runId: string }[]).some((i) => i.runId === runId)).toBe(false);
 
     // Each baseline is audited with approver + timestamp.
@@ -199,7 +201,7 @@ describe("Runs API", () => {
       .where(eq(baselines.testId, testId));
     expect(seeded).toHaveLength(2);
     for (const b of seeded) {
-      expect(b.approvedBy).toBe("system");
+      expect(b.approvedBy).toBe(authEmail());
       expect(b.approvedAt).not.toBeNull();
     }
   });
@@ -214,7 +216,7 @@ describe("Runs API", () => {
     const hero = (b: Body) => b.checkpoints.find((c) => c.name === "hero") as Cp;
     const poll = async (runId: string): Promise<Body> => {
       for (let i = 0; i < 100; i++) {
-        const res = await request(app.getHttpServer()).get(`/runs/${runId}`).expect(200);
+        const res = await authed(app).get(`/runs/${runId}`).expect(200);
         if (["passed", "needs_review", "failed"].includes(res.body.status)) return res.body as Body;
         await sleep(200);
       }
@@ -234,20 +236,20 @@ describe("Runs API", () => {
         },
       ],
     };
-    const test = await request(app.getHttpServer()).post("/tests").send(definition).expect(201);
+    const test = await authed(app).post("/tests").send(definition).expect(201);
     const testId = test.body.id as string;
 
     // Run 1 — seed the baseline (blue) and approve it.
-    const r1 = await request(app.getHttpServer()).post("/runs").send({ testId }).expect(201);
+    const r1 = await authed(app).post("/runs").send({ testId }).expect(201);
     const run1 = r1.body.runId as string;
     await poll(run1);
-    await request(app.getHttpServer())
+    await authed(app)
       .post(`/runs/${run1}/checkpoints/hero/approve`)
       .expect(201);
 
     // Run 2 — the element changes colour → a real diff.
     fixture.setVariant("changed");
-    const r2 = await request(app.getHttpServer()).post("/runs").send({ testId }).expect(201);
+    const r2 = await authed(app).post("/runs").send({ testId }).expect(201);
     const run2 = r2.body.runId as string;
     const before = await poll(run2);
     expect(hero(before).reviewState).toBe("diff");
@@ -258,17 +260,17 @@ describe("Runs API", () => {
     const masks = [{ x: 0, y: 0, width: 300, height: 200 }];
 
     // Re-evaluate (preview): matches now, but mutates nothing.
-    const preview = await request(app.getHttpServer())
+    const preview = await authed(app)
       .post(`/runs/${run2}/checkpoints/hero/re-evaluate`)
       .send({ masks })
       .expect(201);
     expect(preview.body.verdict).toBe("match");
     expect(typeof preview.body.diffImage).toBe("string");
-    const unchanged = await request(app.getHttpServer()).get(`/runs/${run2}`).expect(200);
+    const unchanged = await authed(app).get(`/runs/${run2}`).expect(200);
     expect(hero(unchanged.body as Body).reviewState).toBe("diff"); // preview did not persist
 
     // Persist: re-judges this checkpoint to passed and writes a new version.
-    const persisted = await request(app.getHttpServer())
+    const persisted = await authed(app)
       .post(`/runs/${run2}/checkpoints/hero/persist`)
       .send({ masks })
       .expect(201);
@@ -276,10 +278,10 @@ describe("Runs API", () => {
     expect(persisted.body.version).toBe(2);
 
     // run2 is now passed, exposes the persisted mask, and left the needs-review list.
-    const after = await request(app.getHttpServer()).get(`/runs/${run2}`).expect(200);
+    const after = await authed(app).get(`/runs/${run2}`).expect(200);
     expect(hero(after.body as Body).reviewState).toBe("passed");
     expect(hero(after.body as Body).masks).toHaveLength(1);
-    const list = await request(app.getHttpServer()).get("/runs/needs-review").expect(200);
+    const list = await authed(app).get("/runs/needs-review").expect(200);
     expect(
       (list.body as { runId: string; checkpointName: string }[]).some(
         (i) => i.runId === run2 && i.checkpointName === "hero",
@@ -287,14 +289,14 @@ describe("Runs API", () => {
     ).toBe(false);
 
     // Run 3 — still the changed colour, but the persisted mask is honored → passes.
-    const r3 = await request(app.getHttpServer()).post("/runs").send({ testId }).expect(201);
+    const r3 = await authed(app).post("/runs").send({ testId }).expect(201);
     const run3 = r3.body.runId as string;
     const third = await poll(run3);
     expect(third.status).toBe("passed");
     expect(hero(third).reviewState).toBe("passed");
 
     // Run 1's verdict is untouched by the persist.
-    const firstAgain = await request(app.getHttpServer()).get(`/runs/${run1}`).expect(200);
+    const firstAgain = await authed(app).get(`/runs/${run1}`).expect(200);
     expect(hero(firstAgain.body as Body).resolution).toBe("approved");
 
     fixture.setVariant("default");
@@ -309,7 +311,7 @@ describe("Runs API", () => {
     const hero = (b: Body) => b.checkpoints.find((c) => c.name === "hero") as Cp;
     const poll = async (runId: string): Promise<Body> => {
       for (let i = 0; i < 100; i++) {
-        const res = await request(app.getHttpServer()).get(`/runs/${runId}`).expect(200);
+        const res = await authed(app).get(`/runs/${runId}`).expect(200);
         if (["passed", "needs_review", "failed"].includes(res.body.status)) return res.body as Body;
         await sleep(200);
       }
@@ -329,24 +331,24 @@ describe("Runs API", () => {
         },
       ],
     };
-    const test = await request(app.getHttpServer()).post("/tests").send(definition).expect(201);
+    const test = await authed(app).post("/tests").send(definition).expect(201);
     const testId = test.body.id as string;
 
     // Seed (blue) + approve.
-    const r1 = await request(app.getHttpServer()).post("/runs").send({ testId }).expect(201);
+    const r1 = await authed(app).post("/runs").send({ testId }).expect(201);
     await poll(r1.body.runId as string);
-    await request(app.getHttpServer())
+    await authed(app)
       .post(`/runs/${r1.body.runId}/checkpoints/hero/approve`)
       .expect(201);
 
     // Recolour → diff under the default threshold.
     fixture.setVariant("changed");
-    const r2 = await request(app.getHttpServer()).post("/runs").send({ testId }).expect(201);
+    const r2 = await authed(app).post("/runs").send({ testId }).expect(201);
     const run2 = r2.body.runId as string;
     expect(hero(await poll(run2)).reviewState).toBe("diff");
 
     // Persist a permissive threshold (admits any diff) — re-judges this checkpoint to passed.
-    const persisted = await request(app.getHttpServer())
+    const persisted = await authed(app)
       .post(`/runs/${run2}/checkpoints/hero/persist`)
       .send({ threshold: 1 })
       .expect(201);
@@ -354,7 +356,7 @@ describe("Runs API", () => {
 
     // A later run honors the persisted threshold: the same colour change now passes
     // (it would be needs_review under the default threshold).
-    const r3 = await request(app.getHttpServer()).post("/runs").send({ testId }).expect(201);
+    const r3 = await authed(app).post("/runs").send({ testId }).expect(201);
     const third = await poll(r3.body.runId as string);
     expect(third.status).toBe("passed");
     expect(hero(third).reviewState).toBe("passed");
@@ -369,7 +371,7 @@ describe("Runs API", () => {
     type Body = { status: string };
     const poll = async (runId: string): Promise<Body> => {
       for (let i = 0; i < 100; i++) {
-        const res = await request(app.getHttpServer()).get(`/runs/${runId}`).expect(200);
+        const res = await authed(app).get(`/runs/${runId}`).expect(200);
         if (["passed", "needs_review", "failed"].includes(res.body.status)) return res.body as Body;
         await sleep(200);
       }
@@ -380,16 +382,16 @@ describe("Runs API", () => {
     const stampMask = { x: 0, y: 0, width: 80, height: 30 };
 
     const seedRunApprove = async (testId: string) => {
-      const r = await request(app.getHttpServer()).post("/runs").send({ testId }).expect(201);
+      const r = await authed(app).post("/runs").send({ testId }).expect(201);
       await poll(r.body.runId as string);
-      await request(app.getHttpServer())
+      await authed(app)
         .post(`/runs/${r.body.runId}/checkpoints/hero/approve`)
         .expect(201);
     };
 
     // Masked checkpoint and an unmasked control, both seeded on stampA (green stamp).
     fixture.setVariant("stampA");
-    const masked = await request(app.getHttpServer())
+    const masked = await authed(app)
       .post("/tests")
       .send({
         name: "masked stamp",
@@ -400,7 +402,7 @@ describe("Runs API", () => {
         ],
       })
       .expect(201);
-    const control = await request(app.getHttpServer())
+    const control = await authed(app)
       .post("/tests")
       .send({
         name: "unmasked stamp",
@@ -416,11 +418,11 @@ describe("Runs API", () => {
 
     // stampB recolours ONLY the stamp sub-region.
     fixture.setVariant("stampB");
-    const maskedRun = await request(app.getHttpServer())
+    const maskedRun = await authed(app)
       .post("/runs")
       .send({ testId: masked.body.id })
       .expect(201);
-    const controlRun = await request(app.getHttpServer())
+    const controlRun = await authed(app)
       .post("/runs")
       .send({ testId: control.body.id })
       .expect(201);
@@ -442,12 +444,12 @@ describe("Runs API", () => {
         { type: "screenshot", name: "hero", target: { tag: "div", attributes: { id: "hero" }, text: "Hero" } },
       ],
     };
-    const test = await request(app.getHttpServer())
+    const test = await authed(app)
       .post("/tests")
       .send(definition)
       .expect(201);
 
-    const created = await request(app.getHttpServer())
+    const created = await authed(app)
       .post("/runs")
       .send({ testId: test.body.id })
       .expect(201);
@@ -455,7 +457,7 @@ describe("Runs API", () => {
 
     let body: { status: string; [k: string]: unknown } = { status: "queued" };
     for (let i = 0; i < 100; i++) {
-      const res = await request(app.getHttpServer()).get(`/runs/${runId}`).expect(200);
+      const res = await authed(app).get(`/runs/${runId}`).expect(200);
       body = res.body;
       if (["passed", "needs_review", "failed"].includes(body.status)) break;
       await sleep(200);
@@ -480,12 +482,12 @@ describe("Runs API", () => {
         { type: "screenshot", name: "hero", target: { tag: "div", attributes: { id: "hero" }, text: "Hero" } },
       ],
     };
-    const test = await request(app.getHttpServer())
+    const test = await authed(app)
       .post("/tests")
       .send(definition)
       .expect(201);
 
-    const created = await request(app.getHttpServer())
+    const created = await authed(app)
       .post("/runs")
       .send({ testId: test.body.id })
       .expect(201);
@@ -496,7 +498,7 @@ describe("Runs API", () => {
       checkpoints: [],
     };
     for (let i = 0; i < 100; i++) {
-      const res = await request(app.getHttpServer()).get(`/runs/${runId}`).expect(200);
+      const res = await authed(app).get(`/runs/${runId}`).expect(200);
       body = res.body;
       if (["passed", "needs_review", "failed"].includes(body.status)) break;
       await sleep(200);
@@ -505,12 +507,12 @@ describe("Runs API", () => {
     // Undecided checkpoints report a null resolution...
     expect(body.checkpoints[0].resolution).toBeNull();
 
-    await request(app.getHttpServer())
+    await authed(app)
       .post(`/runs/${runId}/checkpoints/hero/approve`)
       .expect(201);
 
     // ...and the recorded decision afterwards.
-    const after = await request(app.getHttpServer()).get(`/runs/${runId}`).expect(200);
+    const after = await authed(app).get(`/runs/${runId}`).expect(200);
     expect(after.body.checkpoints[0].resolution).toBe("approved");
   });
 
@@ -525,18 +527,18 @@ describe("Runs API", () => {
         { type: "screenshot", name: "hero", target: { tag: "div", attributes: { id: "hero" }, text: "Hero" } },
       ],
     };
-    const test = await request(app.getHttpServer())
+    const test = await authed(app)
       .post("/tests")
       .send(definition)
       .expect(201);
 
-    const created = await request(app.getHttpServer())
+    const created = await authed(app)
       .post("/runs")
       .send({ testId: test.body.id })
       .expect(201);
     const runId = created.body.runId as string;
     for (let i = 0; i < 100; i++) {
-      const res = await request(app.getHttpServer()).get(`/runs/${runId}`).expect(200);
+      const res = await authed(app).get(`/runs/${runId}`).expect(200);
       if (["passed", "needs_review", "failed"].includes(res.body.status)) break;
       await sleep(200);
     }
@@ -549,7 +551,7 @@ describe("Runs API", () => {
       checkpointName: string;
       reviewState: string;
     };
-    const listed = await request(app.getHttpServer()).get("/runs/needs-review").expect(200);
+    const listed = await authed(app).get("/runs/needs-review").expect(200);
     const mine = (listed.body as Item[]).find((i) => i.runId === runId);
     expect(mine).toBeDefined();
     expect(mine).toMatchObject({
@@ -561,10 +563,10 @@ describe("Runs API", () => {
     expect(Number.isNaN(Date.parse(mine?.runTimestamp ?? "x"))).toBe(false);
 
     // Decide it → it leaves the list.
-    await request(app.getHttpServer())
+    await authed(app)
       .post(`/runs/${runId}/checkpoints/hero/approve`)
       .expect(201);
-    const after = await request(app.getHttpServer()).get("/runs/needs-review").expect(200);
+    const after = await authed(app).get("/runs/needs-review").expect(200);
     expect((after.body as Item[]).find((i) => i.runId === runId)).toBeUndefined();
   });
 
@@ -579,8 +581,8 @@ describe("Runs API", () => {
         { type: "screenshot", name: "hero", target: { tag: "div", attributes: { id: "hero" }, text: "Hero" } },
       ],
     };
-    const test = await request(app.getHttpServer()).post("/tests").send(definition).expect(201);
-    const created = await request(app.getHttpServer())
+    const test = await authed(app).post("/tests").send(definition).expect(201);
+    const created = await authed(app)
       .post("/runs")
       .send({ testId: test.body.id })
       .expect(201);
@@ -588,7 +590,7 @@ describe("Runs API", () => {
 
     // Wait for it to reach a terminal status.
     for (let i = 0; i < 100; i++) {
-      const res = await request(app.getHttpServer()).get(`/runs/${runId}`).expect(200);
+      const res = await authed(app).get(`/runs/${runId}`).expect(200);
       if (["passed", "needs_review", "failed"].includes(res.body.status)) break;
       await sleep(200);
     }
@@ -601,7 +603,7 @@ describe("Runs API", () => {
       runTimestamp: string;
       error: string | null;
     };
-    const listed = await request(app.getHttpServer()).get("/runs").expect(200);
+    const listed = await authed(app).get("/runs").expect(200);
     const mine = (listed.body as Row[]).find((r) => r.runId === runId);
     expect(mine).toMatchObject({
       testName: "history test",
@@ -611,10 +613,10 @@ describe("Runs API", () => {
     expect(Number.isNaN(Date.parse(mine?.runTimestamp ?? "x"))).toBe(false);
 
     // Resolving it does NOT remove it from the history (unlike needs-review).
-    await request(app.getHttpServer())
+    await authed(app)
       .post(`/runs/${runId}/checkpoints/hero/approve`)
       .expect(201);
-    const after = await request(app.getHttpServer()).get("/runs").expect(200);
+    const after = await authed(app).get("/runs").expect(200);
     expect((after.body as Row[]).find((r) => r.runId === runId)).toBeDefined();
   });
 });

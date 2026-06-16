@@ -10,6 +10,7 @@ import { type Boss, createBoss, startBoss, workRuns } from "@varys/queue";
 import { processRun } from "@varys/runner";
 import { LocalFsAdapter } from "@varys/storage-adapter";
 import request from "supertest";
+import { authed, prepareAuth } from "./auth-harness";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
 import { startTestDb, type TestDb } from "./db-harness";
@@ -41,6 +42,7 @@ describe("Trace capture API", () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleRef.createNestApplication();
     await app.init();
+    await prepareAuth();
 
     consumerDb = createDb(db.connectionString);
     consumerBoss = createBoss(db.connectionString);
@@ -86,7 +88,7 @@ describe("Trace capture API", () => {
 
   const pollRun = async (runId: string): Promise<RunBody> => {
     for (let i = 0; i < 100; i++) {
-      const res = await request(app.getHttpServer()).get(`/runs/${runId}`).expect(200);
+      const res = await authed(app).get(`/runs/${runId}`).expect(200);
       const body = res.body as RunBody;
       if (["passed", "needs_review", "failed"].includes(body.status)) return body;
       await sleep(200);
@@ -96,7 +98,7 @@ describe("Trace capture API", () => {
 
   const mkTest = async (steps: unknown[], name: string): Promise<string> => {
     const definition = { name, viewport: { width: 800, height: 600, deviceScaleFactor: 1 }, steps };
-    const res = await request(app.getHttpServer()).post("/tests").send(definition).expect(201);
+    const res = await authed(app).post("/tests").send(definition).expect(201);
     return res.body.id as string;
   };
 
@@ -107,7 +109,7 @@ describe("Trace capture API", () => {
 
   it("keeps a trace when asked, downloadable as a non-empty zip with CORS allowed", async () => {
     const testId = await mkTest(passingSteps(), "traced-run");
-    const created = await request(app.getHttpServer())
+    const created = await authed(app)
       .post("/runs")
       .send({ testId, trace: true })
       .expect(201);
@@ -123,7 +125,7 @@ describe("Trace capture API", () => {
 
     // The hosted-viewer contract: the artifact downloads with permissive CORS,
     // and it's a real (PK-magic) non-empty zip.
-    const dl = await request(app.getHttpServer())
+    const dl = await authed(app)
       .get(body.traceUrl as string)
       .buffer(true)
       .expect(200);
@@ -135,7 +137,7 @@ describe("Trace capture API", () => {
 
   it("keeps no trace when the trigger didn't ask (null traceUrl, nothing stored)", async () => {
     const testId = await mkTest(passingSteps(), "untraced-run");
-    const created = await request(app.getHttpServer())
+    const created = await authed(app)
       .post("/runs")
       .send({ testId })
       .expect(201);
@@ -157,7 +159,7 @@ describe("Trace capture API", () => {
       ],
       "traced-failure",
     );
-    const created = await request(app.getHttpServer())
+    const created = await authed(app)
       .post("/runs")
       .send({ testId, trace: true })
       .expect(201);
@@ -165,7 +167,7 @@ describe("Trace capture API", () => {
 
     expect(body.status).toBe("failed");
     expect(typeof body.traceUrl).toBe("string");
-    const dl = await request(app.getHttpServer())
+    const dl = await authed(app)
       .get(body.traceUrl as string)
       .buffer(true)
       .expect(200);

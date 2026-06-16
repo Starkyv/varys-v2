@@ -2,6 +2,7 @@ import { Bell, Button, IconButton, Input, Menu, Play, Search } from "@varys/ui";
 import { routeHeading, useRouter } from "../../context/router";
 import { useRunDialog } from "../../context/run-dialog";
 import { useUI } from "../../context/ui";
+import { UserMenu } from "../UserMenu";
 import styles from "./styles.module.scss";
 
 export function TopBar() {
@@ -38,6 +39,8 @@ export function TopBar() {
       <Button variant="primary" iconLeft={<Play />} onClick={() => openRunDialog()}>
         Run test
       </Button>
+
+      <UserMenu />
     </header>
   );
 }
