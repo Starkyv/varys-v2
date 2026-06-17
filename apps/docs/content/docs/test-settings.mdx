@@ -1,0 +1,31 @@
+---
+title: Test settings
+description: Adjust a test after it's created.
+---
+
+Open a test to fine-tune how it runs. Changes are saved as a new version, so your history is
+never lost.
+
+## Waits
+
+If a screen is slow to load, a test can snap a screenshot before everything's ready. Add a
+**wait** so Varys pauses first:
+
+- a short **delay** (a fixed number of seconds), or
+- **wait for something to appear** before continuing.
+
+You can add a wait before any step, or set a default wait that applies before every step.
+
+<Callout>
+  You usually don't need waits — Varys already waits for the page to settle after navigating. Add
+  one only when a specific thing is still loading.
+</Callout>
+
+## Removing steps
+
+If a test picked up a step you don't want, hover it and click the trash icon to mark it for
+removal, then save. (The very first step — opening your app — can't be removed.)
+
+## Renaming and running
+
+Rename a test from its title, and press **Run now** to run it on the spot.

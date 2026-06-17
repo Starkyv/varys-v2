@@ -1,0 +1,54 @@
+---
+title: Recording with the extension
+description: Capture a flow by hand with the Chrome recorder.
+---
+
+The Varys Chrome extension follows along as you use your app and turns your clicks, typing, and
+navigation into a test. (Install it from [Local setup](/docs/getting-started#load-the-recorder-extension).)
+
+## Record a flow
+
+<Steps>
+
+<Step>
+### Open the panel
+Click the **Varys icon** in the toolbar. A small panel appears on the page and stays put while
+you work.
+</Step>
+
+<Step>
+### Start recording
+Press **Start recording**. Now Varys captures every click and what you type as you go through
+your app — even across page loads and logins. The panel shows a running count.
+</Step>
+
+<Step>
+### Mark checkpoints
+A checkpoint is a screenshot Varys will watch for changes. Choose what to capture, press
+**📷 Capture**, then click the thing you want:
+
+- **Element** — a single component
+- **Region** — a rectangle you draw
+- **Full page** — the whole screen
+
+You can capture as many as you like. After picking a target, you can paint over areas that
+change on their own (like timestamps) so they're ignored.
+</Step>
+
+<Step>
+### Name and save
+Give the test a name and press **Save**.
+</Step>
+
+</Steps>
+
+<Callout>
+  Saving just stores the test. To actually check it, open the app's **Tests** tab and press
+  **Run** — the first run sets the baseline you approve.
+</Callout>
+
+## What Varys handles for you
+
+So a test works against any environment (staging, production, local), Varys automatically keeps
+the web address and passwords out of the test, and asks a quick question when a typed value
+could be either fixed text or data that changes between environments.

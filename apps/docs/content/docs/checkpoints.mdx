@@ -1,0 +1,30 @@
+---
+title: Checkpoints
+description: What Varys watches for changes.
+---
+
+A **checkpoint** is a screenshot Varys takes during a test and watches for changes. A test can
+have as many as you like — mark a checkpoint wherever you want to be sure a screen still looks
+right.
+
+## What to capture
+
+When you add a checkpoint, you choose how much to capture:
+
+<Cards>
+  <Card title="Full page" description="The whole screen — best for 'does this page still render?'" />
+  <Card title="Element" description="A single component, like a chart or a card." />
+  <Card title="Region" description="A rectangle you draw yourself." />
+</Cards>
+
+## Hide noisy areas
+
+Some things change every time on their own — clocks, dates, random ids — and would trigger false
+alarms. Paint a **mask** over those areas and Varys ignores them when comparing.
+
+## How picky a check is
+
+Tiny rendering differences (a pixel of anti-aliasing) shouldn't count as a change. Each
+checkpoint has a **sensitivity** you can adjust: loosen it to ignore trivial noise, or tighten it
+to catch the smallest difference. You can tune both masks and sensitivity right from the review
+screen and try them instantly.

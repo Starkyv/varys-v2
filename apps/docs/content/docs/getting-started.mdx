@@ -1,0 +1,127 @@
+---
+title: Local setup
+description: Run the Varys stack — and these docs — on your machine.
+---
+
+## Prerequisites
+
+- **Node ≥ 22** and **pnpm 10** (the version is pinned via `packageManager`)
+- **Docker** running (Postgres comes up through `docker compose`)
+
+## Install
+
+<Steps>
+
+<Step>
+### Install workspace dependencies
+
+<Tabs items={['pnpm', 'npm', 'yarn']}>
+
+<Tab value="pnpm">
+
+```bash
+pnpm install
+```
+
+</Tab>
+
+<Tab value="npm">
+
+```bash
+npm install
+```
+
+</Tab>
+
+<Tab value="yarn">
+
+```bash
+yarn install
+```
+
+</Tab>
+
+</Tabs>
+
+</Step>
+
+<Step>
+### Install the worker's browser
+
+The Playwright worker needs a Chromium binary (one-time):
+
+```bash
+pnpm --filter @varys/runner exec playwright install chromium
+```
+
+</Step>
+
+</Steps>
+
+## Run the stack
+
+<Steps>
+
+<Step>
+### Start Postgres
+
+Runs on host port **5433** (to avoid clashing with a local Postgres). Blocks until healthy:
+
+```bash
+pnpm db:up
+```
+
+</Step>
+
+<Step>
+### Start the services
+
+API + worker + web, in one command:
+
+```bash
+pnpm dev
+```
+
+| Service | URL | What it is |
+|---------|-----|------------|
+| Web (review UI) | http://localhost:5174 | React SPA — dashboard, tests, diff viewer, approve/reject |
+| API | http://localhost:4000 | NestJS — tests, runs, environments, drafts, artifacts, the MCP server |
+| Worker | — | Playwright replay worker; drains the run queue |
+
+The schema is applied automatically on API startup, and the web dev server proxies API
+calls to `:4000` (same-origin, no CORS).
+
+</Step>
+
+<Step>
+### Sign in
+
+Open [http://localhost:5174](http://localhost:5174). The first time, **create an account**
+with email + password, and you land on the dashboard.
+
+</Step>
+
+</Steps>
+
+<Callout type="info" title="Ports are pinned">
+  The web origin is pinned to **5174** (`strictPort`) so the Google OAuth redirect URI stays
+  stable. Free the port if it's taken rather than letting it drift. Stop everything with
+  `Ctrl-C`; `pnpm db:down` stops Postgres.
+</Callout>
+
+## Load the recorder extension
+
+To record tests by hand, build and load the Chrome extension:
+
+```bash
+pnpm --filter @varys/extension build
+```
+
+Then in Chrome: `chrome://extensions` → enable **Developer mode** → **Load unpacked** →
+select `apps/extension/.output/chrome-mv3`.
+
+## Settings
+
+Local dev needs **no setup file** — `pnpm dev` uses safe defaults. To change anything (the
+database, where screenshots are stored, or which sign-in methods are on), copy `.env.example` to
+a `.env` at the project root and edit it there.

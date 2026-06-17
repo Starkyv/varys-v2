@@ -1,0 +1,42 @@
+---
+title: How Varys works
+description: The record → run → review loop, in plain terms.
+---
+
+Varys watches for **visual** changes in your app. Here's the loop every test follows.
+
+<Steps>
+
+<Step>
+### Create a test
+Capture a flow through your app — either by [recording it yourself](/docs/recording) or by
+[letting Claude create it](/docs/mcp-authoring). As you go, you mark **checkpoints**: the
+screens or components you want Varys to keep an eye on.
+</Step>
+
+<Step>
+### Run it the first time
+The first run sets the **baseline** — the "this is what it should look like" picture for each
+checkpoint. You look it over once and approve it.
+</Step>
+
+<Step>
+### Run it again, anytime
+Every later run takes fresh screenshots and compares them to the baseline. If nothing changed,
+the test passes. If something looks different, Varys flags it for you to review.
+</Step>
+
+<Step>
+### Review the change
+You see the before and after side by side. **Approve** it (the new look becomes the baseline) or
+**reject** it (a real bug). You can also hide noisy areas — like timestamps — so they don't
+trigger false alarms.
+</Step>
+
+</Steps>
+
+<Callout title="Why the first run matters">
+  The picture taken while recording isn't what Varys compares against — your screen and the one
+  Varys runs on render slightly differently. So the first run takes fresh screenshots and you
+  approve those as the baseline. Each environment (staging, production…) gets its own.
+</Callout>

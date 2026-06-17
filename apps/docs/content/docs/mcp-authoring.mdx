@@ -1,0 +1,65 @@
+---
+title: Creating tests with Claude
+description: Let Claude create tests for you by driving your app.
+---
+
+Instead of recording a test yourself, you can ask **Claude** to create one. Claude opens your
+app, clicks through it, and marks the checkpoints worth watching — then hands you the result to
+review. The test it produces is the same as one you'd record by hand.
+
+## Connect Claude to Varys
+
+Point Claude Code at the Varys server (running at `http://localhost:4000/mcp` in local dev):
+
+<Tabs items={['.mcp.json', 'CLI']}>
+
+<Tab value=".mcp.json">
+
+```json
+{
+  "mcpServers": {
+    "varys": {
+      "type": "http",
+      "url": "http://localhost:4000/mcp"
+    }
+  }
+}
+```
+
+</Tab>
+
+<Tab value="CLI">
+
+```bash
+claude mcp add --transport http varys http://localhost:4000/mcp
+```
+
+</Tab>
+
+</Tabs>
+
+## Ask Claude to create a test
+
+In your message, tell Claude:
+
+- **where your app is** (a URL),
+- **how to log in** (if needed), and
+- **what to test** — e.g. *"create tests for the dashboard and the results filters."*
+
+Claude logs in, explores, and captures the flows. If you don't say what to test, it picks
+sensible things on its own. When it's done, the test shows up in your [review queue](/docs/review-queue)
+as a draft.
+
+<Callout type="info" title="Want Claude to follow house rules?">
+  You can give Claude standing instructions for how it should create tests (for example, "always
+  prefer full-page checkpoints" or "mask timestamps"). Edit `authoring-instructions.md` in the
+  project root.
+</Callout>
+
+## You're always in control
+
+<Callout type="warn">
+  Claude can **create** a test but can't put it live — every test it makes waits in the review
+  queue for you to approve. Passwords you give it are used only to log in and are never saved
+  into the test.
+</Callout>

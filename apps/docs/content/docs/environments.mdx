@@ -1,0 +1,28 @@
+---
+title: Environments
+description: Run the same test against staging, production, or local.
+---
+
+An **environment** lets one test run in different places — staging, production, your local
+machine — without rewriting it. When you run a test, you pick which environment to run it
+against.
+
+Each environment holds:
+
+<Cards>
+  <Card title="Variables" description="Values that differ per place — most importantly the web address of your app." />
+  <Card title="Secrets" description="Passwords and tokens. They're stored write-only — once saved, the value is never shown again." />
+  <Card title="Cookies" description="Set automatically before each run — handy for skipping login, for example." />
+</Cards>
+
+## Why it matters
+
+Because tests keep the web address and passwords out of themselves, the *same* test works
+everywhere — it just borrows the right values from whichever environment you run it against. Each
+environment also keeps its own approved baselines, since staging and production legitimately look
+different.
+
+<Callout type="info">
+  Put any sensitive value (like an auth cookie) in a **secret**, then reference it from a cookie
+  or variable — so it's never stored in plain text.
+</Callout>

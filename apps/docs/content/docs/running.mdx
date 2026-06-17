@@ -1,0 +1,17 @@
+---
+title: Running tests
+description: Running a test and reading its history.
+---
+
+Runs happen in the background. A run moves from **queued** to **running** to a result, and the
+list updates on its own as it finishes — you don't need to refresh.
+
+The **first** run of a test (and the first run in a new [environment](/docs/environments)) sets
+the baseline rather than comparing against one — so it always needs your approval before the test
+is really "watching." After that, each run compares against the approved baseline.
+
+## Run history
+
+Every run is kept so you can see when something changed and look back at past results. Deleting a
+run removes its screenshots and history but **keeps your approved baselines** — so it's safe
+housekeeping. A run that's still in progress can't be deleted; let it finish first.

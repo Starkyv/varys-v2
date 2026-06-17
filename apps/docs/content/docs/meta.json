@@ -1,0 +1,25 @@
+{
+  "title": "Documentation",
+  "pages": [
+    "index",
+    "---Overview---",
+    "architecture",
+    "getting-started",
+    "features",
+    "---Authoring tests---",
+    "recording",
+    "mcp-authoring",
+    "review-queue",
+    "---Configuring tests---",
+    "test-settings",
+    "checkpoints",
+    "environments",
+    "organization",
+    "---Running & reviewing---",
+    "running",
+    "reviewing",
+    "---Automation---",
+    "scheduling",
+    "suites"
+  ]
+}
