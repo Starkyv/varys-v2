@@ -19,12 +19,17 @@ export interface AuthMethods {
 }
 
 /** Read the enabled methods so the login screen renders only what the server accepts.
- *  Falls back to email/password (the safe default) if the config can't be read. */
+ *  Cached after the first successful read — it's static per deploy, so Login remounts
+ *  (and StrictMode's double-invoke) don't re-hit it. Falls back to email/password (the
+ *  safe default) if the config can't be read. */
+let authMethodsCache: AuthMethods | null = null;
 export async function fetchAuthMethods(): Promise<AuthMethods> {
+  if (authMethodsCache) return authMethodsCache;
   try {
     const res = await fetch("/auth-config");
     if (!res.ok) return { emailPassword: true, google: false };
-    return (await res.json()) as AuthMethods;
+    authMethodsCache = (await res.json()) as AuthMethods;
+    return authMethodsCache;
   } catch {
     return { emailPassword: true, google: false };
   }

@@ -23,9 +23,12 @@ export function RunDialog({ open, initialTestId, onClose }: RunDialogProps) {
   const titleId = useId();
   const { navigate } = useRouter();
   const { toast } = useToast();
-  const tests = useTests();
-  const drafts = useDrafts();
-  const environments = useEnvironments();
+  // Only fetch while the dialog is open. RunDialog is mounted app-wide (above the auth
+  // gate, in RunDialogProvider), so fetching unconditionally would hammer these guarded
+  // routes with 401s on the login screen. It's only ever opened from inside the authed app.
+  const tests = useTests({ enabled: open });
+  const drafts = useDrafts({ enabled: open });
+  const environments = useEnvironments({ enabled: open });
   const runMutation = useRunTest();
 
   const [testId, setTestId] = useState<string>("");

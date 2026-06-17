@@ -118,15 +118,31 @@ function createAuth() {
         },
       },
     },
-    // The public origin the browser reaches better-auth at. In dev the SPA is served at
-    // :5200 and proxies `/api/auth` → :4000, so the session cookie (and any later OAuth
-    // redirect) is scoped to :5200. In prod the web + API share one ingress origin —
+    // The public origin the browser reaches better-auth at — also the origin the Google
+    // OAuth redirect URI is built from (`<baseURL>/api/auth/callback/google`). In dev the
+    // SPA is served at :5174 and proxies `/api/auth` → :4000, so the session cookie + the
+    // OAuth redirect are scoped to :5174. In prod the web + API share one ingress origin —
     // set BETTER_AUTH_URL to it.
-    baseURL: process.env.BETTER_AUTH_URL ?? "http://localhost:5200",
+    baseURL: process.env.BETTER_AUTH_URL ?? "http://localhost:5174",
     basePath: "/api/auth",
     // Dev-only fallback so the local stack boots with one command. This is the session
     // signing key — it MUST be set via env in any shared/deployed environment.
     secret: process.env.BETTER_AUTH_SECRET ?? "varys-dev-insecure-secret-change-me",
+    // Session cookie scoped SameSite=None; Secure so the recorder extension's CROSS-SITE
+    // `POST /tests` carries it (a SameSite=Lax cookie is withheld on cross-site requests,
+    // so the extension would otherwise 401 even while signed in). SameSite=None requires
+    // Secure; Chrome treats `http://localhost` as secure, so this works in dev and prod.
+    // The web app stays protected by better-auth's `trustedOrigins` check + the
+    // credentialed-CORS allowlist (only configured/extension origins may send credentials).
+    // NOTE: set only the cookie ATTRIBUTES, not `useSecureCookies` — the latter also adds
+    // a `__Secure-` name prefix, which would rename the cookie (breaking the extension
+    // marker + the E2E harness). SameSite=None needs the Secure attribute, not the prefix.
+    advanced: {
+      defaultCookieAttributes: {
+        sameSite: "none",
+        secure: true,
+      },
+    },
     emailAndPassword: {
       // Toggled by VARYS_AUTH_METHODS (see resolveAuthMethods above).
       enabled: authMethods.emailPassword,
@@ -137,7 +153,7 @@ function createAuth() {
     // Browser origins permitted to call the auth endpoints (CSRF origin check). The web
     // dev origin + the API's own origin.
     trustedOrigins: (
-      process.env.BETTER_AUTH_TRUSTED_ORIGINS ?? "http://localhost:5200,http://localhost:4000"
+      process.env.BETTER_AUTH_TRUSTED_ORIGINS ?? "http://localhost:5174,http://localhost:4000"
     )
       .split(",")
       .map((o) => o.trim())

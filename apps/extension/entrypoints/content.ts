@@ -49,6 +49,8 @@ export default defineContentScript({
     let wrapEl: HTMLElement;
     let panelEl: HTMLElement;
     let statusEl: HTMLElement;
+    let authEl: HTMLElement | undefined;
+    let authLabelEl: HTMLElement | undefined;
     let confirmEl: HTMLElement;
     let startBtn: HTMLButtonElement;
     let recLabelEl: HTMLElement;
@@ -680,6 +682,19 @@ export default defineContentScript({
       render();
     };
 
+    // Reflect the Varys sign-in state in the panel's Online/Offline marker. Driven by
+    // the session cookie's presence (checked in the background) — signed out ⇒ a save
+    // would be rejected (the API is deny-by-default), so the marker warns up front.
+    const setAuth = (signedIn: boolean) => {
+      if (!authEl || !authLabelEl) return;
+      authEl.classList.toggle("online", signedIn);
+      authEl.classList.toggle("offline", !signedIn);
+      authLabelEl.textContent = signedIn ? "Online" : "Offline";
+      authEl.title = signedIn
+        ? "Signed in to Varys — recordings will save"
+        : "Signed out — sign in to the Varys web app to save recordings";
+    };
+
     // --- overlay UI -------------------------------------------------------------
     const render = () => {
       if (!host) return;
@@ -741,6 +756,15 @@ export default defineContentScript({
           .statusline { display: flex; align-items: center; gap: 5px; }
           .dot { display: inline-block; width: 8px; height: 8px; border-radius: 9999px; background: #A0A6B2; flex: none; }
           .status { font-size: 11px; color: #8A909E; line-height: 1; white-space: nowrap; }
+
+          /* Signed-in / signed-out marker */
+          .auth { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px; margin-left: 9px;
+                  border-radius: 9999px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+          .auth-dot { width: 7px; height: 7px; border-radius: 9999px; background: #C7CCD6; flex: none; }
+          .auth.online { background: #E7F7EF; color: #128A5B; }
+          .auth.online .auth-dot { background: #19B26B; }
+          .auth.offline { background: #F4F5F7; color: #8A909E; }
+          .auth.offline .auth-dot { background: #C7CCD6; }
 
           .sep { width: 1px; height: 30px; background: #EEF0F4; margin: 0 9px; flex: none; }
           .sep.tight { margin: 0 7px; }
@@ -835,6 +859,7 @@ export default defineContentScript({
                 <span class="statusline"><span class="dot"></span><span class="status"></span></span>
               </div>
             </div>
+            <span class="auth offline" title="Signed out — sign in to the Varys web app to save recordings"><span class="auth-dot"></span><span class="auth-label">Offline</span></span>
             <div class="sep"></div>
             <button class="record start"><span class="rec-icon"></span><span class="rec-label">Start</span></button>
             <div class="seg modes">
@@ -860,6 +885,8 @@ export default defineContentScript({
       panelEl = shadow.querySelector(".bar") as HTMLElement;
       const gripEl = shadow.querySelector(".grip") as HTMLElement;
       statusEl = shadow.querySelector(".status") as HTMLElement;
+      authEl = shadow.querySelector(".auth") as HTMLElement;
+      authLabelEl = shadow.querySelector(".auth-label") as HTMLElement;
       confirmEl = shadow.querySelector(".confirm") as HTMLElement;
       startBtn = shadow.querySelector(".start") as HTMLButtonElement;
       recLabelEl = shadow.querySelector(".rec-label") as HTMLElement;
@@ -935,6 +962,12 @@ export default defineContentScript({
       modeBtns.region.addEventListener("click", () => setMode("region"));
       modeBtns.fullpage.addEventListener("click", () => setMode("fullpage"));
       render();
+
+      // Seed the Online/Offline marker (live updates arrive via the "varys:auth" push).
+      void browser.runtime
+        .sendMessage({ type: "varys:auth-check" })
+        .then((r) => setAuth(!!(r as { signedIn?: boolean } | null)?.signedIn))
+        .catch(() => {});
     };
 
     const toggle = () => {
@@ -951,8 +984,13 @@ export default defineContentScript({
     }, 500);
 
     browser.runtime.onMessage.addListener((msg: unknown) => {
-      if ((msg as { type?: string } | null)?.type === "varys:toggle") {
+      const m = msg as { type?: string; signedIn?: boolean } | null;
+      if (m?.type === "varys:toggle") {
         toggle();
+        return Promise.resolve({ ok: true });
+      }
+      if (m?.type === "varys:auth") {
+        setAuth(!!m.signedIn);
         return Promise.resolve({ ok: true });
       }
       return undefined;

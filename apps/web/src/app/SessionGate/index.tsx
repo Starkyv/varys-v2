@@ -1,32 +1,50 @@
 import { Spinner } from "@varys/ui";
-import { type ReactNode, useEffect } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import { useSession } from "../../lib/auth";
 import { UNAUTHORIZED_EVENT } from "../../lib/unauthorized";
 import { Login } from "../../views/Login";
 import styles from "./styles.module.scss";
 
 /**
- * Gates the SPA on a Varys session: a splash while the session resolves, the Login
+ * Gates the SPA on a Varys session: a splash while the session first resolves, the Login
  * screen when there is none, the app once signed in.
  *
- * Slice 10 / Issue 1 — this is the CLIENT gate (it decides what the SPA renders). The
- * server-side guard that actually enforces the API (deny-by-default + 401) lands in
- * Issue 2; until then the API is still open, but the UI already requires a sign-in.
+ * Slice 10 — the client gate (the server-side guard enforces the API). A 401 from any
+ * API call re-checks the session ONLY when we currently think we're signed in: on the
+ * login screen a 401 is expected, and reacting to it would loop (refetch → splash →
+ * Login remount → repeat).
  */
 export function SessionGate({ children }: { children: ReactNode }) {
   const { data, isPending, refetch } = useSession();
 
-  // A 401 from any API call (session expired/revoked mid-use) → re-check the session.
-  // If the server agrees it's gone, `refetch` sets `data` to null and Login renders.
+  // Latest session, read inside the event handler without re-subscribing on every render.
+  const sessionRef = useRef(data);
+  sessionRef.current = data;
+  // Re-entry guard: one in-flight re-check at a time (leading-edge, NOT a trailing
+  // debounce — a continuous 401 burst would keep resetting a trailing timer so it never
+  // fires, and the stale session would never heal).
+  const rechecking = useRef(false);
+
   useEffect(() => {
     const onUnauthorized = () => {
-      void refetch();
+      // Only a signed-in session that just got rejected is worth re-checking. With no
+      // session (the login screen), 401s are expected — ignore them, or we loop.
+      if (!sessionRef.current?.user) return;
+      if (rechecking.current) return;
+      rechecking.current = true;
+      // Fire immediately. If the server agrees the session is gone, `data` goes null,
+      // the app unmounts (so its queries stop), and Login renders.
+      void refetch().finally(() => {
+        rechecking.current = false;
+      });
     };
     window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
   }, [refetch]);
 
-  if (isPending) {
+  // Splash only on the very first load. A background refetch while signed in keeps
+  // `data` and leaves `isPending` false, so it never blanks the app.
+  if (isPending && !data?.user) {
     return (
       <div className={styles.splash}>
         <Spinner size={28} label="Loading Varys" />
@@ -34,7 +52,7 @@ export function SessionGate({ children }: { children: ReactNode }) {
     );
   }
 
-  if (!data) return <Login />;
+  if (!data?.user) return <Login />;
 
   return <>{children}</>;
 }

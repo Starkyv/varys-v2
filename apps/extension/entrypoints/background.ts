@@ -16,6 +16,24 @@ import type { Step, TestDefinition, Viewport } from "@varys/step-schema";
 const API_BASE = "http://localhost:4000";
 const KEY = "varys:recording";
 
+// better-auth's session cookie. The extension can't read whether it's signed in by
+// CALLING the API (its cross-site request doesn't carry a SameSite=Lax cookie), so it
+// checks the cookie's presence directly via the cookies API. Cookies are host-scoped
+// (port-agnostic), so reading at the API origin finds the session cookie set by the web
+// app. Presence ⇒ signed in (drives the panel's Online/Offline marker).
+const AUTH_COOKIE = "better-auth.session_token";
+async function isSignedIn(): Promise<boolean> {
+  // The session cookie is Secure (SameSite=None), so it only matches a secure URL — read
+  // it via https (cookies are host-scoped / port-agnostic, so the host is what matters).
+  // Fall back to http in case a deployment runs without secure cookies.
+  const secureUrl = API_BASE.replace(/^http:/, "https:");
+  for (const url of [secureUrl, API_BASE]) {
+    const c = await browser.cookies.get({ url, name: AUTH_COOKIE }).catch(() => null);
+    if (c) return true;
+  }
+  return false;
+}
+
 interface RecState {
   recording: boolean;
   steps: Step[];
@@ -77,7 +95,7 @@ async function save(
       //
       // KNOWN CAVEAT (cross-origin cookie): a SameSite=Lax cookie isn't sent on the
       // extension's cross-site request, and in local dev the session cookie is scoped to
-      // the web origin (:5200), not the API port (:4000). If a logged-in save returns 401,
+      // the web origin (:5174), not the API port (:4000). If a logged-in save returns 401,
       // the fallback is `chrome.cookies` (host permission) → read the session cookie and
       // attach it explicitly. Verify with a manual smoke once the guard is live.
       credentials: "include",
@@ -186,10 +204,25 @@ export default defineBackground(() => {
             screenshots: s.steps.filter((x) => x.type === "screenshot").length,
           },
         }));
+      case "varys:auth-check":
+        return isSignedIn().then((signedIn) => ({ signedIn }));
       case "varys:save":
         return save(msg.name as string | undefined);
       default:
         return undefined;
+    }
+  });
+
+  // Push the signed-in / signed-out state to open panels the moment it changes (sign-in
+  // or sign-out in the web app), so the Online/Offline marker flips live without polling.
+  browser.cookies.onChanged.addListener(async (change) => {
+    if (change.cookie.name !== AUTH_COOKIE) return;
+    const signedIn = await isSignedIn();
+    const tabs = await browser.tabs.query({});
+    for (const t of tabs) {
+      if (t.id != null) {
+        void browser.tabs.sendMessage(t.id, { type: "varys:auth", signedIn }).catch(() => {});
+      }
     }
   });
 });
