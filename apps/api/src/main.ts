@@ -1,3 +1,4 @@
+import "./load-env"; // FIRST — populate process.env from .env before anything reads it
 import "reflect-metadata";
 import { dirname, join } from "node:path";
 import { NestFactory } from "@nestjs/core";
@@ -17,7 +18,7 @@ import { DDL } from "./db/schema";
  * (see the extension notes / Issue 2).
  */
 const TRUSTED_WEB_ORIGINS = (
-  process.env.BETTER_AUTH_TRUSTED_ORIGINS ?? "http://localhost:5200,http://localhost:4000"
+  process.env.BETTER_AUTH_TRUSTED_ORIGINS ?? "http://localhost:5174,http://localhost:4000"
 )
   .split(",")
   .map((o) => o.trim())

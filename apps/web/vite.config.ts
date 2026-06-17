@@ -4,7 +4,10 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   plugins: [react()],
   server: {
-    port: 5200,
+    // Pinned (strictPort) so the dev origin is stable — the Google OAuth redirect URI is
+    // registered against it, and Vite drifting to another port would break the callback.
+    port: 5174,
+    strictPort: true,
     // Same-origin in dev: proxy the API routes to the NestJS server so the SPA
     // can fetch /runs and load /artifacts without CORS (mirrors the prod ingress).
     // NOTE: every top-level API route prefix MUST be listed here. A path that isn't

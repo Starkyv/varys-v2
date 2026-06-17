@@ -1,3 +1,4 @@
+import "./load-env"; // FIRST — populate process.env from .env before anything reads it
 import { createDb } from "@varys/db";
 import { createBoss, startBoss, workRuns } from "@varys/queue";
 import { processRun } from "@varys/runner";

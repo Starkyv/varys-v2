@@ -13,7 +13,8 @@
     "@varys/db": "workspace:*",
     "@varys/queue": "workspace:*",
     "@varys/runner": "workspace:*",
-    "@varys/storage-adapter": "workspace:*"
+    "@varys/storage-adapter": "workspace:*",
+    "dotenv": "^17.4.2"
   },
   "devDependencies": {
     "tsx": "^4.19.2"

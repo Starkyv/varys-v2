@@ -36,16 +36,17 @@ pnpm dev
 
 | Service | URL | What it is |
 |---|---|---|
-| Web (review UI) | http://localhost:5200 | React SPA — diff viewer + approve/reject + needs-review list |
+| Web (review UI) | http://localhost:5174 | React SPA — diff viewer + approve/reject + needs-review list |
 | API | http://localhost:4000 | NestJS — tests, runs, environments, artifacts, decisions |
 | Worker | — | Playwright replay worker, consumes the run queue |
 
 The schema is applied automatically on API startup. The web dev server proxies API calls to
 `:4000`, so it's all same-origin (no CORS).
 
-> If port 5200 is taken, Vite picks the next free port and prints the actual URL — use that.
+> The web port is pinned to **5174** (`strictPort`) so the dev origin is stable (the Google OAuth
+> redirect URI is registered against it). Free the port if it's taken rather than letting it drift.
 
-**3. Open** http://localhost:5200 — **sign in** (the first time, create an account with email +
+**3. Open** http://localhost:5174 — **sign in** (the first time, create an account with email +
 password) and you land on the **Dashboard**.
 
 **Stop:** `Ctrl-C` the `pnpm dev` terminal; `pnpm db:down` stops Postgres.
@@ -55,7 +56,7 @@ password) and you land on the **Dashboard**.
 >
 > **Auth** (Varys's own user login — better-auth, Slice 10): `BETTER_AUTH_SECRET` (session signing
 > key — a dev fallback is used locally; **set a real one in any shared/deployed env**),
-> `BETTER_AUTH_URL=http://localhost:5200` (the public origin the browser reaches `/api/auth` at).
+> `BETTER_AUTH_URL=http://localhost:5174` (the public origin the browser reaches `/api/auth` at).
 > `VARYS_AUTH_METHODS=password` (comma list — `password`, `google`, or `password,google`) selects which
 > sign-in methods are enabled. Google SSO (Slice 10 / Issue 3) adds `GOOGLE_CLIENT_ID` /
 > `GOOGLE_CLIENT_SECRET`, plus an env-driven domain restriction: `VARYS_AUTH_ALLOWED_DOMAINS`
@@ -80,7 +81,7 @@ password) and you land on the **Dashboard**.
      whenever you want, as many times as you want, in between normal interactions (Esc cancels).
    - **Save test** — posts the recorded definition to the API; the panel shows the new test id.
 
-3. **Run it:** open http://localhost:5200 → **Tests** tab → your recording is listed → click
+3. **Run it:** open http://localhost:5174 → **Tests** tab → your recording is listed → click
    **Run**. (Saving only stores the recording; a run is what produces something to review.)
 
 4. **Review:** the checkpoint appears under **Needs review** (the queue auto-refreshes as the run
