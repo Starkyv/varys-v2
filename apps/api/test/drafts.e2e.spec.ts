@@ -69,6 +69,34 @@ describe("Draft lifecycle", () => {
     expect((active.body as Array<{ id: string }>).some((t) => t.id === id)).toBe(false);
   });
 
+  it("surfaces authoring-preview screenshots in the list + draft detail", async () => {
+    // A 1x1 PNG stands in for a checkpoint screenshot captured during authoring.
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    const { id } = await tests.createDraft(DEFINITION, {
+      intent: "with preview",
+      previews: [{ checkpointName: "home", bytes: png }],
+    });
+
+    // List carries a representative thumbnail URL.
+    const list = await http().get("/drafts").expect(200);
+    const row = (list.body as Array<{ id: string; previewUrl: string | null }>).find((d) => d.id === id);
+    expect(row?.previewUrl).toEqual(expect.any(String));
+
+    // Detail carries the per-checkpoint preview.
+    const detail = await http().get(`/drafts/${id}`).expect(200);
+    const home = (detail.body.checkpoints as Array<{ name: string; previewUrl: string | null }>).find(
+      (c) => c.name === "home",
+    );
+    expect(home?.previewUrl).toEqual(expect.any(String));
+
+    // And it actually serves a PNG through the artifacts route.
+    const img = await http().get(home!.previewUrl as string);
+    expect(img.status).toBe(200);
+  });
+
   it("promote files it (folder + tags) and flips it active; it leaves the queue", async () => {
     const { id } = await tests.createDraft(DEFINITION, { intent: "promote me" });
     const folder = await http().post("/folders").send({ name: "Promoted" }).expect(201);

@@ -179,6 +179,30 @@ export interface DraftSummary {
   checkpointCount: number;
   /** The steering instruction that produced the draft, if any (review-queue context). */
   intent: string | null;
+  /** A representative authoring-preview thumbnail (the first checkpoint's screenshot Claude
+   *  captured), or null when the draft has no preview. A reference image, NOT the golden
+   *  baseline — the pinned runner seeds that on first replay (DESIGN §4). */
+  previewUrl: string | null;
+}
+
+/** One checkpoint's authoring preview — the reference screenshot Claude captured during
+ *  authoring, shown in the promote dialog so the reviewer sees what the test will assert. */
+export interface DraftCheckpointPreview {
+  name: string;
+  captureMode: CaptureMode;
+  /** Authenticated artifact-route URL of the preview PNG; null if none was captured. */
+  previewUrl: string | null;
+}
+
+/** The full Draft detail (`GET /drafts/:id`) — the summary plus every checkpoint's
+ *  authoring preview, for a richer pre-promotion view. */
+export interface DraftView {
+  id: string;
+  name: string;
+  origin: TestOrigin;
+  createdAt: string;
+  intent: string | null;
+  checkpoints: DraftCheckpointPreview[];
 }
 
 /** Body of `POST /drafts/:id/promote` — assign a folder + tags and make the test active

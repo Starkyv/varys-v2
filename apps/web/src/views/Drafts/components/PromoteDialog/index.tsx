@@ -11,7 +11,7 @@ import {
 } from "@varys/ui";
 import { useEffect, useId, useState } from "react";
 import { useToast } from "../../../../context/toast";
-import { useFolders, usePromoteDraft } from "../../../../queries";
+import { useDraft, useFolders, usePromoteDraft } from "../../../../queries";
 import styles from "./styles.module.scss";
 
 /**
@@ -29,6 +29,7 @@ export function PromoteDialog({
   onClose: () => void;
 }) {
   const folders = useFolders();
+  const detail = useDraft(draft?.id ?? "", { enabled: open && !!draft });
   const promote = usePromoteDraft();
   const { toast } = useToast();
   const titleId = useId();
@@ -82,6 +83,33 @@ export function PromoteDialog({
             the editor. You can still promote it.
           </p>
         )}
+
+        {(detail.data?.checkpoints.length ?? 0) > 0 && (
+          <div className={styles.previews}>
+            <div className={styles.previewsLabel}>
+              What this test asserts <span className={styles.hint}>· authoring previews</span>
+            </div>
+            <div className={styles.previewGrid}>
+              {detail.data?.checkpoints.map((c) => (
+                <figure key={c.name} className={styles.preview}>
+                  {c.previewUrl ? (
+                    <img src={c.previewUrl} alt={`${c.name} preview`} loading="lazy" />
+                  ) : (
+                    <div className={styles.previewMissing}>no preview</div>
+                  )}
+                  <figcaption title={c.name}>
+                    {c.name} <span className={styles.previewMode}>· {c.captureMode}</span>
+                  </figcaption>
+                </figure>
+              ))}
+            </div>
+            <p className={styles.previewHint}>
+              Reference images of what Claude saw — the approved baseline is captured when you first
+              run the test.
+            </p>
+          </div>
+        )}
+
         <div className={styles.field}>
           <label className={styles.label} htmlFor={`${titleId}-folder`}>
             Folder

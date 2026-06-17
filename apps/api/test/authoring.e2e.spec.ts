@@ -158,6 +158,9 @@ describe("Authoring → MCP → Draft", () => {
         { name: "password", kind: "secret" },
       ]),
     );
+    // (The authoring preview captured at the "welcome" checkpoint is asserted via the
+    // read-model in drafts.e2e — those reads are auth-guarded, so they live there with the
+    // service-level setup rather than behind a live browser session here.)
   });
 
   it("finish on an unknown session is a tool error, not a crash", async () => {

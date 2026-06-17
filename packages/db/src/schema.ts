@@ -211,6 +211,26 @@ export const environments = pgTable("environments", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+/**
+ * Per-checkpoint REFERENCE screenshots captured during AI authoring (Slice 14) — the
+ * "what Claude saw" previews shown in the review queue and promote dialog. NOT golden
+ * baselines (recording ≠ baseline, DESIGN §4): the pinned runner still seeds the real
+ * baseline on first replay. One row per (test, checkpoint); the PNG lives in storage.
+ */
+export const draftPreviews = pgTable(
+  "draft_previews",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    testId: uuid("test_id")
+      .notNull()
+      .references(() => tests.id, { onDelete: "cascade" }),
+    checkpointName: text("checkpoint_name").notNull(),
+    artifactKey: text("artifact_key").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({ uq: uniqueIndex("draft_previews_test_checkpoint_uq").on(t.testId, t.checkpointName) }),
+);
+
 export const schema = {
   folders,
   tests,
@@ -224,6 +244,7 @@ export const schema = {
   runSteps,
   baselines,
   environments,
+  draftPreviews,
 };
 
 /**
@@ -341,6 +362,15 @@ CREATE TABLE IF NOT EXISTS environments (
 );
 -- Bring an existing environments table (created before cookies) up to date.
 ALTER TABLE environments ADD COLUMN IF NOT EXISTS cookies jsonb NOT NULL DEFAULT '[]'::jsonb;
+-- Per-checkpoint authoring preview screenshots (Slice 14 — Claude/MCP authoring).
+CREATE TABLE IF NOT EXISTS draft_previews (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  test_id uuid NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+  checkpoint_name text NOT NULL,
+  artifact_key text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (test_id, checkpoint_name)
+);
 -- Idempotency for re-executed runs: first collapse any duplicate rows an earlier
 -- redelivered run may have written (keep the latest per group), then enforce one
 -- row per (run, step) and (run, checkpoint) so duplicates can't recur. Both the

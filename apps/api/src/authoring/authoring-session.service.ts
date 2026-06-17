@@ -79,6 +79,9 @@ interface SessionState {
   pendingWaits: Wait[];
   /** Variables typed so far (name → authoring-time value) — the selector guard's reference. */
   knownVariables: KnownVariable[];
+  /** Reference screenshots captured at each checkpoint (name → PNG) — the promote-view
+   *  previews, persisted on finish. A Map so a re-checkpointed name keeps the latest. */
+  previews: Map<string, Buffer>;
 }
 
 export interface OpenSessionInput {
@@ -233,6 +236,7 @@ export class AuthoringSessionService {
       intent: input.intent?.trim() || null,
       pendingWaits: [],
       knownVariables: [],
+      previews: new Map(),
     });
     this.log.log(`opened authoring session ${sessionId} on ${href}`);
     const { nodes } = await page.evaluate(collectSnapshot);
@@ -370,16 +374,24 @@ export class AuthoringSessionService {
     const waitBefore = waits.length ? waits : undefined;
     const mode = input.mode ?? "element";
 
+    // Record the step (for replay) AND grab a reference screenshot for the promote view.
+    // No network-idle settle — capture the page exactly as it is right now.
+    let preview: Buffer;
     if (mode === "fullpage") {
       s.rec.checkpoint(name, { mode: "fullpage", masks: input.masks, waitBefore });
+      preview = await s.page.screenshot({ fullPage: true });
     } else if (mode === "region") {
       if (!input.rect) throw new BadRequestException("region checkpoint requires a rect (x, y, width, height)");
       s.rec.checkpoint(name, { mode: "region", rect: input.rect, masks: input.masks, waitBefore });
+      preview = await s.page.screenshot({ clip: input.rect });
     } else {
       if (!input.ref) throw new BadRequestException("element checkpoint requires a ref");
-      const fp = await this.captureFp(s.page, this.resolveRef(s.page, input.ref), false);
+      const locator = this.resolveRef(s.page, input.ref);
+      const fp = await this.captureFp(s.page, locator, false);
       s.rec.checkpoint(name, { mode: "element", target: fp, masks: input.masks, waitBefore });
+      preview = await locator.screenshot();
     }
+    s.previews.set(name, preview);
     return { ok: true, recorded: { type: "screenshot", checkpoint: name }, snapshot: await this.snapshot(s, false) };
   }
 
@@ -387,7 +399,8 @@ export class AuthoringSessionService {
     const s = this.require(sessionId);
     const definition = s.rec.getDefinition(s.name, s.viewport);
     const checkpointCount = s.rec.checkpointCount();
-    const { id, version } = await this.tests.createDraft(definition, { intent: s.intent });
+    const previews = [...s.previews].map(([checkpointName, bytes]) => ({ checkpointName, bytes }));
+    const { id, version } = await this.tests.createDraft(definition, { intent: s.intent, previews });
     await this.teardown(sessionId);
     this.log.log(`finished authoring session ${sessionId} → draft ${id} (v${version})`);
     return {

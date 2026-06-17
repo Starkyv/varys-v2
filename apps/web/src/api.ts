@@ -1,6 +1,7 @@
 import type {
   DashboardView,
   DraftSummary,
+  DraftView,
   EnvCookie,
   EnvironmentView,
   FolderSummary,
@@ -83,6 +84,15 @@ export async function fetchDrafts(): Promise<DraftSummary[]> {
     throw new Error(`Failed to load the review queue (${res.status})`);
   }
   return (await res.json()) as DraftSummary[];
+}
+
+/** Fetch one draft's detail (per-checkpoint authoring previews) for the promote view. */
+export async function fetchDraft(id: string): Promise<DraftView> {
+  const res = await fetch(`${API_BASE}/drafts/${id}`);
+  if (!res.ok) {
+    throw new Error(`Failed to load draft ${id} (${res.status})`);
+  }
+  return (await res.json()) as DraftView;
 }
 
 /** Promote a draft into the active corpus (folder + tags + active). 409 if it's not a

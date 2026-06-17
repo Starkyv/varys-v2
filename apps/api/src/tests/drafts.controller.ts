@@ -17,6 +17,12 @@ export class DraftsController {
     return this.tests.listDrafts();
   }
 
+  /** Full draft detail (per-checkpoint authoring previews) for the promote view. */
+  @Get(":id")
+  get(@Param("id") id: string) {
+    return this.tests.getDraft(id);
+  }
+
   /** Promote a draft into the active corpus (folder + tags + active). Web-UI only. */
   @Post(":id/promote")
   promote(@Param("id") id: string, @Body() body: PromoteDraftBody) {

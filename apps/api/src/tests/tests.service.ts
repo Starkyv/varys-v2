@@ -6,8 +6,11 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import type {
+  CaptureMode,
   ConfigWait,
+  DraftCheckpointPreview,
   DraftSummary,
+  DraftView,
   EditableWait,
   PromoteDraftBody,
   TestConfigPatch,
@@ -21,6 +24,7 @@ import {
   describeStep,
   type Fingerprint,
   parseTestDefinition,
+  type Step,
   type TestDefinition,
   type Wait,
 } from "@varys/step-schema";
@@ -29,6 +33,7 @@ import { asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
 import {
   baselines,
+  draftPreviews,
   folders,
   runResults,
   runs,
@@ -67,6 +72,19 @@ function needsEnvironment(definition: TestDefinition): boolean {
 /** How many checkpoints (screenshot steps) a definition asserts — 0 ⇒ a no-op test. */
 function checkpointCount(definition: TestDefinition): number {
   return definition.steps.filter((s) => s.type === "screenshot").length;
+}
+
+/** The definition's screenshot (checkpoint) steps, narrowed. */
+function screenshotSteps(definition: TestDefinition): Extract<Step, { type: "screenshot" }>[] {
+  return definition.steps.filter(
+    (s): s is Extract<Step, { type: "screenshot" }> => s.type === "screenshot",
+  );
+}
+
+/** Deterministic storage key for a draft checkpoint's authoring-preview screenshot. */
+function previewKey(testId: string, checkpointName: string): string {
+  const safe = checkpointName.replace(/[^\w.-]+/g, "_") || "checkpoint";
+  return `drafts/${testId}/${safe}/preview.png`;
 }
 
 /** A short human handle for a selector-wait's target fingerprint (display only). */
@@ -186,7 +204,10 @@ export class TestsService {
    * but held out of suites/schedules and surfaced in the review queue until a human
    * promotes it. Mirrors `create`, plus the draft flags + steering `intent`.
    */
-  async createDraft(input: unknown, opts?: { intent?: string | null }): Promise<CreatedTest> {
+  async createDraft(
+    input: unknown,
+    opts?: { intent?: string | null; previews?: { checkpointName: string; bytes: Buffer }[] },
+  ): Promise<CreatedTest> {
     const definition = parseTestDefinition(input);
     const [created] = await this.db
       .insert(tests)
@@ -200,6 +221,16 @@ export class TestsService {
     await this.db
       .insert(testVersions)
       .values({ testId: created.id, version: 1, definition });
+
+    // Authoring-preview screenshots: reference images of what Claude saw at each
+    // checkpoint (DESIGN §4 — NOT the golden baseline; the runner seeds that on replay).
+    for (const p of opts?.previews ?? []) {
+      const key = previewKey(created.id, p.checkpointName);
+      await this.storage.put(key, p.bytes);
+      await this.db
+        .insert(draftPreviews)
+        .values({ testId: created.id, checkpointName: p.checkpointName, artifactKey: key });
+    }
     return { id: created.id, version: 1 };
   }
 
@@ -222,14 +253,84 @@ export class TestsService {
       )
       .orderBy(desc(tests.createdAt));
 
-    return rows.map((r) => ({
-      id: r.id,
-      name: r.name,
-      origin: r.origin as TestOrigin,
-      createdAt: r.createdAt.toISOString(),
-      checkpointCount: checkpointCount(r.definition as TestDefinition),
-      intent: r.intent,
-    }));
+    // Representative thumbnail per draft = its first checkpoint's authoring preview.
+    const ids = rows.map((r) => r.id);
+    const previewRows = ids.length
+      ? await this.db
+          .select({
+            testId: draftPreviews.testId,
+            checkpointName: draftPreviews.checkpointName,
+            artifactKey: draftPreviews.artifactKey,
+          })
+          .from(draftPreviews)
+          .where(inArray(draftPreviews.testId, ids))
+      : [];
+    const keyByTestCheckpoint = new Map<string, Map<string, string>>();
+    for (const p of previewRows) {
+      const m = keyByTestCheckpoint.get(p.testId) ?? new Map<string, string>();
+      m.set(p.checkpointName, p.artifactKey);
+      keyByTestCheckpoint.set(p.testId, m);
+    }
+
+    return rows.map((r) => {
+      const def = r.definition as TestDefinition;
+      const firstCp = screenshotSteps(def)[0]?.name;
+      const key = firstCp ? keyByTestCheckpoint.get(r.id)?.get(firstCp) : undefined;
+      return {
+        id: r.id,
+        name: r.name,
+        origin: r.origin as TestOrigin,
+        createdAt: r.createdAt.toISOString(),
+        checkpointCount: checkpointCount(def),
+        intent: r.intent,
+        previewUrl: key ? this.storage.getUrl(key) : null,
+      };
+    });
+  }
+
+  /** Full draft detail — the summary plus every checkpoint's authoring-preview screenshot,
+   *  for the promote dialog's "what this test asserts" gallery. */
+  async getDraft(id: string): Promise<DraftView> {
+    const [row] = await this.db
+      .select({
+        name: tests.name,
+        origin: tests.origin,
+        intent: tests.intent,
+        createdAt: tests.createdAt,
+        definition: testVersions.definition,
+      })
+      .from(tests)
+      .innerJoin(testVersions, eq(testVersions.testId, tests.id))
+      .where(eq(tests.id, id))
+      .orderBy(desc(testVersions.version))
+      .limit(1);
+    if (!row) throw new NotFoundException(`Draft ${id} not found`);
+
+    const previewRows = await this.db
+      .select({ checkpointName: draftPreviews.checkpointName, artifactKey: draftPreviews.artifactKey })
+      .from(draftPreviews)
+      .where(eq(draftPreviews.testId, id));
+    const keyByName = new Map(previewRows.map((p) => [p.checkpointName, p.artifactKey]));
+
+    const checkpoints: DraftCheckpointPreview[] = screenshotSteps(row.definition as TestDefinition).map(
+      (s) => {
+        const key = keyByName.get(s.name);
+        return {
+          name: s.name,
+          captureMode: (s.captureMode ?? "element") as CaptureMode,
+          previewUrl: key ? this.storage.getUrl(key) : null,
+        };
+      },
+    );
+
+    return {
+      id,
+      name: row.name,
+      origin: row.origin as TestOrigin,
+      createdAt: row.createdAt.toISOString(),
+      intent: row.intent,
+      checkpoints,
+    };
   }
 
   /**
@@ -506,6 +607,11 @@ export class TestsService {
       .from(baselines)
       .where(eq(baselines.testId, id));
     for (const r of baselineRows) if (r.key) keys.add(r.key);
+    const previewRows = await this.db
+      .select({ key: draftPreviews.artifactKey })
+      .from(draftPreviews)
+      .where(eq(draftPreviews.testId, id));
+    for (const r of previewRows) if (r.key) keys.add(r.key);
 
     await this.db.transaction(async (tx) => {
       if (runIds.length) {
@@ -514,6 +620,7 @@ export class TestsService {
         await tx.delete(runs).where(inArray(runs.id, runIds));
       }
       await tx.delete(baselines).where(eq(baselines.testId, id));
+      await tx.delete(draftPreviews).where(eq(draftPreviews.testId, id));
       await tx.delete(testVersions).where(eq(testVersions.testId, id));
       await tx.delete(tests).where(eq(tests.id, id)); // test_tags + suite_tests cascade
     });

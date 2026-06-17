@@ -32,3 +32,65 @@
   line-height: 1.5;
   color: var(--color-text-muted);
 }
+
+.previews {
+  margin-bottom: var(--space-16);
+}
+
+.previewsLabel {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-strong);
+  margin-bottom: var(--space-8);
+}
+
+.previewGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: var(--space-8);
+}
+
+.preview {
+  margin: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--color-surface-2, var(--color-surface));
+
+  img {
+    display: block;
+    width: 100%;
+    height: 80px;
+    object-fit: cover;
+    object-position: top left;
+  }
+
+  figcaption {
+    padding: var(--space-4) var(--space-6);
+    font-size: var(--font-size-xs);
+    color: var(--color-text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+.previewMissing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 80px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.previewMode {
+  color: var(--color-text-muted);
+}
+
+.previewHint {
+  margin-top: var(--space-8);
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}

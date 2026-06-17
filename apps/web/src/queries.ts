@@ -13,6 +13,7 @@ import {
   deleteTest,
   discardDraft,
   fetchDashboard,
+  fetchDraft,
   fetchDrafts,
   fetchTestConfig,
   fetchEnvironments,
@@ -99,8 +100,8 @@ export function useNeedsReview() {
   });
 }
 
-export function useTests() {
-  return useQuery({ queryKey: testsQueryKey(), queryFn: fetchTests });
+export function useTests(opts?: { enabled?: boolean }) {
+  return useQuery({ queryKey: testsQueryKey(), queryFn: fetchTests, enabled: opts?.enabled ?? true });
 }
 
 export function draftsQueryKey() {
@@ -109,8 +110,27 @@ export function draftsQueryKey() {
 
 /** The AI-authored Draft review queue. Polled so a draft Claude just finished appears
  *  without a manual refresh. */
-export function useDrafts() {
-  return useQuery({ queryKey: draftsQueryKey(), queryFn: fetchDrafts, refetchInterval: 5000 });
+export function useDrafts(opts?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: draftsQueryKey(),
+    queryFn: fetchDrafts,
+    refetchInterval: 5000,
+    enabled: opts?.enabled ?? true,
+  });
+}
+
+export function draftQueryKey(id: string) {
+  return ["draft", id] as const;
+}
+
+/** One draft's detail (per-checkpoint authoring previews) — fetched when its promote
+ *  dialog opens. */
+export function useDraft(id: string, opts?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: draftQueryKey(id),
+    queryFn: () => fetchDraft(id),
+    enabled: opts?.enabled ?? true,
+  });
 }
 
 /** Promote a draft (folder + tags + active). On success it leaves the review queue and
@@ -142,8 +162,12 @@ export function testConfigQueryKey(id: string) {
 }
 
 /** A test's editable config (waits + threshold) — the test-detail page's read. */
-export function useTestConfig(id: string) {
-  return useQuery({ queryKey: testConfigQueryKey(id), queryFn: () => fetchTestConfig(id) });
+export function useTestConfig(id: string, opts?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: testConfigQueryKey(id),
+    queryFn: () => fetchTestConfig(id),
+    enabled: (opts?.enabled ?? true) && !!id,
+  });
 }
 
 /** Save a config patch (new test version). On success, refresh this test's config (so
@@ -341,8 +365,12 @@ export function environmentsQueryKey() {
 }
 
 /** The environments list — drives the management screen and the Run picker. */
-export function useEnvironments() {
-  return useQuery({ queryKey: environmentsQueryKey(), queryFn: fetchEnvironments });
+export function useEnvironments(opts?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: environmentsQueryKey(),
+    queryFn: fetchEnvironments,
+    enabled: opts?.enabled ?? true,
+  });
 }
 
 /** Create an environment, then refresh the list. */
