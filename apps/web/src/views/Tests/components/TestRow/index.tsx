@@ -1,10 +1,10 @@
 import type { FolderSummary, TestSummary } from "@varys/review-contract";
-import { Button, Folder, Grip, IconButton, Inbox, Input, Lock, MoreHorizontal, Play, Select, Trash } from "@varys/ui";
+import { Button, Clock, Folder, Grip, IconButton, Inbox, Input, Lock, MoreHorizontal, Play, Select, Trash } from "@varys/ui";
 import { useState } from "react";
 import { useRouter } from "../../../../context/router";
 import { useToast } from "../../../../context/toast";
 import { useDeleteTest, useUpdateTest } from "../../../../queries";
-import { shortDate } from "../../../../lib/format";
+import { absoluteTime, shortDate } from "../../../../lib/format";
 import styles from "./styles.module.scss";
 
 export function TestRow({
@@ -70,6 +70,19 @@ export function TestRow({
                 {tag}
               </span>
             ))}
+            {test.schedule && (
+              <span
+                className={styles.schedBadge}
+                title={`${test.schedule.enabled ? "Scheduled" : "Schedule paused"}: ${test.schedule.cron}`}
+              >
+                <Clock size={11} />
+                {test.schedule.enabled
+                  ? test.schedule.nextRunAt
+                    ? `Scheduled · ${absoluteTime(test.schedule.nextRunAt)}`
+                    : "Scheduled"
+                  : "Schedule paused"}
+              </span>
+            )}
           </div>
         </div>
         <span className={styles.created}>{shortDate(test.createdAt)}</span>

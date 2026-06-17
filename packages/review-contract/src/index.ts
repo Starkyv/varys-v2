@@ -64,6 +64,58 @@ export type TestOrigin = "human" | "ai";
  *  and schedules, surfaced in the review queue); `active` = a normal, runnable test. */
 export type TestStatus = "draft" | "active";
 
+/**
+ * A test's optional cron schedule (Slice 8 — Scheduling). Operational "when-to-run"
+ * metadata, NOT part of the versioned definition: setting it writes no new test_version.
+ * A row exists ⇒ the test is scheduled; `enabled` gates firing (pause without losing the
+ * cron). Full shape returned by `GET /tests/:id/config`.
+ */
+export interface TestSchedule {
+  /** Standard 5-field cron expression. */
+  cron: string;
+  /** IANA timezone the cron is evaluated in (e.g. "UTC", "Asia/Kolkata"). */
+  timezone: string;
+  /** Whether the schedule fires. Disabled keeps the cron but never runs. */
+  enabled: boolean;
+  /** The environment to run against; null = the default (env-less) baseline. */
+  environmentId: string | null;
+  /** Resolved environment name for display; null when env-less or since-deleted. */
+  environmentName: string | null;
+  /** Keep a Playwright trace on each scheduled run (for debuggability). */
+  keepTrace: boolean;
+  /** Next fire time (ISO), computed from cron+timezone; null when disabled. */
+  nextRunAt: string | null;
+  /** Last fire time (ISO); null until it has fired (set by the firing tick). */
+  lastRunAt: string | null;
+  /** The run id of the last fire (open via `?run=`); null until it has fired. */
+  lastRunId: string | null;
+}
+
+/** Compact schedule badge for the Tests list — enough to render a "scheduled · next run"
+ *  indicator without the full schedule. */
+export interface TestScheduleSummary {
+  enabled: boolean;
+  cron: string;
+  /** Next fire time (ISO); null when disabled. */
+  nextRunAt: string | null;
+}
+
+/** The editable fields of a test's schedule, written by the test-detail config and sent
+ *  under `schedule` in the structural test update (`PATCH /tests/:id`). `null` clears the
+ *  schedule; omitting the field leaves it unchanged. */
+export interface TestScheduleInput {
+  /** Standard 5-field cron expression (validated server-side; bad cron → 400). */
+  cron: string;
+  /** IANA timezone; defaults to "UTC". */
+  timezone?: string;
+  /** Defaults to true. */
+  enabled?: boolean;
+  /** Environment to run against; null/omitted = default baseline. Unknown id → 404. */
+  environmentId?: string | null;
+  /** Defaults to false. */
+  keepTrace?: boolean;
+}
+
 /** A saved test (recording), as listed in the Tests view. */
 export interface TestSummary {
   id: string;
@@ -84,6 +136,9 @@ export interface TestSummary {
   folderName: string | null;
   /** Free-form tags (many-to-many slicing across folder boundaries). */
   tags: string[];
+  /** The test's cron schedule, or null when unscheduled — drives the Tests-list
+   *  "scheduled · next run" indicator (Slice 8). */
+  schedule: TestScheduleSummary | null;
 }
 
 /**
@@ -137,6 +192,9 @@ export interface TestConfigView {
   /** Test-level default waits applied before every wait-supporting step. */
   defaults: ConfigWait[];
   steps: TestConfigStep[];
+  /** The test's cron schedule, or null when unscheduled (Slice 8). Edited in the
+   *  test-detail config surface and written back via the structural `PATCH /tests/:id`. */
+  schedule: TestSchedule | null;
 }
 
 /** A per-step edit in a config patch — keyed by `index`. Omitted fields are left as-is. */

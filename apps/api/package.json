@@ -23,6 +23,7 @@
     "@varys/step-schema": "workspace:*",
     "@varys/storage-adapter": "workspace:*",
     "better-auth": "^1.6.19",
+    "cron-parser": "^4.9.0",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.39.1",
     "pg": "^8.13.1",

@@ -17,6 +17,9 @@ import type {
   TestConfigStep,
   TestConfigView,
   TestOrigin,
+  TestSchedule,
+  TestScheduleInput,
+  TestScheduleSummary,
   TestStatus,
   TestSummary,
 } from "@varys/review-contract";
@@ -29,16 +32,19 @@ import {
   type Wait,
 } from "@varys/step-schema";
 import type { StorageAdapter } from "@varys/storage-adapter";
+import parser from "cron-parser";
 import { asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
 import {
   baselines,
   draftPreviews,
+  environments,
   folders,
   runResults,
   runs,
   runSteps,
   tests,
+  testSchedules,
   testTags,
   testVersions,
 } from "../db/schema";
@@ -52,6 +58,27 @@ export interface UpdateTestInput {
   name?: string;
   folderId?: string | null;
   tags?: string[];
+  /** Set/replace the cron schedule, or `null` to clear it (Slice 8). Omit to leave
+   *  unchanged. Setting a schedule never writes a new test_version. */
+  schedule?: TestScheduleInput | null;
+}
+
+/**
+ * Validate a cron expression in a timezone and return its next fire time, or null when
+ * the schedule is disabled (nothing to fire). Throws `BadRequestException` on an
+ * unparseable cron / unknown timezone — the editor's save-time guard. Used at config time
+ * here and after each fire by the scheduler (PRD 1, Issue 2).
+ */
+function nextCronRun(cron: string, timezone: string, enabled: boolean): Date | null {
+  let next: Date;
+  try {
+    next = parser.parseExpression(cron, { tz: timezone }).next().toDate();
+  } catch (err) {
+    throw new BadRequestException(
+      `Invalid cron schedule: ${err instanceof Error ? err.message : "could not parse expression"}`,
+    );
+  }
+  return enabled ? next : null;
 }
 
 /** Trim, drop empties, dedupe — a tag attaches at most once per test. */
@@ -164,10 +191,14 @@ export class TestsService {
         folderId: tests.folderId,
         folderName: folders.name,
         definition: testVersions.definition,
+        scheduleCron: testSchedules.cron,
+        scheduleEnabled: testSchedules.enabled,
+        scheduleNextRunAt: testSchedules.nextRunAt,
       })
       .from(tests)
       .innerJoin(testVersions, eq(testVersions.testId, tests.id))
       .leftJoin(folders, eq(folders.id, tests.folderId))
+      .leftJoin(testSchedules, eq(testSchedules.testId, tests.id))
       .where(
         sql`${tests.status} = 'active' and ${testVersions.version} = (select max(v.version) from test_versions v where v.test_id = ${tests.id})`,
       )
@@ -195,6 +226,13 @@ export class TestsService {
       folderId: r.folderId,
       folderName: r.folderName,
       tags: tagsByTest.get(r.id) ?? [],
+      schedule: r.scheduleCron
+        ? ({
+            enabled: r.scheduleEnabled ?? false,
+            cron: r.scheduleCron,
+            nextRunAt: r.scheduleNextRunAt ? r.scheduleNextRunAt.toISOString() : null,
+          } satisfies TestScheduleSummary)
+        : null,
     }));
   }
 
@@ -384,10 +422,12 @@ export class TestsService {
     return rows.map((r) => r.tag);
   }
 
-  /** Rename, (un)file, and/or retag a test. Writes ONLY organization rows (tests +
-   *  test_tags) — never a new test_version — so organize actions cannot perturb
-   *  baselines or review state. Tags are a full-list replace, normalized. */
-  async update(id: string, input: UpdateTestInput): Promise<{ ok: true }> {
+  /** Rename, (un)file, retag, and/or (re)schedule a test. Writes ONLY relational rows
+   *  (tests + test_tags + test_schedules) — never a new test_version — so these actions
+   *  cannot perturb baselines or review state. Tags are a full-list replace, normalized;
+   *  `schedule: null` clears the cron, a value upserts it. `actor` is recorded as the
+   *  schedule's owner (attributed to its unattended runs, §11 audit). */
+  async update(id: string, input: UpdateTestInput, actor?: string): Promise<{ ok: true }> {
     const patch: Partial<typeof tests.$inferInsert> = {};
     if (input.name !== undefined) {
       const name = input.name.trim();
@@ -396,7 +436,43 @@ export class TestsService {
     }
     if (input.folderId !== undefined) patch.folderId = input.folderId; // null = unfile
     const tags = input.tags !== undefined ? normalizeTags(input.tags) : undefined;
-    if (Object.keys(patch).length === 0 && tags === undefined) return { ok: true };
+    const hasSchedule = input.schedule !== undefined;
+    if (Object.keys(patch).length === 0 && tags === undefined && !hasSchedule) return { ok: true };
+
+    // Validate + assemble the schedule BEFORE any write (fail fast): an unparseable cron
+    // is a 400, an unknown environment a 404 — neither leaves a half-applied update.
+    // `undefined` = leave as-is, `null` = clear, a row = upsert.
+    let scheduleRow: typeof testSchedules.$inferInsert | null | undefined;
+    if (input.schedule === null) {
+      scheduleRow = null;
+    } else if (input.schedule) {
+      const s = input.schedule;
+      const cron = s.cron?.trim();
+      if (!cron) throw new BadRequestException("a schedule requires a cron expression");
+      const timezone = s.timezone?.trim() || "UTC";
+      const enabled = s.enabled ?? true;
+      const nextRunAt = nextCronRun(cron, timezone, enabled); // throws 400 on bad cron/tz
+      const environmentId = s.environmentId ?? null;
+      if (environmentId) {
+        const [env] = await this.db
+          .select({ id: environments.id })
+          .from(environments)
+          .where(eq(environments.id, environmentId))
+          .limit(1);
+        if (!env) throw new NotFoundException(`Environment ${environmentId} not found`);
+      }
+      scheduleRow = {
+        testId: id,
+        cron,
+        timezone,
+        enabled,
+        environmentId,
+        keepTrace: s.keepTrace ?? false,
+        nextRunAt,
+        createdBy: actor ?? null,
+        updatedAt: new Date(),
+      };
+    }
 
     try {
       await this.db.transaction(async (tx) => {
@@ -422,10 +498,30 @@ export class TestsService {
             await tx.insert(testTags).values(tags.map((tag) => ({ testId: id, tag })));
           }
         }
+        if (scheduleRow === null) {
+          await tx.delete(testSchedules).where(eq(testSchedules.testId, id));
+        } else if (scheduleRow) {
+          await tx
+            .insert(testSchedules)
+            .values(scheduleRow)
+            .onConflictDoUpdate({
+              target: testSchedules.testId,
+              set: {
+                cron: scheduleRow.cron,
+                timezone: scheduleRow.timezone,
+                enabled: scheduleRow.enabled,
+                environmentId: scheduleRow.environmentId,
+                keepTrace: scheduleRow.keepTrace,
+                nextRunAt: scheduleRow.nextRunAt,
+                createdBy: scheduleRow.createdBy,
+                updatedAt: scheduleRow.updatedAt,
+              },
+            });
+        }
       });
     } catch (err) {
-      if (err instanceof NotFoundException) throw err;
-      // FK violation: the target folder doesn't exist.
+      if (err instanceof NotFoundException || err instanceof BadRequestException) throw err;
+      // FK violation: the target folder doesn't exist (env was validated up front).
       const code =
         (err as { code?: string; cause?: { code?: string } })?.code ??
         (err as { cause?: { code?: string } })?.cause?.code;
@@ -469,10 +565,12 @@ export class TestsService {
   async getConfig(id: string): Promise<TestConfigView> {
     const view = await this.getById(id); // latest version + definition (throws if none)
     const def = view.definition;
+    const schedule = await this.readSchedule(id);
     return {
       id: view.id,
       name: view.name,
       version: view.version,
+      schedule,
       defaults: (def.defaults?.waitBefore ?? []).map(toConfigWait),
       steps: def.steps.map((s, index): TestConfigStep => ({
         index,
@@ -484,6 +582,39 @@ export class TestsService {
         captureMode: s.type === "screenshot" ? (s.captureMode ?? "element") : null,
         threshold: s.type === "screenshot" ? (s.threshold ?? null) : null,
       })),
+    };
+  }
+
+  /** A test's cron schedule (with its environment name resolved) for the config view;
+   *  null when the test is unscheduled. `nextRunAt`/`lastRunAt` are ISO or null. */
+  private async readSchedule(testId: string): Promise<TestSchedule | null> {
+    const [row] = await this.db
+      .select({
+        cron: testSchedules.cron,
+        timezone: testSchedules.timezone,
+        enabled: testSchedules.enabled,
+        environmentId: testSchedules.environmentId,
+        environmentName: environments.name,
+        keepTrace: testSchedules.keepTrace,
+        nextRunAt: testSchedules.nextRunAt,
+        lastRunAt: testSchedules.lastRunAt,
+        lastRunId: testSchedules.lastRunId,
+      })
+      .from(testSchedules)
+      .leftJoin(environments, eq(environments.id, testSchedules.environmentId))
+      .where(eq(testSchedules.testId, testId))
+      .limit(1);
+    if (!row) return null;
+    return {
+      cron: row.cron,
+      timezone: row.timezone,
+      enabled: row.enabled,
+      environmentId: row.environmentId,
+      environmentName: row.environmentName ?? null,
+      keepTrace: row.keepTrace,
+      nextRunAt: row.nextRunAt ? row.nextRunAt.toISOString() : null,
+      lastRunAt: row.lastRunAt ? row.lastRunAt.toISOString() : null,
+      lastRunId: row.lastRunId,
     };
   }
 

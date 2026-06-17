@@ -109,6 +109,20 @@
   font-family: var(--font-mono);
 }
 
+.schedBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 var(--space-8);
+  border-radius: var(--radius-full);
+  background: var(--color-bg-inset);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  font-variant-numeric: tabular-nums;
+}
+
 .created {
   flex: 0 0 auto;
   font-size: var(--font-size-xs);

@@ -231,6 +231,38 @@ export const draftPreviews = pgTable(
   (t) => ({ uq: uniqueIndex("draft_previews_test_checkpoint_uq").on(t.testId, t.checkpointName) }),
 );
 
+/**
+ * A test's optional cron schedule (Slice 8 — Scheduling). Operational "when-to-run"
+ * metadata, NOT part of the versioned definition (like `tests.folder_id`/`status`): a
+ * 1:1 row per test, set via the structural test update, never bumping a test_version.
+ * The firing tick (PRD 1, Issue 2) sweeps `next_run_at <= now()`; `enabled` gates firing
+ * (pause without losing the cron). The env pin drops to the default baseline on env
+ * deletion (SET NULL); the row dies with its test (CASCADE).
+ */
+export const testSchedules = pgTable("test_schedules", {
+  testId: uuid("test_id")
+    .primaryKey()
+    .references(() => tests.id, { onDelete: "cascade" }),
+  /** Standard 5-field cron expression, evaluated in `timezone`. */
+  cron: text("cron").notNull(),
+  timezone: text("timezone").notNull().default("UTC"),
+  /** Disabled keeps the cron but never fires. */
+  enabled: boolean("enabled").notNull().default(true),
+  /** Environment to run against; null = the default (env-less) baseline. */
+  environmentId: uuid("environment_id").references(() => environments.id, { onDelete: "set null" }),
+  keepTrace: boolean("keep_trace").notNull().default(false),
+  /** Next fire time, computed from cron+timezone on save and after each fire — the
+   *  tick's due-key. Null when disabled (nothing to fire). */
+  nextRunAt: timestamp("next_run_at", { withTimezone: true }),
+  lastRunAt: timestamp("last_run_at", { withTimezone: true }),
+  /** The run id of the last fire (open via ?run=); SET NULL if that run is purged. */
+  lastRunId: uuid("last_run_id").references(() => runs.id, { onDelete: "set null" }),
+  /** Who set the schedule — the actor attributed to its unattended runs (§11 audit). */
+  createdBy: text("created_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const schema = {
   folders,
   tests,
@@ -245,6 +277,7 @@ export const schema = {
   baselines,
   environments,
   draftPreviews,
+  testSchedules,
 };
 
 /**
@@ -370,6 +403,23 @@ CREATE TABLE IF NOT EXISTS draft_previews (
   artifact_key text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (test_id, checkpoint_name)
+);
+-- Per-test cron schedule (Slice 8 — Scheduling). Operational metadata; editing it never
+-- writes a test_version. 1:1 with tests (PK = test_id); the env pin drops to the default
+-- baseline on env delete (SET NULL); the row dies with its test (CASCADE).
+CREATE TABLE IF NOT EXISTS test_schedules (
+  test_id uuid PRIMARY KEY REFERENCES tests(id) ON DELETE CASCADE,
+  cron text NOT NULL,
+  timezone text NOT NULL DEFAULT 'UTC',
+  enabled boolean NOT NULL DEFAULT true,
+  environment_id uuid REFERENCES environments(id) ON DELETE SET NULL,
+  keep_trace boolean NOT NULL DEFAULT false,
+  next_run_at timestamptz,
+  last_run_at timestamptz,
+  last_run_id uuid REFERENCES runs(id) ON DELETE SET NULL,
+  created_by text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
 );
 -- Idempotency for re-executed runs: first collapse any duplicate rows an earlier
 -- redelivered run may have written (keep the latest per group), then enforce one

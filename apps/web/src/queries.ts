@@ -295,16 +295,18 @@ export function useTriggerSuiteRun() {
   });
 }
 
-/** Rename / (un)file / retag a test, then refresh tests, folder counts, and the
- *  tags-in-use list (a new tag should appear in pickers immediately). */
+/** Rename / (un)file / retag / (re)schedule a test, then refresh tests, folder counts,
+ *  the tags-in-use list (a new tag should appear in pickers immediately), and this
+ *  test's config (so a saved cron schedule's nextRunAt reflects). */
 export function useUpdateTest() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (vars: { id: string; body: UpdateTestBody }) => updateTest(vars.id, vars.body),
-    onSuccess: () => {
+    onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: testsQueryKey() });
       qc.invalidateQueries({ queryKey: foldersQueryKey() });
       qc.invalidateQueries({ queryKey: tagsQueryKey() });
+      qc.invalidateQueries({ queryKey: testConfigQueryKey(vars.id) });
     },
   });
 }

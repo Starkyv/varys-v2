@@ -18,6 +18,7 @@ import type {
   SuiteView,
   TestConfigPatch,
   TestConfigView,
+  TestScheduleInput,
   TestSummary,
   TuningInput,
 } from "@varys/review-contract";
@@ -120,13 +121,14 @@ export async function discardDraft(id: string): Promise<void> {
   }
 }
 
-/** Organization metadata for a test — name, folder (null unfiles), and/or tags
- *  (full-list replace). Never the definition: the server writes only organization
- *  rows (no new test version). */
+/** Relational metadata for a test — name, folder (null unfiles), tags (full-list
+ *  replace), and/or the cron schedule (`null` clears it, Slice 8). Never the
+ *  definition: the server writes only relational rows (no new test version). */
 export interface UpdateTestBody {
   name?: string;
   folderId?: string | null;
   tags?: string[];
+  schedule?: TestScheduleInput | null;
 }
 
 /** Rename / (un)file a test. Throws on a non-2xx response. */

@@ -3,6 +3,7 @@ export {
   baselines,
   DDL,
   draftPreviews,
+  environments,
   folders,
   runResults,
   runs,
@@ -12,6 +13,7 @@ export {
   suites,
   suiteTests,
   tests,
+  testSchedules,
   testTags,
   testVersions,
 } from "@varys/db";

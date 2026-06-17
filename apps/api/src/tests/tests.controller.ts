@@ -35,11 +35,11 @@ export class TestsController {
     return this.tests.saveConfig(id, body, user.email);
   }
 
-  // Organization metadata only ({ name?, folderId? — null unfiles }); never the
-  // definition, never a new test_version.
+  // Relational metadata only ({ name?, folderId? — null unfiles, tags?, schedule? });
+  // never the definition, never a new test_version. The actor owns any cron schedule set.
   @Patch(":id")
-  update(@Param("id") id: string, @Body() body: UpdateTestInput) {
-    return this.tests.update(id, body ?? {});
+  update(@Param("id") id: string, @Body() body: UpdateTestInput, @CurrentUser() user: AuthUser) {
+    return this.tests.update(id, body ?? {}, user.email);
   }
 
   // Hard-delete: removes the test and ALL its runs, baselines, and history. No rollback.
