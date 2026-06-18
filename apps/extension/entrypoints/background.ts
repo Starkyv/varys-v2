@@ -21,20 +21,16 @@ const KEY = "varys:recording";
 
 // better-auth's session cookie. The extension can't read whether it's signed in by
 // CALLING the API (its cross-site request doesn't carry a SameSite=Lax cookie), so it
-// checks the cookie's presence directly via the cookies API. Cookies are host-scoped
-// (port-agnostic), so reading at the API origin finds the session cookie set by the web
-// app. Presence ⇒ signed in (drives the panel's Online/Offline marker).
-const AUTH_COOKIE = "better-auth.session_token";
+// checks the cookie's presence directly via the cookies API. In PRODUCTION (https)
+// better-auth prefixes the cookie name with `__Secure-`; in dev (http) it's unprefixed —
+// so we match by SUFFIX. Presence ⇒ signed in (drives the panel's Online/Offline marker).
+const AUTH_COOKIE_SUFFIX = "better-auth.session_token";
 async function isSignedIn(): Promise<boolean> {
-  // The session cookie is Secure (SameSite=None), so it only matches a secure URL — read
-  // it via https (cookies are host-scoped / port-agnostic, so the host is what matters).
-  // Fall back to http in case a deployment runs without secure cookies.
-  const secureUrl = API_BASE.replace(/^http:/, "https:");
-  for (const url of [secureUrl, API_BASE]) {
-    const c = await browser.cookies.get({ url, name: AUTH_COOKIE }).catch(() => null);
-    if (c) return true;
-  }
-  return false;
+  // List the API host's cookies and match the session cookie by suffix (scheme-agnostic,
+  // and tolerant of the `__Secure-` prefix added on https).
+  const host = new URL(API_BASE).hostname;
+  const all = await browser.cookies.getAll({ domain: host }).catch(() => []);
+  return all.some((c) => c.name.endsWith(AUTH_COOKIE_SUFFIX));
 }
 
 interface RecState {
@@ -219,7 +215,7 @@ export default defineBackground(() => {
   // Push the signed-in / signed-out state to open panels the moment it changes (sign-in
   // or sign-out in the web app), so the Online/Offline marker flips live without polling.
   browser.cookies.onChanged.addListener(async (change) => {
-    if (change.cookie.name !== AUTH_COOKIE) return;
+    if (!change.cookie.name.endsWith(AUTH_COOKIE_SUFFIX)) return;
     const signedIn = await isSignedIn();
     const tabs = await browser.tabs.query({});
     for (const t of tabs) {
