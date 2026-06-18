@@ -14,6 +14,9 @@ playwright-report/
 # Local dev artifact storage (shared by the API + worker)
 .varys-artifacts/
 
+# Filled-in K8s secret (only the .example template is committed)
+deploy/k8s/secret.yaml
+
 # WXT extension build output
 .wxt/
 .output/

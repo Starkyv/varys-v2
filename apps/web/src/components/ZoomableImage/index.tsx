@@ -16,6 +16,7 @@ export function ZoomableImage({
   className,
   imgClassName,
   caption,
+  hintLabel,
 }: {
   src: string;
   alt: string;
@@ -25,6 +26,8 @@ export function ZoomableImage({
   imgClassName?: string;
   /** Label shown beneath the full image; defaults to `alt`. */
   caption?: string;
+  /** Optional text shown next to the zoom icon on hover (e.g. "Click to zoom"). */
+  hintLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -54,8 +57,9 @@ export function ZoomableImage({
         aria-label={`View full image: ${alt}`}
       >
         <img className={cx(styles.img, imgClassName)} src={src} alt={alt} draggable={false} />
-        <span className={styles.hint} aria-hidden>
+        <span className={cx(styles.hint, hintLabel && styles.hintLabeled)} aria-hidden>
           <Search size={14} />
+          {hintLabel}
         </span>
       </button>
 

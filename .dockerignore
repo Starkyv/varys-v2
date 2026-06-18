@@ -1,0 +1,24 @@
+# Keep build context small + keep secrets/artifacts out of images.
+**/node_modules
+**/dist
+**/.next
+**/.turbo
+.git
+.github
+*.log
+
+# Secrets — env files must NEVER be baked into an image (use k8s Secret/ConfigMap).
+.env
+.env.*
+!.env.example
+
+# Local artifacts + scratch (NOT pnpm workspace members, so safe to drop — but
+# apps/* and packages/* MUST stay: pnpm install needs every workspace member's
+# package.json present to resolve the graph under --frozen-lockfile).
+.varys-artifacts
+claude-driven-tests
+issues
+prd
+design
+design-system-setup
+design-system-setup-widget

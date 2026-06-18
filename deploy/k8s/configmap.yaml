@@ -1,0 +1,31 @@
+# Non-secret runtime config shared by the API + worker pods.
+# Edit the <...> placeholders before applying. Secrets live in the Secret (see
+# secret.example.yaml) — never put DATABASE_URL / SAS token / auth secret here.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: varys-config
+  namespace: varys
+data:
+  NODE_ENV: "production"
+  PORT: "4000"
+
+  # --- Auth (better-auth) ---
+  # The single public HTTPS origin the web + API share. The Google OAuth redirect
+  # URI is built as <BETTER_AUTH_URL>/api/auth/callback/google.
+  BETTER_AUTH_URL: "https://varys.datagenie.ai"
+  BETTER_AUTH_TRUSTED_ORIGINS: "https://varys.datagenie.ai"
+  VARYS_AUTH_METHODS: "password,google"
+  VARYS_AUTH_ALLOWED_DOMAINS: "datagenie.ai"
+  VARYS_AUTH_DOMAIN_SCOPE: "google"
+
+  # --- Artifact storage: Azure Blob ---
+  VARYS_STORAGE_DRIVER: "azure"
+  AZURE_STORAGE_ACCOUNT: "dgvarys"
+  AZURE_STORAGE_CONTAINER: "varys-container"
+  # Optional; defaults to https://dgvarys.blob.core.windows.net
+  # AZURE_STORAGE_BLOB_ENDPOINT: "https://dgvarys.blob.core.windows.net"
+
+  # --- Headless Chromium in-cluster ---
+  # Unprivileged container + small /dev/shm → Chromium needs these flags.
+  VARYS_BROWSER_ARGS: "--no-sandbox,--disable-dev-shm-usage"

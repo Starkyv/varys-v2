@@ -270,3 +270,43 @@ export const ArrowLeft = (p: IconProps) => (
     <path d="M19 12H5M12 19l-7-7 7-7" />
   </IconBase>
 );
+
+export const ChevronRight = (p: IconProps) => (
+  <IconBase {...p}>
+    <path d="m9 6 6 6-6 6" />
+  </IconBase>
+);
+
+// ---- Authoring (Author with AI) --------------------------------------------
+
+/** A camera — marks a checkpoint (the test's visual assertion / "take a screenshot"). */
+export const Camera = (p: IconProps) => (
+  <IconBase {...p}>
+    <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3Z" />
+    <circle cx="12" cy="13" r="3.2" />
+  </IconBase>
+);
+
+/** A globe — fronts a URL / a navigation action. */
+export const Globe = (p: IconProps) => (
+  <IconBase {...p}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M3 12h18" />
+    <path d="M12 3c2.6 2.6 2.6 15.4 0 18M12 3c-2.6 2.6-2.6 15.4 0 18" />
+  </IconBase>
+);
+
+/** Sparkles — the AI-authoring accent. */
+export const Sparkles = (p: IconProps) => (
+  <IconBase {...p}>
+    <path d="M12 3.2 13.8 8.2 18.8 10 13.8 11.8 12 16.8 10.2 11.8 5.2 10 10.2 8.2 12 3.2Z" />
+    <path d="M18.5 14.5 19.3 16.7 21.5 17.5 19.3 18.3 18.5 20.5 17.7 18.3 15.5 17.5 17.7 16.7 18.5 14.5Z" />
+  </IconBase>
+);
+
+/** A cursor / pointer — marks a click action. */
+export const MousePointer = (p: IconProps) => (
+  <IconBase {...p}>
+    <path d="m4 4 7.07 17 2.51-7.42L21 11.07 4 4Z" />
+  </IconBase>
+);

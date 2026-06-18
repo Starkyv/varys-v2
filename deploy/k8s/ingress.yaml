@@ -1,0 +1,46 @@
+# Single-origin routing: API path prefixes → varys-api, everything else → varys-web.
+# This is the production equivalent of the Vite dev proxy (apps/web/vite.config.ts).
+# When you add a new top-level API route, add its prefix here AND to the Vite proxy.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: varys
+  namespace: varys
+  annotations:
+    # TLS via cert-manager. Requires cert-manager + a ClusterIssuer named below.
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # Recordings POSTed by the extension can reach the API's 5MB body limit.
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    # Authoring / MCP / long runs can hold a request open for a while.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+spec:
+  # ingress-nginx. AKS alternatives: "webapprouting.kubernetes.io" (managed
+  # Web Application Routing addon) or "azure-application-gateway" (AGIC).
+  ingressClassName: nginx
+  tls:
+    - hosts: ["varys.datagenie.ai"]
+      secretName: varys-tls
+  rules:
+    - host: "varys.datagenie.ai"
+      http:
+        paths:
+          # --- API (NestJS) — keep in sync with vite.config.ts proxy list ---
+          - { path: /api/auth,    pathType: Prefix, backend: { service: { name: varys-api, port: { number: 4000 } } } }
+          - { path: /auth-config, pathType: Prefix, backend: { service: { name: varys-api, port: { number: 4000 } } } }
+          - { path: /health,      pathType: Prefix, backend: { service: { name: varys-api, port: { number: 4000 } } } }
+          - { path: /dashboard,   pathType: Prefix, backend: { service: { name: varys-api, port: { number: 4000 } } } }
+          - { path: /runs,        pathType: Prefix, backend: { service: { name: varys-api, port: { number: 4000 } } } }
+          - { path: /suite-runs,  pathType: Prefix, backend: { service: { name: varys-api, port: { number: 4000 } } } }
+          - { path: /tests,       pathType: Prefix, backend: { service: { name: varys-api, port: { number: 4000 } } } }
+          - { path: /drafts,      pathType: Prefix, backend: { service: { name: varys-api, port: { number: 4000 } } } }
+          - { path: /authoring,   pathType: Prefix, backend: { service: { name: varys-api, port: { number: 4000 } } } }
+          - { path: /environments,pathType: Prefix, backend: { service: { name: varys-api, port: { number: 4000 } } } }
+          - { path: /folders,     pathType: Prefix, backend: { service: { name: varys-api, port: { number: 4000 } } } }
+          - { path: /tags,        pathType: Prefix, backend: { service: { name: varys-api, port: { number: 4000 } } } }
+          - { path: /suites,      pathType: Prefix, backend: { service: { name: varys-api, port: { number: 4000 } } } }
+          - { path: /artifacts,   pathType: Prefix, backend: { service: { name: varys-api, port: { number: 4000 } } } }
+          - { path: /trace-viewer,pathType: Prefix, backend: { service: { name: varys-api, port: { number: 4000 } } } }
+          - { path: /mcp,         pathType: Prefix, backend: { service: { name: varys-api, port: { number: 4000 } } } }
+          # --- Everything else → the SPA ---
+          - { path: /,            pathType: Prefix, backend: { service: { name: varys-web, port: { number: 80 } } } }

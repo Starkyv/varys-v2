@@ -40,6 +40,17 @@
   transition: opacity var(--duration-fast) var(--ease-standard);
 }
 
+/* Labeled variant — a pill ("Click to zoom") rather than a bare icon. */
+.hintLabeled {
+  width: auto;
+  height: 24px;
+  gap: 5px;
+  padding: 0 var(--space-10);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  backdrop-filter: blur(4px);
+}
+
 .trigger:hover .hint,
 .trigger:focus-visible .hint {
   opacity: 1;
