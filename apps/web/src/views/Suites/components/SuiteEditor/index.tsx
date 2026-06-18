@@ -1,6 +1,7 @@
 import type { TestSummary } from "@varys/review-contract";
 import { Button, Check, cx, Input, Lock, Skeleton, Squares } from "@varys/ui";
 import { useState } from "react";
+import { useConfirm } from "../../../../context/confirm";
 import { useToast } from "../../../../context/toast";
 import { useCreateSuite, useDeleteSuite, useSuite, useTests, useUpdateSuite } from "../../../../queries";
 import styles from "./styles.module.scss";
@@ -50,6 +51,7 @@ function EditorForm({
   const update = useUpdateSuite();
   const remove = useDeleteSuite();
   const { toast } = useToast();
+  const confirm = useConfirm();
 
   const [name, setName] = useState(initialName);
   const [selected, setSelected] = useState<Set<string>>(() => new Set(initialIds));
@@ -81,9 +83,15 @@ function EditorForm({
     }
   }
 
-  function onDelete() {
+  async function onDelete() {
     if (!suiteId) return;
-    if (!window.confirm(`Delete suite “${name}”? Member tests are not deleted.`)) return;
+    const ok = await confirm({
+      title: `Delete suite “${name}”?`,
+      message: "The suite is removed. Its member tests are not deleted.",
+      confirmLabel: "Delete suite",
+      tone: "danger",
+    });
+    if (!ok) return;
     remove.mutate(suiteId, {
       onSuccess: () => { toast(`Suite “${name}” deleted`); onClose(); },
       onError: (e) => toast(e instanceof Error ? e.message : "Delete failed"),
@@ -99,7 +107,7 @@ function EditorForm({
         <Input className={styles.nameInput} inputSize="sm" placeholder="Suite name" value={name} onChange={(e) => setName(e.target.value)} aria-label="Suite name" />
         <span className={styles.count}>{selected.size} selected</span>
         {suiteId && (
-          <Button variant="ghost" size="sm" onClick={onDelete} loading={remove.isPending} className={styles.delete}>
+          <Button variant="ghost" size="sm" onClick={() => void onDelete()} loading={remove.isPending} className={styles.delete}>
             Delete
           </Button>
         )}

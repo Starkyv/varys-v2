@@ -221,6 +221,39 @@
   min-width: 0;
   min-height: 24px;
 }
+.stepHeadSpacer {
+  flex: 1 1 auto;
+}
+
+/* Per-step remove control — faint until you reach for the row. */
+.stepRemove {
+  flex: 0 0 auto;
+  color: var(--color-text-subtle);
+  opacity: 0.45;
+  transition: opacity var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard);
+}
+.step:hover .stepRemove,
+.stepRemove:focus-visible {
+  opacity: 1;
+}
+.stepRemove:hover {
+  color: var(--color-danger);
+}
+
+/* A step pending removal — dashed + struck through until the save lands. */
+.stepRemoved {
+  border-style: dashed;
+  border-color: var(--color-border-strong);
+  background: var(--color-bg-subtle);
+
+  .stepLabel {
+    text-decoration: line-through;
+    color: var(--color-text-muted);
+  }
+  .stepIcon {
+    color: var(--color-text-subtle);
+  }
+}
 
 .stepIcon {
   flex: 0 0 auto;

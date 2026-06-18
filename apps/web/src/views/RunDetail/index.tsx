@@ -1,11 +1,12 @@
-import { ArrowLeft, Button, Check, ErrorState, ExternalLink, IconButton, Skeleton } from "@varys/ui";
+import { ArrowLeft, Button, Check, ErrorState, ExternalLink, IconButton, Skeleton, Trash } from "@varys/ui";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { createElement, useEffect, useMemo, useState } from "react";
+import { useConfirm } from "../../context/confirm";
 import { useRouter } from "../../context/router";
 import { useToast } from "../../context/toast";
 import { absoluteTime } from "../../lib/format";
 import { StatusBadge } from "../../lib/status";
-import { useApproveAll, useRunView } from "../../queries";
+import { useApproveAll, useDeleteRun, useRunView } from "../../queries";
 import { ApproveDialog } from "./components/ApproveDialog";
 import { CheckpointViewer } from "./components/CheckpointViewer";
 import {
@@ -33,6 +34,8 @@ export function RunDetail({ runId }: { runId: string }) {
   const { navigate } = useRouter();
   const { toast } = useToast();
   const approveAll = useApproveAll(runId);
+  const del = useDeleteRun();
+  const confirm = useConfirm();
   const reduce = useReducedMotion();
 
   // `null` = follow the computed default; a number = an explicit user pick.
@@ -74,6 +77,24 @@ export function RunDetail({ runId }: { runId: string }) {
 
   const openTrace = () => window.open(timelineViewerUrl(data.traceUrl as string), "_blank", "noopener");
 
+  const inFlight = data.status === "queued" || data.status === "running";
+  async function onDelete() {
+    const ok = await confirm({
+      title: "Delete run?",
+      message: `This deletes the run of “${data.testName}” — its screenshots and history are removed (baselines are kept). This can’t be undone.`,
+      confirmLabel: "Delete run",
+      tone: "danger",
+    });
+    if (!ok) return;
+    del.mutate(runId, {
+      onSuccess: () => {
+        toast("Run deleted");
+        navigate({ name: "runs" });
+      },
+      onError: (e) => toast(e instanceof Error ? e.message : "Couldn’t delete run"),
+    });
+  }
+
   return (
     <div>
       <header className={styles.header}>
@@ -97,6 +118,15 @@ export function RunDetail({ runId }: { runId: string }) {
             Approve all
           </Button>
         )}
+        <Button
+          variant="ghost"
+          iconLeft={<Trash size={15} />}
+          onClick={() => void onDelete()}
+          disabled={inFlight || del.isPending}
+          title={inFlight ? "Can’t delete a run that’s still in progress" : "Delete this run"}
+        >
+          Delete
+        </Button>
       </header>
 
       {!hasTimeline ? (

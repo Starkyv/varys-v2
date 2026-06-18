@@ -1,5 +1,8 @@
 import type {
+  AuthoringSessionSummary,
+  BridgeChatState,
   DashboardView,
+  McpStatus,
   DraftSummary,
   DraftView,
   EnvCookie,
@@ -87,6 +90,48 @@ export async function fetchDrafts(): Promise<DraftSummary[]> {
   return (await res.json()) as DraftSummary[];
 }
 
+/** Fetch the active Authoring Sessions to watch live (Slice 15 — Author with AI). Throws on a
+ *  non-2xx response. The per-session frame stream is consumed separately via EventSource. */
+export async function fetchAuthoringSessions(): Promise<AuthoringSessionSummary[]> {
+  const res = await fetch(`${API_BASE}/authoring/sessions`);
+  if (!res.ok) {
+    throw new Error(`Failed to load authoring sessions (${res.status})`);
+  }
+  return (await res.json()) as AuthoringSessionSummary[];
+}
+
+/** Start an in-product authoring chat (a Bridge) and get its one-time pairing code (Slice 15).
+ *  The conversation streams over EventSource; prompts go up via sendBridgePrompt. */
+export async function createBridge(): Promise<BridgeChatState> {
+  const res = await fetch(`${API_BASE}/authoring/bridge`, { method: "POST" });
+  if (!res.ok) {
+    throw new Error(`Failed to start an authoring session (${res.status})`);
+  }
+  return (await res.json()) as BridgeChatState;
+}
+
+/** Send a prompt down to the paired Bridge Helper for this chat (Slice 15). */
+export async function sendBridgePrompt(chatId: string, text: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/authoring/bridge/${chatId}/prompt`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to send prompt (${res.status})`);
+  }
+}
+
+/** Whether Claude Code has recently driven the MCP server — an activity-based "connected" proxy
+ *  (the MCP transport is stateless HTTP). Slice 15. */
+export async function fetchMcpStatus(): Promise<McpStatus> {
+  const res = await fetch(`${API_BASE}/authoring/mcp-status`);
+  if (!res.ok) {
+    throw new Error(`Failed to load MCP status (${res.status})`);
+  }
+  return (await res.json()) as McpStatus;
+}
+
 /** Fetch one draft's detail (per-checkpoint authoring previews) for the promote view. */
 export async function fetchDraft(id: string): Promise<DraftView> {
   const res = await fetch(`${API_BASE}/drafts/${id}`);
@@ -149,6 +194,15 @@ export async function deleteTest(id: string): Promise<void> {
   const res = await fetch(`${API_BASE}/tests/${id}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(`Failed to delete test (${res.status})`);
+  }
+}
+
+/** Delete a single run and its results/steps (irreversible). Baselines are untouched.
+ *  Throws on a non-2xx response. */
+export async function deleteRun(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/runs/${id}`, { method: "DELETE" });
+  if (!res.ok) {
+    throw new Error(`Failed to delete run (${res.status})`);
   }
 }
 

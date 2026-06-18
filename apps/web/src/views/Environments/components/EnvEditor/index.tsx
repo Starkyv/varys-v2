@@ -1,6 +1,7 @@
 import type { EnvCookie, EnvironmentView } from "@varys/review-contract";
 import { Button, Database, Input, Lock, Trash } from "@varys/ui";
 import { useState } from "react";
+import { useConfirm } from "../../../../context/confirm";
 import { useToast } from "../../../../context/toast";
 import { useDeleteEnvironment, useUpdateEnvironment } from "../../../../queries";
 import styles from "./styles.module.scss";
@@ -9,6 +10,7 @@ export function EnvEditor({ env, onDeleted }: { env: EnvironmentView; onDeleted:
   const update = useUpdateEnvironment();
   const remove = useDeleteEnvironment();
   const { toast } = useToast();
+  const confirm = useConfirm();
 
   const [name, setName] = useState(env.name);
   const [values, setValues] = useState<Record<string, string>>({ ...env.values });
@@ -88,8 +90,14 @@ export function EnvEditor({ env, onDeleted }: { env: EnvironmentView; onDeleted:
     );
   }
 
-  function onDelete() {
-    if (!window.confirm(`Delete environment “${env.name}”? Tests that reference it will need another to run.`)) return;
+  async function onDelete() {
+    const ok = await confirm({
+      title: `Delete environment “${env.name}”?`,
+      message: "Tests that reference it will need another environment to run.",
+      confirmLabel: "Delete environment",
+      tone: "danger",
+    });
+    if (!ok) return;
     remove.mutate(env.id, {
       onSuccess: () => {
         toast(`Environment “${env.name}” deleted`);
@@ -109,7 +117,7 @@ export function EnvEditor({ env, onDeleted }: { env: EnvironmentView; onDeleted:
           <Input className={styles.nameInput} inputSize="sm" value={name} onChange={(e) => setName(e.target.value)} aria-label="Environment name" />
           <div className={styles.sub}>Feeds the run environment pickers</div>
         </div>
-        <Button variant="ghost" size="sm" className={styles.delete} loading={remove.isPending} onClick={onDelete}>
+        <Button variant="ghost" size="sm" className={styles.delete} loading={remove.isPending} onClick={() => void onDelete()}>
           Delete
         </Button>
         <Button variant="primary" size="sm" loading={update.isPending} onClick={save}>

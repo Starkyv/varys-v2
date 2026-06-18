@@ -1,6 +1,7 @@
 import type { FolderSummary } from "@varys/review-contract";
 import { cx, Flask, Folder, Inbox, Plus, Trash } from "@varys/ui";
 import { type DragEvent, useState } from "react";
+import { useConfirm } from "../../../../context/confirm";
 import { useToast } from "../../../../context/toast";
 import { useCreateFolder, useDeleteFolder, useRenameFolder } from "../../../../queries";
 import styles from "./styles.module.scss";
@@ -30,6 +31,7 @@ export function FolderRail({
   onDropToFolder: (folderId: string | null) => void;
 }) {
   const { toast } = useToast();
+  const confirm = useConfirm();
   const createFolder = useCreateFolder();
   const renameFolder = useRenameFolder();
   const deleteFolder = useDeleteFolder();
@@ -65,10 +67,14 @@ export function FolderRail({
     setRenamingId(null);
   }
 
-  function onDelete(f: FolderSummary) {
-    if (!window.confirm(`Delete folder “${f.name}”? Its ${f.testCount} test${f.testCount === 1 ? "" : "s"} become Unfiled (not deleted).`)) {
-      return;
-    }
+  async function onDelete(f: FolderSummary) {
+    const ok = await confirm({
+      title: `Delete folder “${f.name}”?`,
+      message: `Its ${f.testCount} test${f.testCount === 1 ? "" : "s"} become Unfiled — they are not deleted.`,
+      confirmLabel: "Delete folder",
+      tone: "danger",
+    });
+    if (!ok) return;
     deleteFolder.mutate(f.id, {
       onSuccess: () => {
         toast(`Folder “${f.name}” deleted`);
@@ -150,7 +156,7 @@ export function FolderRail({
               )}
               {renamingId !== f.id && (
                 <>
-                  <button type="button" className={styles.rowAction} aria-label={`Delete ${f.name}`} onClick={() => onDelete(f)}>
+                  <button type="button" className={styles.rowAction} aria-label={`Delete ${f.name}`} onClick={() => void onDelete(f)}>
                     <Trash size={14} />
                   </button>
                   <span className={styles.count}>{counts.byId[f.id] ?? 0}</span>

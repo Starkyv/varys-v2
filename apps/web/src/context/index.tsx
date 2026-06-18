@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
+import { ConfirmProvider } from "./confirm";
 import { RouterProvider } from "./router";
 import { RunDialogProvider } from "./run-dialog";
 import { ToastProvider } from "./toast";
@@ -8,6 +9,7 @@ import { UIProvider } from "./ui";
 export * from "./router";
 export * from "./ui";
 export * from "./toast";
+export * from "./confirm";
 export * from "./run-dialog";
 
 const queryClient = new QueryClient({
@@ -26,7 +28,9 @@ export function AppProviders({ children }: { children: ReactNode }) {
       <RouterProvider>
         <UIProvider>
           <ToastProvider>
-            <RunDialogProvider>{children}</RunDialogProvider>
+            <ConfirmProvider>
+              <RunDialogProvider>{children}</RunDialogProvider>
+            </ConfirmProvider>
           </ToastProvider>
         </UIProvider>
       </RouterProvider>

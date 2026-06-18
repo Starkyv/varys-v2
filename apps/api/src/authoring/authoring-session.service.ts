@@ -13,11 +13,23 @@ import {
   type TypedKind,
 } from "@varys/recorder";
 import type { Fingerprint, Rect, Step, Viewport, Wait } from "@varys/step-schema";
+import type { AuthoringDraftEvent, AuthoringFrame, AuthoringSessionSummary } from "@varys/review-contract";
 import { type Browser, type BrowserContext, chromium, type Locator, type Page } from "playwright-core";
+import { type Observable, Subject } from "rxjs";
 import { TestsService } from "../tests/tests.service";
 
 /** Default authoring viewport (desktop) when the caller doesn't specify one. */
 const DEFAULT_VIEWPORT: Viewport = { width: 1280, height: 800, deviceScaleFactor: 1 };
+
+/** Extra Chromium flags from VARYS_BROWSER_ARGS (comma-separated). In containers the
+ *  browser runs unprivileged with a small /dev/shm, so set
+ *  `--no-sandbox,--disable-dev-shm-usage`. Unset (local/dev) → no extra args. */
+function browserLaunchArgs(): string[] {
+  return (process.env.VARYS_BROWSER_ARGS ?? "")
+    .split(",")
+    .map((a) => a.trim())
+    .filter(Boolean);
+}
 
 /** One element in a perception snapshot — the handle Claude targets actions by. */
 export interface SnapshotNode {
@@ -82,6 +94,10 @@ interface SessionState {
   /** Reference screenshots captured at each checkpoint (name → PNG) — the promote-view
    *  previews, persisted on finish. A Map so a re-checkpointed name keeps the latest. */
   previews: Map<string, Buffer>;
+  /** Monotonic live-preview frame counter, and the latest frame so a viewer that subscribes
+   *  mid-session paints immediately (Slice 15 — Author with AI). */
+  frameSeq: number;
+  lastFrame?: AuthoringFrame;
 }
 
 export interface OpenSessionInput {
@@ -199,6 +215,11 @@ function collectSnapshot(): { nodes: SnapshotNode[] } {
 export class AuthoringSessionService {
   private readonly log = new Logger(AuthoringSessionService.name);
   private readonly sessions = new Map<string, SessionState>();
+  /** Live-preview frames across all sessions; the live-preview controller filters by sessionId.
+   *  A human-only channel — these frames are never fed to the model. */
+  private readonly liveFrames = new Subject<AuthoringFrame>();
+  /** Terminal authoring events (a Draft created on finish), for the web review hand-off. */
+  private readonly sessionEvents = new Subject<AuthoringDraftEvent>();
 
   constructor(@Inject(TestsService) private readonly tests: TestsService) {}
 
@@ -207,7 +228,7 @@ export class AuthoringSessionService {
     if (!startUrl) throw new BadRequestException("startUrl is required");
     const viewport: Viewport = { ...DEFAULT_VIEWPORT, ...input.viewport };
 
-    const browser = await chromium.launch({ headless: true });
+    const browser = await chromium.launch({ headless: true, args: browserLaunchArgs() });
     const context = await browser.newContext({
       viewport: { width: viewport.width, height: viewport.height },
       deviceScaleFactor: viewport.deviceScaleFactor,
@@ -237,9 +258,11 @@ export class AuthoringSessionService {
       pendingWaits: [],
       knownVariables: [],
       previews: new Map(),
+      frameSeq: 0,
     });
     this.log.log(`opened authoring session ${sessionId} on ${href}`);
     const { nodes } = await page.evaluate(collectSnapshot);
+    await this.emitFrame(sessionId, { type: "navigate" });
     return { sessionId, url: href, title: await page.title(), nodes };
   }
 
@@ -266,6 +289,7 @@ export class AuthoringSessionService {
     const guard = this.applyGuard(s, fpRaw, opts?.remedy);
     const step = this.withWaits(s, buildClick(guard?.fp ?? fpRaw));
     s.rec.push(step);
+    await this.emitFrame(sessionId, { type: "click" });
     return { ok: true, recorded: { type: "click" }, guard: guard?.note, snapshot: await this.snapshot(s, false) };
   }
 
@@ -301,6 +325,7 @@ export class AuthoringSessionService {
     }
     const href = s.page.url();
     s.rec.push(buildEntryNavigate(href, new URL(href).origin));
+    await this.emitFrame(sessionId, { type: "navigate" });
     return { ok: true, recorded: { type: "navigate" }, snapshot: await this.snapshot(s, false) };
   }
 
@@ -333,6 +358,7 @@ export class AuthoringSessionService {
     const step = this.withWaits(s, built);
     s.rec.push(step);
     this.trackVariable(s, step, value);
+    await this.emitFrame(sessionId, { type: "type" });
     return {
       ok: true,
       recorded: { type: "type", value: step.type === "type" ? step.value : undefined },
@@ -392,6 +418,7 @@ export class AuthoringSessionService {
       preview = await locator.screenshot();
     }
     s.previews.set(name, preview);
+    await this.emitFrame(sessionId, { type: "screenshot", checkpoint: name });
     return { ok: true, recorded: { type: "screenshot", checkpoint: name }, snapshot: await this.snapshot(s, false) };
   }
 
@@ -401,6 +428,7 @@ export class AuthoringSessionService {
     const checkpointCount = s.rec.checkpointCount();
     const previews = [...s.previews].map(([checkpointName, bytes]) => ({ checkpointName, bytes }));
     const { id, version } = await this.tests.createDraft(definition, { intent: s.intent, previews });
+    this.sessionEvents.next({ sessionId, testId: id, version, checkpointCount, name: s.name });
     await this.teardown(sessionId);
     this.log.log(`finished authoring session ${sessionId} → draft ${id} (v${version})`);
     return {
@@ -417,6 +445,42 @@ export class AuthoringSessionService {
   async abort(sessionId: string): Promise<{ ok: true }> {
     await this.teardown(sessionId);
     return { ok: true };
+  }
+
+  // ── live preview (Slice 15 — Author with AI) ────────────────────────────────────────
+
+  /** Live authoring frames across all sessions; the live-preview controller filters by
+   *  sessionId. Decoupled from the model's perception — frames are never sent to the model. */
+  liveFrames$(): Observable<AuthoringFrame> {
+    return this.liveFrames.asObservable();
+  }
+
+  /** Terminal authoring events (a Draft created on finish) — the web hands off to the review
+   *  queue when authoring completes. */
+  sessionEvents$(): Observable<AuthoringDraftEvent> {
+    return this.sessionEvents.asObservable();
+  }
+
+  /** The latest frame for a session, so a viewer subscribing mid-session paints immediately. */
+  latestFrame(sessionId: string): AuthoringFrame | undefined {
+    return this.sessions.get(sessionId)?.lastFrame;
+  }
+
+  /** Active Authoring Sessions, for the live-preview picker. */
+  async listSessions(): Promise<AuthoringSessionSummary[]> {
+    const out: AuthoringSessionSummary[] = [];
+    for (const [sessionId, s] of this.sessions) {
+      out.push({
+        sessionId,
+        name: s.name,
+        intent: s.intent,
+        url: s.page.url(),
+        title: await s.page.title().catch(() => ""),
+        stepCount: s.rec.stepCount(),
+        checkpointCount: s.rec.checkpointCount(),
+      });
+    }
+    return out;
   }
 
   // ── internals ──────────────────────────────────────────────────────────────────────
@@ -451,6 +515,31 @@ export class AuthoringSessionService {
     const result: SnapshotResult = { url: s.page.url(), title: await s.page.title(), nodes };
     if (screenshot) result.screenshot = (await s.page.screenshot()).toString("base64");
     return result;
+  }
+
+  /** Capture a live-preview frame after a mutating tool and publish it. Best-effort: a failed
+   *  screenshot is logged and swallowed so it can never disrupt the Authoring Session. This is a
+   *  human-only channel (the web live-preview pane) — separate from what the model perceives. */
+  private async emitFrame(sessionId: string, recorded: AuthoringFrame["recorded"]): Promise<void> {
+    const s = this.sessions.get(sessionId);
+    if (!s) return;
+    try {
+      const png = await s.page.screenshot();
+      const frame: AuthoringFrame = {
+        sessionId,
+        seq: (s.frameSeq += 1),
+        url: s.page.url(),
+        title: await s.page.title().catch(() => ""),
+        screenshot: `data:image/png;base64,${png.toString("base64")}`,
+        recorded,
+        stepCount: s.rec.stepCount(),
+        checkpointCount: s.rec.checkpointCount(),
+      };
+      s.lastFrame = frame;
+      this.liveFrames.next(frame);
+    } catch (err) {
+      this.log.warn(`live frame capture failed for ${sessionId}: ${(err as Error).message}`);
+    }
   }
 
   /** Drain pending waits onto a freshly-built step's `waitBefore` (navigate has none). */

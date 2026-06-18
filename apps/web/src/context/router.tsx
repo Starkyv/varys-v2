@@ -22,6 +22,7 @@ export type NavKey =
   | "dashboard"
   | "tests"
   | "drafts"
+  | "author"
   | "suites"
   | "runs"
   | "suiteRuns"
@@ -32,6 +33,7 @@ export type Route =
   | { name: "dashboard" }
   | { name: "tests" }
   | { name: "drafts" }
+  | { name: "author" }
   | { name: "suites" }
   | { name: "runs" }
   | { name: "suiteRuns"; suiteRunId?: string }
@@ -44,6 +46,7 @@ const VIEW_PARAM: Record<NavKey, string> = {
   dashboard: "dashboard",
   tests: "tests",
   drafts: "drafts",
+  author: "author",
   suites: "suites",
   runs: "runs",
   suiteRuns: "suite-runs",
@@ -134,6 +137,8 @@ export function routeHeading(route: Route): { title: string; subtitle: string } 
       return { title: "Tests", subtitle: "Organize, file and run your recordings" };
     case "drafts":
       return { title: "Review queue", subtitle: "AI-authored drafts awaiting review & promotion" };
+    case "author":
+      return { title: "Author with AI", subtitle: "Watch an AI authoring session drive your app, live" };
     case "suites":
       return { title: "Suites", subtitle: "Saved selections you run against environments" };
     case "runs":

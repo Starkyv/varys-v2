@@ -1,0 +1,1000 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Varys — Visual testing that writes itself</title>
+<meta name="description" content="Varys: visual-regression test automation. Record → replay → diff, with an AI authoring layer that drives a live browser to write your tests." />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@100..900&family=Geist+Mono:wght@300..700&display=swap" rel="stylesheet" />
+
+<style>
+/* ============================================================
+   Design tokens — sourced from design/figma.md
+   ============================================================ */
+:root{
+  --primary:#000000;        --on-primary:#ffffff;
+  --ink:#000000;            --canvas:#ffffff;
+  --inverse-canvas:#000000; --inverse-ink:#ffffff;
+  --hairline:#e6e6e6;       --hairline-soft:#f1f1f1;  --surface-soft:#f7f7f5;
+
+  --block-lime:#dceeb1;  --block-lilac:#c5b0f4; --block-cream:#f4ecd6;
+  --block-pink:#efd4d4;  --block-mint:#c8e6cd;  --block-coral:#f3c9b6;
+  --block-navy:#1f1d3d;
+  --magenta:#ff3d8b;     --success:#1ea64a;     --amber:#d8911f;
+
+  --r-sm:6px; --r-md:8px; --r-lg:24px; --r-xl:32px; --pill:50px; --full:9999px;
+  --s-xxs:4px; --s-xs:8px; --s-sm:12px; --s-md:16px; --s-lg:24px; --s-xl:32px; --s-xxl:48px;
+
+  --sans:"Geist","SF Pro Display",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"Geist Mono","SF Mono",ui-monospace,Menlo,"Cascadia Mono",monospace;
+
+  /* per-slide overridable */
+  --slide-bg:var(--canvas);
+  --slide-ink:var(--ink);
+  --slide-soft:var(--surface-soft);
+  --slide-line:var(--hairline);
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:var(--sans);
+  color:var(--ink);
+  background:var(--canvas);
+  -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+  font-feature-settings:"kern" 1;
+  overflow:hidden;
+}
+
+/* ============================================================
+   Type scale
+   ============================================================ */
+.display-xl{font-size:clamp(44px,7vw,86px);font-weight:380;line-height:1.0;letter-spacing:-0.022em}
+.display-lg{font-size:clamp(36px,5.2vw,64px);font-weight:380;line-height:1.07;letter-spacing:-0.016em}
+.headline  {font-size:clamp(22px,2.6vw,28px);font-weight:560;line-height:1.3;letter-spacing:-0.012em}
+.subhead   {font-size:clamp(19px,2.3vw,26px);font-weight:360;line-height:1.36;letter-spacing:-0.01em}
+.card-title{font-size:clamp(18px,1.5vw,22px);font-weight:680;line-height:1.25;letter-spacing:-0.005em}
+.body-lg   {font-size:clamp(17px,1.5vw,20px);font-weight:360;line-height:1.45;letter-spacing:-0.006em}
+.body      {font-size:clamp(15px,1.25vw,18px);font-weight:360;line-height:1.5;letter-spacing:-0.008em}
+.body-sm   {font-size:clamp(13.5px,1.05vw,16px);font-weight:380;line-height:1.5;letter-spacing:-0.004em}
+.eyebrow{
+  font-family:var(--mono);font-size:clamp(11px,1vw,13.5px);font-weight:500;
+  line-height:1.2;letter-spacing:0.16em;text-transform:uppercase;
+}
+.caption{font-family:var(--mono);font-size:11px;font-weight:400;letter-spacing:0.1em;text-transform:uppercase}
+.measure{max-width:24ch}.measure-wide{max-width:42ch}.measure-xwide{max-width:56ch}
+.muted{opacity:.62}
+em{font-style:normal;background:linear-gradient(transparent 62%,color-mix(in srgb,var(--accent,var(--block-lime)) 70%,transparent) 0);padding:0 .04em}
+
+/* ============================================================
+   Deck shell + slides
+   ============================================================ */
+.deck{position:fixed;inset:0;overflow:hidden;background:var(--canvas)}
+.slide{
+  position:absolute;inset:0;
+  display:grid;place-items:center;
+  padding:clamp(64px,9vh,92px) clamp(28px,7vw,112px);
+  background:var(--slide-bg);color:var(--slide-ink);
+  opacity:0;visibility:hidden;pointer-events:none;
+  transition:opacity .45s ease;
+}
+.slide.is-active{opacity:1;visibility:visible;pointer-events:auto}
+.slide__inner{width:100%;max-width:1180px;margin:0 auto}
+
+/* color grounds */
+.slide[data-bg="cream"]{--slide-bg:var(--block-cream);--slide-soft:#fff;--slide-line:#e3d9bf}
+.slide[data-bg="lime"] {--slide-bg:var(--block-lime);--slide-soft:#fff;--slide-line:#c7dd96}
+.slide[data-bg="lilac"]{--slide-bg:var(--block-lilac);--slide-soft:#fff;--slide-line:#ab92ec}
+.slide[data-bg="pink"] {--slide-bg:var(--block-pink);--slide-soft:#fff;--slide-line:#e2bdbd}
+.slide[data-bg="mint"] {--slide-bg:var(--block-mint);--slide-soft:#fff;--slide-line:#aed7b5}
+.slide[data-bg="coral"]{--slide-bg:var(--block-coral);--slide-soft:#fff;--slide-line:#e6b59c}
+.slide[data-bg="navy"] {--slide-bg:var(--block-navy);--slide-ink:var(--inverse-ink);--slide-soft:rgba(255,255,255,.07);--slide-line:rgba(255,255,255,.16)}
+
+/* layout helpers */
+.stack{display:flex;flex-direction:column}
+.stack>*+*{margin-top:var(--gap,var(--s-lg))}
+.row{display:flex;align-items:center;gap:var(--s-sm);flex-wrap:wrap}
+.split{display:grid;grid-template-columns:1.05fr .95fr;gap:clamp(28px,4vw,64px);align-items:center}
+.split--text{grid-template-columns:1fr 1fr}
+.tag{display:inline-flex;align-items:center;gap:.5em;font-family:var(--mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;
+  border:1px solid var(--slide-line);border-radius:var(--full);padding:6px 13px}
+.kicker-num{font-family:var(--mono);font-size:12px;letter-spacing:.14em;opacity:.5}
+
+/* pills */
+.pill{display:inline-flex;align-items:center;gap:.55em;border-radius:var(--pill);
+  font-size:clamp(15px,1.3vw,18px);font-weight:480;letter-spacing:-0.01em;
+  padding:10px 22px;border:1px solid transparent;cursor:default;line-height:1.1;white-space:nowrap}
+.pill--solid{background:var(--primary);color:var(--on-primary)}
+.slide[data-bg="navy"] .pill--solid{background:var(--on-primary);color:var(--primary)}
+.pill--ghost{background:transparent;color:var(--slide-ink);border-color:var(--slide-line)}
+.pill--magenta{background:var(--magenta);color:#fff}
+.pill--soft{background:var(--slide-soft);color:var(--slide-ink);border:1px solid var(--slide-line)}
+.pill.sm{font-size:13px;padding:7px 14px}
+
+/* reveal animation */
+[data-reveal]{opacity:0}
+@keyframes reveal{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:no-preference){
+  .slide.is-active [data-reveal]{animation:reveal .6s cubic-bezier(.2,.7,.2,1) both;animation-delay:calc(var(--i,0)*68ms + 90ms)}
+}
+@media (prefers-reduced-motion:reduce){ .slide.is-active [data-reveal]{opacity:1} }
+
+/* ============================================================
+   Chrome (persistent UI)
+   ============================================================ */
+.progress{position:fixed;top:0;left:0;right:0;height:3px;z-index:60;background:transparent}
+.progress__bar{display:block;height:100%;width:0;background:var(--primary);transition:width .45s cubic-bezier(.2,.7,.2,1)}
+body.is-inverse .progress__bar{background:var(--block-lime)}
+
+.chrome{position:fixed;left:0;right:0;z-index:55;display:flex;align-items:center;justify-content:space-between;
+  padding:clamp(16px,2.4vh,26px) clamp(22px,5vw,52px);pointer-events:none;color:var(--ink);transition:color .4s ease}
+.chrome--top{top:0}.chrome--bot{bottom:0}
+body.is-inverse .chrome{color:var(--inverse-ink)}
+.chrome *{pointer-events:auto}
+
+.wordmark{display:inline-flex;align-items:center;gap:10px;font-weight:600;font-size:18px;letter-spacing:-0.02em;text-decoration:none;color:inherit}
+.wordmark .mk{width:15px;height:15px;border-radius:4px;background:var(--block-lime);box-shadow:inset 0 0 0 1.5px rgba(0,0,0,.16)}
+body.is-inverse .wordmark .mk{box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.25)}
+.counter{font-family:var(--mono);font-size:12.5px;letter-spacing:.12em}
+.counter b{font-weight:600}.counter span{opacity:.5}
+
+.hint{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;opacity:.5;transition:opacity .4s}
+.hint.gone{opacity:0}
+.controls{display:flex;align-items:center;gap:10px}
+.navbtn{width:44px;height:44px;border-radius:var(--full);display:grid;place-items:center;cursor:pointer;
+  border:1px solid var(--hairline);background:var(--surface-soft);color:inherit;transition:transform .15s ease,background .2s ease,border-color .2s}
+.navbtn:hover{transform:translateY(-1px)}
+.navbtn:active{transform:translateY(0) scale(.96)}
+.navbtn:disabled{opacity:.32;cursor:not-allowed;transform:none}
+.navbtn svg{width:18px;height:18px;display:block}
+body.is-inverse .navbtn{background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.2)}
+.navbtn.wide{width:auto;padding:0 16px;gap:8px;font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase}
+
+/* ============================================================
+   Slide 1 — cover
+   ============================================================ */
+.cover__inner{max-width:1180px}
+.marquee{position:relative;overflow:hidden;border-top:1px solid var(--ink);border-bottom:1px solid var(--ink);
+  background:var(--inverse-canvas);color:var(--inverse-ink);height:38px;display:flex;align-items:center;margin-top:var(--s-xl)}
+.marquee__track{display:flex;gap:0;white-space:nowrap;will-change:transform}
+@media (prefers-reduced-motion:no-preference){.marquee__track{animation:marq 26s linear infinite}}
+@keyframes marq{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+.marquee__track span{font-family:var(--mono);font-size:12px;letter-spacing:.12em;text-transform:uppercase;padding:0 24px;opacity:.92}
+.marquee__track span::after{content:"✦";margin-left:24px;opacity:.5}
+
+/* ============================================================
+   Loop flow (slide 4)
+   ============================================================ */
+.flow{display:grid;grid-template-columns:repeat(3,1fr);gap:clamp(14px,2vw,28px);position:relative;margin-top:6px}
+.node{background:var(--slide-soft);border:1px solid var(--slide-line);border-radius:var(--r-lg);padding:clamp(18px,2.2vw,30px);position:relative}
+.node__n{font-family:var(--mono);font-size:12px;letter-spacing:.12em;opacity:.5}
+.node h3{margin-top:10px;margin-bottom:8px}
+.node .ico{width:42px;height:42px;border-radius:var(--full);display:grid;place-items:center;background:var(--block-lime);margin-bottom:14px}
+.node:nth-child(2) .ico{background:var(--block-lilac)}
+.node:nth-child(3) .ico{background:var(--block-coral)}
+.node .ico svg{width:21px;height:21px}
+.flow__arrow{position:absolute;top:50%;transform:translateY(-50%);width:clamp(14px,2vw,28px);display:grid;place-items:center;z-index:2;opacity:.5}
+.flow__loopback{margin-top:18px;display:flex;align-items:center;gap:10px;justify-content:center;font-family:var(--mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.6}
+.flow__loopback .ln{height:1px;flex:1;background:var(--slide-line);max-width:120px}
+
+/* ============================================================
+   AI session console (slide 6)
+   ============================================================ */
+.console{background:#15132b;border:1px solid rgba(255,255,255,.12);border-radius:var(--r-lg);overflow:hidden;font-family:var(--mono);
+  box-shadow:0 24px 60px rgba(0,0,0,.45)}
+.console__bar{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.03)}
+.console__bar .dot{width:11px;height:11px;border-radius:50%;background:#3a3760}
+.console__bar .dot:nth-child(1){background:#ff5f57}.console__bar .dot:nth-child(2){background:#febc2e}.console__bar .dot:nth-child(3){background:#28c840}
+.console__bar .ttl{margin-left:8px;font-size:11.5px;letter-spacing:.1em;color:rgba(255,255,255,.5);text-transform:uppercase}
+.console__body{padding:18px 20px;font-size:clamp(11.5px,1.05vw,14px);line-height:1.85;color:#cfd0e6;min-height:0}
+.cl{display:grid;grid-template-columns:auto auto 1fr;gap:0 14px;white-space:nowrap}
+.cl .who{color:#8a86c9}.cl .who.varys{color:#7fd9a6}
+.cl .act{color:#e8e6ff;font-weight:500}
+.cl .val{color:#c5b0f4;overflow:hidden;text-overflow:ellipsis}
+.cl .ok{color:#28c840}.cl .px{color:var(--magenta)}
+.cl.draft{margin-top:6px;color:#fff}
+.cursor{display:inline-block;width:8px;height:15px;background:var(--block-lime);vertical-align:-2px;animation:blink 1s steps(2) infinite}
+@keyframes blink{50%{opacity:0}}
+
+/* ============================================================
+   Diff comparator (slide 11)
+   ============================================================ */
+.compare-wrap{display:grid;grid-template-columns:1fr;gap:18px;justify-items:center}
+.compare{position:relative;width:min(560px,100%);aspect-ratio:16/10;border-radius:var(--r-lg);overflow:hidden;
+  border:1px solid var(--hairline);background:#fff;user-select:none;touch-action:none}
+.scr{position:absolute;inset:0;width:560px;height:350px}
+.compare__base{inset:0}
+.compare__top{inset:0;width:var(--pos,55%);overflow:hidden;border-right:2px solid var(--magenta)}
+.compare__top .scr{left:0}
+.compare.onion .compare__top{width:100%!important;border-right:0;opacity:.5;mix-blend-mode:multiply}
+.compare.side .compare__top{width:50%!important;border-right:1px dashed var(--hairline)}
+.handle{position:absolute;top:0;bottom:0;left:var(--pos,55%);width:34px;transform:translateX(-50%);cursor:ew-resize;z-index:10;display:grid;place-items:center}
+.compare.onion .handle,.compare.side .handle{display:none}
+.handle::before{content:"";position:absolute;top:0;bottom:0;width:2px;background:var(--magenta)}
+.handle .grip{width:34px;height:34px;border-radius:50%;background:var(--magenta);color:#fff;display:grid;place-items:center;
+  box-shadow:0 4px 14px rgba(0,0,0,.25);font-size:13px}
+.lbl{position:absolute;top:10px;font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+  background:rgba(0,0,0,.72);color:#fff;padding:4px 9px;border-radius:var(--full);z-index:5}
+.lbl.l{left:10px}.lbl.r{right:10px}
+.compare.onion .lbl,.compare.side .lbl.dynamic{display:none}
+/* diff highlights sit ON the changed elements (perfectly aligned, always visible on the baseline layer) */
+.compare__base .price,.compare__base .cta{position:relative}
+.compare.diff .compare__base .price{outline:2px solid var(--magenta);outline-offset:4px;border-radius:5px;background:color-mix(in srgb,var(--magenta) 12%,#fff)}
+.compare.diff .compare__base .cta{outline:2px solid var(--magenta);outline-offset:4px}
+.compare.diff .compare__base .price::after,.compare.diff .compare__base .cta::after{
+  content:"Δ";position:absolute;top:-11px;left:-12px;background:var(--magenta);color:#fff;font-family:var(--mono);font-size:10px;
+  width:19px;height:19px;border-radius:50%;display:grid;place-items:center;z-index:9}
+.cmp-controls{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+.seg{display:inline-flex;background:var(--surface-soft);border:1px solid var(--hairline);border-radius:var(--full);padding:3px}
+.seg button{border:0;background:transparent;font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+  padding:7px 14px;border-radius:var(--full);cursor:pointer;color:var(--ink);transition:background .2s}
+.seg button[aria-pressed="true"]{background:var(--primary);color:#fff}
+.btnpair{display:flex;gap:10px}
+.resolve{position:relative}
+.flash{position:absolute;inset:0;display:grid;place-items:center;background:var(--success);color:#fff;border-radius:var(--full);
+  font-weight:520;opacity:0;transform:scale(.96);transition:opacity .25s,transform .25s;pointer-events:none}
+.resolve.done .flash{opacity:1;transform:scale(1)}
+
+/* the mock product screens drawn in CSS */
+.scr{background:#fff;font-family:var(--sans);color:#111}
+.scr .top{height:46px;border-bottom:1px solid #eee;display:flex;align-items:center;gap:8px;padding:0 18px}
+.scr .top .b{width:9px;height:9px;border-radius:50%;background:#dcdce0}
+.scr .top .nav{margin-left:auto;display:flex;gap:14px}
+.scr .top .nav i{width:34px;height:8px;border-radius:4px;background:#e7e7ea;display:block}
+.scr .main{display:grid;grid-template-columns:150px 1fr;gap:18px;padding:20px 18px}
+.scr .ph{height:150px;border-radius:10px;background:linear-gradient(135deg,#eef0ee,#e3e7ea)}
+.scr .ttl{font-weight:680;font-size:18px;letter-spacing:-.01em}
+.scr .row2{display:flex;align-items:center;gap:10px;margin-top:10px}
+.scr .price{font-weight:700;font-size:26px;letter-spacing:-.02em}
+.scr .badge{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:#fff;background:var(--success);
+  padding:5px 10px;border-radius:var(--full)}
+.scr .lines{margin-top:14px;display:flex;flex-direction:column;gap:7px}
+.scr .lines i{height:8px;border-radius:4px;background:#ececf0;display:block}
+.scr .lines i:nth-child(2){width:88%}.scr .lines i:nth-child(3){width:74%}
+.scr .cta{margin-top:16px;display:inline-block;background:#000;color:#fff;font-weight:500;font-size:13px;padding:10px 22px;border-radius:var(--pill)}
+/* the "actual" (regressed) variant — two clean, obvious changes: price + CTA */
+.scr--actual .price{color:var(--magenta)}
+.scr--actual .cta{background:#cfcfd4;color:#111;transform:translateX(14px)}
+
+/* ============================================================
+   Dashboard matrix (slide 16)
+   ============================================================ */
+.matrix{width:100%;border:1px solid var(--hairline);border-radius:var(--r-lg);overflow:hidden;background:#fff}
+.matrix table{width:100%;border-collapse:collapse;font-size:clamp(12px,1.1vw,15px)}
+.matrix th,.matrix td{padding:clamp(10px,1.4vw,16px) clamp(8px,1.2vw,16px);text-align:center;border-bottom:1px solid var(--hairline-soft)}
+.matrix thead th{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#666;font-weight:500;background:var(--surface-soft)}
+.matrix tbody tr:last-child td{border-bottom:0}
+.matrix th.rowh{text-align:left;font-family:var(--sans);font-weight:520;font-size:clamp(13px,1.1vw,16px);letter-spacing:-.01em;color:#111;text-transform:none}
+.cell{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:var(--full);position:relative}
+.cell .d{width:11px;height:11px;border-radius:50%}
+.cell.pass{background:color-mix(in srgb,var(--success) 14%,#fff)} .cell.pass .d{background:var(--success)}
+.cell.diff{background:color-mix(in srgb,var(--amber) 18%,#fff)} .cell.diff .d{background:var(--amber)}
+.cell.fail{background:color-mix(in srgb,var(--magenta) 14%,#fff)} .cell.fail .d{background:var(--magenta)}
+.cell.run{background:#eef} .cell.run .d{background:#5b6dff;animation:pulse 1.3s ease-in-out infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(91,109,255,.5)}50%{box-shadow:0 0 0 6px rgba(91,109,255,0)}}
+.spark{vertical-align:middle}
+.legend{display:flex;gap:18px;flex-wrap:wrap;margin-top:16px;font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase}
+.legend span{display:inline-flex;align-items:center;gap:7px}.legend i{width:10px;height:10px;border-radius:50%;display:inline-block}
+
+/* ============================================================
+   Generic feature cards / grids
+   ============================================================ */
+.cards{display:grid;gap:16px}
+.cards.c2{grid-template-columns:1fr 1fr}
+.cards.c3{grid-template-columns:repeat(3,1fr)}
+.cards.c4{grid-template-columns:repeat(4,1fr)}
+.fcard{background:var(--slide-soft);border:1px solid var(--slide-line);border-radius:var(--r-lg);padding:clamp(16px,2vw,24px)}
+.fcard .ic{width:38px;height:38px;border-radius:var(--full);display:grid;place-items:center;background:var(--slide-bg);border:1px solid var(--slide-line);margin-bottom:14px}
+.fcard .ic svg{width:19px;height:19px}
+.fcard h3{margin-bottom:7px}
+.gloss .fcard{padding:clamp(14px,1.6vw,20px)}
+.gloss .term{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--magenta);margin-bottom:9px}
+.varlist{display:flex;flex-direction:column;gap:12px}
+.varrow{display:flex;align-items:center;gap:14px;background:var(--slide-soft);border:1px solid var(--slide-line);border-radius:var(--r-md);padding:13px 16px}
+.varrow code{font-family:var(--mono);font-size:clamp(12px,1.1vw,15px);background:var(--slide-bg);border:1px solid var(--slide-line);
+  padding:5px 10px;border-radius:6px;white-space:nowrap}
+.varrow .arrow{opacity:.4}
+.signals{display:flex;flex-wrap:wrap;gap:8px}
+.signals .s{font-family:var(--mono);font-size:12px;letter-spacing:.04em;border:1px solid var(--slide-line);border-radius:var(--full);
+  padding:6px 13px;background:var(--slide-soft)}
+.signals .s.top{background:var(--block-lime);border-color:#c7dd96}
+
+.bignum{font-size:clamp(40px,6vw,72px);font-weight:380;letter-spacing:-.02em;line-height:1}
+.steps{display:flex;flex-direction:column;gap:14px}
+.step{display:grid;grid-template-columns:auto 1fr;gap:16px;align-items:start}
+.step .num{font-family:var(--mono);font-size:13px;width:30px;height:30px;border-radius:var(--full);display:grid;place-items:center;
+  border:1px solid var(--slide-line);background:var(--slide-soft);flex:none}
+
+/* misc */
+svg.stroke{fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.noscript{position:fixed;inset:0;display:grid;place-items:center;background:var(--block-lime);text-align:center;padding:40px;z-index:99}
+
+/* responsive */
+@media (max-width:880px){
+  .split,.split--text{grid-template-columns:1fr;gap:24px}
+  .cards.c3,.cards.c4{grid-template-columns:1fr 1fr}
+  .flow{grid-template-columns:1fr}
+  .flow__arrow{display:none}
+  .slide{padding:84px 24px 92px}
+  .console__body .cl{grid-template-columns:auto 1fr;white-space:normal}
+  .console__body .cl .val{grid-column:1/-1}
+}
+@media (max-width:560px){
+  .cards.c3,.cards.c4,.cards.c2{grid-template-columns:1fr}
+  .hint{display:none}
+  .matrix{overflow-x:auto}
+}
+</style>
+</head>
+<body>
+
+<noscript><div class="noscript"><div><h1 class="display-lg">Varys</h1><p class="body" style="margin-top:12px">This presentation needs JavaScript enabled to navigate between slides.</p></div></div></noscript>
+
+<!-- progress -->
+<div class="progress"><span class="progress__bar" id="bar"></span></div>
+
+<!-- top chrome -->
+<header class="chrome chrome--top">
+  <a class="wordmark" href="#1"><span class="mk"></span>Varys</a>
+  <div class="counter"><b id="cur">01</b> <span>/ <span id="tot">20</span></span></div>
+</header>
+
+<!-- bottom chrome -->
+<nav class="chrome chrome--bot">
+  <span class="hint" id="hint">← → to navigate · F for fullscreen</span>
+  <div class="controls">
+    <button class="navbtn wide" id="fs" aria-label="Toggle fullscreen"><svg class="stroke" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>Full</button>
+    <button class="navbtn" id="prev" aria-label="Previous slide"><svg class="stroke" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+    <button class="navbtn" id="next" aria-label="Next slide"><svg class="stroke" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
+  </div>
+</nav>
+
+<main class="deck" id="deck">
+
+  <!-- 1 · COVER ============================================ -->
+  <section class="slide is-active" data-bg="white">
+    <div class="slide__inner cover__inner">
+      <p class="eyebrow" data-reveal style="--i:0">Varys · Visual testing platform</p>
+      <h1 class="display-xl" data-reveal style="--i:1;margin-top:18px;max-width:15ch">Tests that <em style="--accent:var(--block-lime)">write&nbsp;themselves.</em></h1>
+      <p class="subhead measure-xwide muted" data-reveal style="--i:2;margin-top:22px">
+        Varys watches your product's screens after every change — and now it can build the tests for you, by driving a real browser like a person would.</p>
+      <div class="row" data-reveal style="--i:3;margin-top:26px">
+        <span class="pill pill--soft sm">Record</span>
+        <span class="caption" style="opacity:.4">→</span>
+        <span class="pill pill--soft sm">Replay</span>
+        <span class="caption" style="opacity:.4">→</span>
+        <span class="pill pill--soft sm">Diff</span>
+      </div>
+      <div class="marquee" data-reveal style="--i:4">
+        <div class="marquee__track">
+          <span>Visual regression</span><span>AI authoring</span><span>Self-healing locators</span><span>Per-environment baselines</span><span>Scheduled runs</span><span>Trace timeline</span>
+          <span>Visual regression</span><span>AI authoring</span><span>Self-healing locators</span><span>Per-environment baselines</span><span>Scheduled runs</span><span>Trace timeline</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2 · PROBLEM ========================================== -->
+  <section class="slide" data-bg="cream">
+    <div class="slide__inner">
+      <p class="eyebrow" data-reveal style="--i:0">The problem</p>
+      <h2 class="display-lg" data-reveal style="--i:1;margin-top:16px;max-width:18ch">Your screens break in ways code tests never see.</h2>
+      <div class="cards c3" data-reveal style="--i:2;margin-top:36px">
+        <div class="fcard">
+          <div class="ic"><svg class="stroke" viewBox="0 0 24 24"><path d="M3 3h18v14H3zM3 21h18"/><path d="M8 9l3 3-3 3"/></svg></div>
+          <h3 class="card-title">It still ships green</h3>
+          <p class="body-sm muted" style="margin-top:6px">A shifted button, a vanished logo, a layout that collapsed on one customer — the unit tests pass anyway.</p>
+        </div>
+        <div class="fcard">
+          <div class="ic"><svg class="stroke" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg></div>
+          <h3 class="card-title">Eyeballs don't scale</h3>
+          <p class="body-sm muted" style="margin-top:6px">Manually checking every screen, every release, across every environment is the work nobody has time for.</p>
+        </div>
+        <div class="fcard">
+          <div class="ic"><svg class="stroke" viewBox="0 0 24 24"><path d="M12 2v4M12 18v4M2 12h4M18 12h4M5 5l3 3M16 16l3 3M19 5l-3 3M8 16l-3 3"/></svg></div>
+          <h3 class="card-title">Brittle to write</h3>
+          <p class="body-sm muted" style="margin-top:6px">Hand-written end-to-end tests are slow to author and snap the moment the UI moves an inch.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3 · WHAT IS VARYS ==================================== -->
+  <section class="slide" data-bg="white">
+    <div class="slide__inner" style="text-align:center">
+      <p class="eyebrow" data-reveal style="--i:0">In one line</p>
+      <h2 class="display-lg" data-reveal style="--i:1;margin:20px auto 0;max-width:24ch">
+        Varys records a journey through your app, replays it after every change, and shows you exactly what looks different.</h2>
+      <p class="body-lg muted" data-reveal style="--i:2;margin:26px auto 0;max-width:50ch">
+        It's <strong style="font-weight:520">visual-regression testing</strong> — automated. The screen is the assertion.</p>
+    </div>
+  </section>
+
+  <!-- 4 · THE LOOP ========================================= -->
+  <section class="slide" data-bg="mint">
+    <div class="slide__inner">
+      <p class="eyebrow" data-reveal style="--i:0">The core loop</p>
+      <h2 class="display-lg" data-reveal style="--i:1;margin-top:14px">Record → Replay → Diff</h2>
+      <div class="flow" data-reveal style="--i:2;margin-top:34px">
+        <div class="node">
+          <div class="ico"><svg class="stroke" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/></svg></div>
+          <p class="node__n">01 · Record</p>
+          <h3 class="card-title">Capture the journey</h3>
+          <p class="body-sm muted" style="margin-top:6px">Click through your app once. Varys saves the steps and the screens worth watching.</p>
+          <div class="flow__arrow" style="right:calc(-1*clamp(14px,2vw,28px)/2 - 1px)"><svg class="stroke" viewBox="0 0 24 24" width="22"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
+        </div>
+        <div class="node">
+          <div class="ico"><svg class="stroke" viewBox="0 0 24 24"><path d="M5 3l14 9-14 9z"/></svg></div>
+          <p class="node__n">02 · Replay</p>
+          <h3 class="card-title">Re-walk it in the cloud</h3>
+          <p class="body-sm muted" style="margin-top:6px">A fresh browser repeats every step server-side and photographs each screen.</p>
+          <div class="flow__arrow" style="right:calc(-1*clamp(14px,2vw,28px)/2 - 1px)"><svg class="stroke" viewBox="0 0 24 24" width="22"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
+        </div>
+        <div class="node">
+          <div class="ico"><svg class="stroke" viewBox="0 0 24 24"><path d="M12 3v18"/><path d="M5 7h4M5 12h4M5 17h4" /><path d="M15 7h4M15 12h4M15 17h4"/></svg></div>
+          <p class="node__n">03 · Diff</p>
+          <h3 class="card-title">Compare to known-good</h3>
+          <p class="body-sm muted" style="margin-top:6px">Each new photo is matched against the approved baseline. Differences light up.</p>
+        </div>
+      </div>
+      <div class="flow__loopback" data-reveal style="--i:3"><span class="ln"></span><svg class="stroke" viewBox="0 0 24 24" width="16"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 3v4h4"/></svg> Repeats automatically after every change <span class="ln"></span></div>
+    </div>
+  </section>
+
+  <!-- 5 · AI HERO ========================================== -->
+  <section class="slide" data-bg="lilac">
+    <div class="slide__inner">
+      <p class="eyebrow" data-reveal style="--i:0">The part that changes everything</p>
+      <h2 class="display-xl" data-reveal style="--i:1;margin-top:14px;max-width:16ch">Now Claude<br>writes the tests.</h2>
+      <p class="subhead measure-xwide" data-reveal style="--i:2;margin-top:22px">
+        Point Claude at your app — with a spec, a Figma, or just a URL — and it explores the live product like a person would,
+        <strong style="font-weight:520">while Varys records every step it takes.</strong></p>
+      <div class="row" data-reveal style="--i:3;margin-top:26px">
+        <span class="tag">No selectors written by hand</span>
+        <span class="tag">No flows scripted by hand</span>
+        <span class="tag">You review, not author</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 6 · AI SESSION ======================================= -->
+  <section class="slide" data-bg="navy">
+    <div class="slide__inner">
+      <p class="eyebrow" data-reveal style="--i:0">Authoring session</p>
+      <div class="split" style="margin-top:18px">
+        <div class="stack" style="--gap:18px">
+          <h2 class="display-lg" data-reveal style="--i:1">It drives a real browser.</h2>
+          <p class="body-lg" data-reveal style="--i:2" >An <strong style="font-weight:540">authoring session</strong> is a live browser, opened in the cloud, that Claude controls through Varys's tools — looking at the page, then acting on it.</p>
+          <div class="steps" data-reveal style="--i:3">
+            <div class="step"><span class="num">1</span><p class="body-sm"><strong style="font-weight:520">Perceive</strong> — it reads the page (accessibility tree + screenshot), not the source code.</p></div>
+            <div class="step"><span class="num">2</span><p class="body-sm"><strong style="font-weight:520">Act</strong> — clicks, types, navigates — exactly the gestures a human recorder makes.</p></div>
+            <div class="step"><span class="num">3</span><p class="body-sm"><strong style="font-weight:520">Mark</strong> — drops checkpoints on the screens that matter, then saves a draft.</p></div>
+          </div>
+        </div>
+        <div data-reveal style="--i:2">
+          <div class="console">
+            <div class="console__bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="ttl">varys · authoring session</span></div>
+            <div class="console__body">
+              <div class="cl"><span class="who varys">varys</span><span class="act">open_session</span><span class="val">app.datagenie.ai <span class="ok">✓ live</span></span></div>
+              <div class="cl"><span class="who">claude</span><span class="act">observe</span><span class="val">"login screen — email + password"</span></div>
+              <div class="cl"><span class="who">claude</span><span class="act">type</span><span class="val">email → {{secret:user}}</span></div>
+              <div class="cl"><span class="who">claude</span><span class="act">type</span><span class="val">password → {{secret:password}}</span></div>
+              <div class="cl"><span class="who">claude</span><span class="act">click</span><span class="val">"Sign in"</span></div>
+              <div class="cl"><span class="who varys">varys</span><span class="act">wait</span><span class="val">network idle <span class="ok">✓</span></span></div>
+              <div class="cl"><span class="who">claude</span><span class="act">observe</span><span class="val">"dashboard loaded"</span></div>
+              <div class="cl"><span class="who">claude</span><span class="act">checkpoint</span><span class="val">"dashboard" <span class="px">📷 captured</span></span></div>
+              <div class="cl draft"><span class="who varys">varys</span><span class="act">finish</span><span class="val">draft saved · 7 steps → review <span class="cursor"></span></span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7 · DRAFT → PROMOTE ================================== -->
+  <section class="slide" data-bg="lime">
+    <div class="slide__inner">
+      <p class="eyebrow" data-reveal style="--i:0">The one human checkpoint</p>
+      <h2 class="display-lg" data-reveal style="--i:1;margin-top:14px;max-width:20ch">AI proposes. You promote.</h2>
+      <div class="split" style="margin-top:34px">
+        <div class="fcard" data-reveal style="--i:2;background:#fff">
+          <span class="pill pill--soft sm" style="background:var(--block-cream);border-color:#e3d9bf">Draft</span>
+          <h3 class="headline" style="margin-top:14px">Parked for review</h3>
+          <p class="body muted" style="margin-top:8px">Every AI-authored test arrives as a <strong style="font-weight:520">draft</strong> — fully formed, but kept out of your suites and schedules until a person says yes. It waits in a review queue.</p>
+        </div>
+        <div class="fcard" data-reveal style="--i:3;background:#fff">
+          <span class="pill pill--solid sm">Promote</span>
+          <h3 class="headline" style="margin-top:14px">Make it live</h3>
+          <p class="body muted" style="margin-top:8px">Glance at it, tweak if needed, then <strong style="font-weight:520">promote</strong>: give it a home folder and tags. Now it runs with everything else. (Tests you record by hand are live from the start.)</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 8 · RECORD YOURSELF ================================== -->
+  <section class="slide" data-bg="pink">
+    <div class="slide__inner">
+      <div class="split">
+        <div class="stack" style="--gap:18px">
+          <p class="eyebrow" data-reveal style="--i:0">Or do it by hand</p>
+          <h2 class="display-lg" data-reveal style="--i:1">Prefer hands-on? Record it yourself.</h2>
+          <p class="body-lg measure-wide" data-reveal style="--i:2">A small Chrome extension rides along inside your page. Same engine, same result as the AI path — you're just the one clicking.</p>
+        </div>
+        <div class="steps" data-reveal style="--i:3">
+          <div class="step"><span class="num">▸</span><p class="body"><strong style="font-weight:520">Start recording</strong> — every click and keystroke is captured automatically.</p></div>
+          <div class="step"><span class="num">📷</span><p class="body"><strong style="font-weight:520">Capture a screen</strong> — point at any element to mark it as a checkpoint.</p></div>
+          <div class="step"><span class="num">✓</span><p class="body"><strong style="font-weight:520">Save</strong> — and it's a real, runnable test.</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 9 · RECORD (WHAT A TEST IS) ========================== -->
+  <section class="slide" data-bg="white">
+    <div class="slide__inner">
+      <p class="eyebrow" data-reveal style="--i:0">Record · what a test actually is</p>
+      <h2 class="display-lg" data-reveal style="--i:1;margin-top:14px;max-width:20ch">A test is a portable recipe — not a screenshot.</h2>
+      <div class="cards c3" data-reveal style="--i:2;margin-top:34px">
+        <div class="fcard">
+          <h3 class="card-title">Ordered steps</h3>
+          <p class="body-sm muted" style="margin-top:7px">Navigate, click, type, wait — the journey, in sequence.</p>
+        </div>
+        <div class="fcard">
+          <h3 class="card-title">Element fingerprints</h3>
+          <p class="body-sm muted" style="margin-top:7px">How to find each element again, even if the page shifts. <span style="opacity:.7">(More soon.)</span></p>
+        </div>
+        <div class="fcard">
+          <h3 class="card-title">Checkpoints</h3>
+          <p class="body-sm muted" style="margin-top:7px">The named screens to photograph and compare. The unit of review.</p>
+        </div>
+      </div>
+      <p class="body-lg" data-reveal style="--i:3;margin-top:30px;max-width:52ch">And it's <em style="--accent:var(--block-lime)">environment-agnostic</em> — no hard-coded URLs, logins, or data baked in. Record once; run it anywhere.</p>
+    </div>
+  </section>
+
+  <!-- 10 · REPLAY ========================================== -->
+  <section class="slide" data-bg="cream">
+    <div class="slide__inner">
+      <div class="split">
+        <div class="stack" style="--gap:18px">
+          <p class="eyebrow" data-reveal style="--i:0">Replay · the run</p>
+          <h2 class="display-lg" data-reveal style="--i:1">Varys re-walks the journey, server-side.</h2>
+          <p class="body-lg measure-wide" data-reveal style="--i:2">A <strong style="font-weight:540">run</strong> is one replay of a saved test against one environment. A fresh cloud browser logs in clean, repeats every step, and snaps a photo at each checkpoint.</p>
+        </div>
+        <div class="cards" data-reveal style="--i:3;grid-template-columns:1fr">
+          <div class="fcard" style="background:#fff">
+            <h3 class="card-title">Identical every time</h3>
+            <p class="body-sm muted" style="margin-top:7px">Same browser build, same fonts, same window size, animations frozen — so a difference is a real difference, never noise.</p>
+          </div>
+          <div class="fcard" style="background:#fff">
+            <h3 class="card-title">Smart waiting</h3>
+            <p class="body-sm muted" style="margin-top:7px">It waits for the page to settle before each shot — no flaky "too early" captures.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 11 · DIFF VIEWER (INTERACTIVE) ======================= -->
+  <section class="slide" data-bg="white">
+    <div class="slide__inner">
+      <div class="split" style="grid-template-columns:.82fr 1.18fr">
+        <div class="stack" style="--gap:16px">
+          <p class="eyebrow" data-reveal style="--i:0">Diff · see what changed</p>
+          <h2 class="display-lg" data-reveal style="--i:1">Spot it in a glance.</h2>
+          <p class="body measure-wide" data-reveal style="--i:2">Drag the handle to compare the <strong style="font-weight:520">baseline</strong> against the latest run. Then make one call.</p>
+          <div class="btnpair resolve" data-reveal style="--i:3" id="resolve">
+            <button class="pill pill--solid" id="approve">Approve → new baseline</button>
+            <button class="pill pill--ghost" id="reject">Reject → regression</button>
+            <span class="flash">Baseline updated ✓</span>
+          </div>
+          <p class="body-sm muted" data-reveal style="--i:4">Also: side-by-side, overlay, onion-skin · draw masks over noisy regions · tune sensitivity.</p>
+        </div>
+
+        <div class="compare-wrap" data-reveal style="--i:2">
+          <div class="compare diff" id="cmp" style="--pos:56%">
+            <div class="lbl r dynamic">Baseline</div>
+            <div class="lbl l dynamic">Actual</div>
+            <!-- baseline layer -->
+            <div class="compare__base scr" style="position:absolute">
+              <div class="top"><span class="b"></span><span class="b"></span><span class="b"></span><span class="nav"><i></i><i></i></span></div>
+              <div class="main">
+                <div class="ph"></div>
+                <div>
+                  <div class="ttl">Aurora Headphones</div>
+                  <div class="row2"><span class="price">$49.00</span><span class="badge">In stock</span></div>
+                  <div class="lines"><i></i><i></i><i></i></div>
+                  <span class="cta">Add to cart</span>
+                </div>
+              </div>
+            </div>
+            <!-- actual (regressed) layer, clipped -->
+            <div class="compare__top">
+              <div class="scr scr--actual">
+                <div class="top"><span class="b"></span><span class="b"></span><span class="b"></span><span class="nav"><i></i><i></i></span></div>
+                <div class="main">
+                  <div class="ph"></div>
+                  <div>
+                    <div class="ttl">Aurora Headphones</div>
+                    <div class="row2"><span class="price">$45.00</span><span class="badge">In stock</span></div>
+                    <div class="lines"><i></i><i></i><i></i></div>
+                    <span class="cta">Add to cart</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <!-- handle -->
+            <div class="handle" id="handle"><span class="grip">⟺</span></div>
+          </div>
+          <div class="cmp-controls" data-reveal style="--i:3">
+            <div class="seg" id="modes" role="group" aria-label="Compare mode">
+              <button data-mode="swipe" aria-pressed="true">Swipe</button>
+              <button data-mode="side" aria-pressed="false">Side&nbsp;by&nbsp;side</button>
+              <button data-mode="onion" aria-pressed="false">Onion-skin</button>
+            </div>
+            <div class="seg">
+              <button id="toggleDiff" aria-pressed="true">Show&nbsp;diff</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 12 · BASELINES ======================================= -->
+  <section class="slide" data-bg="coral">
+    <div class="slide__inner">
+      <p class="eyebrow" data-reveal style="--i:0">Baseline</p>
+      <h2 class="display-lg" data-reveal style="--i:1;margin-top:14px;max-width:18ch">The "known-good" picture — one per environment.</h2>
+      <div class="split" style="margin-top:32px">
+        <p class="body-lg measure-wide" data-reveal style="--i:2">A <strong style="font-weight:540">baseline</strong> is the reference image every future run is compared to. Approve a screen once, and it becomes the standard.</p>
+        <div class="fcard" data-reveal style="--i:3;background:#fff">
+          <h3 class="card-title">Why Varys makes the baseline — not your laptop</h3>
+          <p class="body-sm muted" style="margin-top:8px">Your machine and the cloud renderer draw fonts slightly differently. So the very first run generates the golden images itself; you just eyeball and approve them once. Recording ≠ baseline.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 13 · FINGERPRINTS / SELF-HEAL ======================== -->
+  <section class="slide" data-bg="navy">
+    <div class="slide__inner">
+      <p class="eyebrow" data-reveal style="--i:0">Robustness</p>
+      <h2 class="display-lg" data-reveal style="--i:1;margin-top:14px;max-width:20ch">Tests that bend instead of break.</h2>
+      <p class="body-lg measure-xwide" data-reveal style="--i:2;margin-top:18px">Most tests remember an element by a single brittle selector. Varys remembers it by <strong style="font-weight:540">many signals at once</strong> — a <strong style="font-weight:540">fingerprint</strong>:</p>
+      <div class="signals" data-reveal style="--i:3;margin-top:22px">
+        <span class="s top">role</span><span class="s top">visible text</span><span class="s">accessible name</span><span class="s">nearby labels</span>
+        <span class="s">tag</span><span class="s">attributes</span><span class="s">ancestor structure</span><span class="s">position</span><span class="s">bounding box</span>
+      </div>
+      <div class="cards c2" data-reveal style="--i:4;margin-top:28px">
+        <div class="fcard">
+          <h3 class="card-title">Self-heal</h3>
+          <p class="body-sm" style="margin-top:7px;opacity:.85">If the page shifts, Varys re-finds the element from the surviving signals and carries on — flagging it <em style="--accent:var(--block-lilac)">"low-confidence, review"</em> rather than failing outright.</p>
+        </div>
+        <div class="fcard">
+          <h3 class="card-title">Honest failure</h3>
+          <p class="body-sm" style="margin-top:7px;opacity:.85">If nothing matches with confidence, it stops and surfaces the element for a quick repair — never a silent wrong click.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 14 · ENVIRONMENTS / VARIABLES ======================== -->
+  <section class="slide" data-bg="lilac">
+    <div class="slide__inner">
+      <div class="split">
+        <div class="stack" style="--gap:16px">
+          <p class="eyebrow" data-reveal style="--i:0">Environments &amp; variables</p>
+          <h2 class="display-lg" data-reveal style="--i:1">Record once. Run everywhere.</h2>
+          <p class="body-lg measure-wide" data-reveal style="--i:2">Dev, demo, and every customer is just another <strong style="font-weight:540">environment</strong>. Varys swaps in the right address, login, and data automatically.</p>
+          <p class="body-sm" data-reveal style="--i:3"><strong style="font-weight:540">Secrets stay safe</strong> — encrypted, used only inside the runner, and scrubbed from every screenshot, video, and log.</p>
+        </div>
+        <div class="varlist" data-reveal style="--i:3">
+          <div class="varrow"><code>{{baseUrl}}</code><span class="arrow">→</span><span class="body-sm">the right address per environment</span></div>
+          <div class="varrow"><code>{{secret:password}}</code><span class="arrow">→</span><span class="body-sm">the vault login, never exposed</span></div>
+          <div class="varrow"><code>{{dataset}}</code><span class="arrow">→</span><span class="body-sm">env-specific data you choose</span></div>
+          <div class="row" style="margin-top:4px">
+            <span class="pill pill--soft sm">dev</span><span class="pill pill--soft sm">demo</span>
+            <span class="pill pill--soft sm">lnrs</span><span class="pill pill--soft sm">cfg</span><span class="pill pill--soft sm">carvana</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 15 · ORGANIZE ======================================== -->
+  <section class="slide" data-bg="pink">
+    <div class="slide__inner">
+      <p class="eyebrow" data-reveal style="--i:0">Organize</p>
+      <h2 class="display-lg" data-reveal style="--i:1;margin-top:14px">What to run × where to run.</h2>
+      <div class="cards c3" data-reveal style="--i:2;margin-top:34px">
+        <div class="fcard" style="background:#fff">
+          <div class="ic"><svg class="stroke" viewBox="0 0 24 24"><path d="M3 7h6l2 2h10v10H3z"/></svg></div>
+          <h3 class="card-title">Folders</h3>
+          <p class="body-sm muted" style="margin-top:6px">Where a test lives. One browsable home per test.</p>
+        </div>
+        <div class="fcard" style="background:#fff">
+          <div class="ic"><svg class="stroke" viewBox="0 0 24 24"><path d="M20 12l-8 8-9-9V3h8z"/><circle cx="7.5" cy="7.5" r="1.5" fill="currentColor" stroke="none"/></svg></div>
+          <h3 class="card-title">Tags</h3>
+          <p class="body-sm muted" style="margin-top:6px">How you slice it — <code style="font-family:var(--mono);font-size:.85em">release:5.0</code>, <code style="font-family:var(--mono);font-size:.85em">feature:dashboard</code>.</p>
+        </div>
+        <div class="fcard" style="background:#fff">
+          <div class="ic"><svg class="stroke" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg></div>
+          <h3 class="card-title">Suites</h3>
+          <p class="body-sm muted" style="margin-top:6px">A saved selection you run as one unit. <strong style="font-weight:520">A run = suite × environment.</strong></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 16 · DASHBOARD (MATRIX) ============================== -->
+  <section class="slide" data-bg="white">
+    <div class="slide__inner">
+      <p class="eyebrow" data-reveal style="--i:0">At a glance</p>
+      <h2 class="display-lg" data-reveal style="--i:1;margin-top:12px">Every test, every environment, one wall.</h2>
+      <div class="matrix" data-reveal style="--i:2;margin-top:26px">
+        <table>
+          <thead><tr><th class="rowh">Test</th><th>dev</th><th>demo</th><th>lnrs</th><th>cfg</th><th>carvana</th><th>Trend</th></tr></thead>
+          <tbody>
+            <tr><th class="rowh">Login flow</th>
+              <td><span class="cell pass"><span class="d"></span></span></td><td><span class="cell pass"><span class="d"></span></span></td>
+              <td><span class="cell pass"><span class="d"></span></span></td><td><span class="cell pass"><span class="d"></span></span></td>
+              <td><span class="cell pass"><span class="d"></span></span></td>
+              <td><svg class="spark" width="72" height="22" viewBox="0 0 72 22"><polyline fill="none" stroke="#1ea64a" stroke-width="1.6" points="0,16 12,15 24,16 36,14 48,15 60,13 72,14"/></svg></td></tr>
+            <tr><th class="rowh">Dashboard</th>
+              <td><span class="cell pass"><span class="d"></span></span></td><td><span class="cell pass"><span class="d"></span></span></td>
+              <td><span class="cell diff"><span class="d"></span></span></td><td><span class="cell pass"><span class="d"></span></span></td>
+              <td><span class="cell run"><span class="d"></span></span></td>
+              <td><svg class="spark" width="72" height="22" viewBox="0 0 72 22"><polyline fill="none" stroke="#d8911f" stroke-width="1.6" points="0,15 12,14 24,16 36,15 48,8 60,16 72,7"/></svg></td></tr>
+            <tr><th class="rowh">Search results</th>
+              <td><span class="cell pass"><span class="d"></span></span></td><td><span class="cell pass"><span class="d"></span></span></td>
+              <td><span class="cell pass"><span class="d"></span></span></td><td><span class="cell diff"><span class="d"></span></span></td>
+              <td><span class="cell pass"><span class="d"></span></span></td>
+              <td><svg class="spark" width="72" height="22" viewBox="0 0 72 22"><polyline fill="none" stroke="#1ea64a" stroke-width="1.6" points="0,14 12,15 24,13 36,14 48,12 60,13 72,12"/></svg></td></tr>
+            <tr><th class="rowh">Checkout</th>
+              <td><span class="cell pass"><span class="d"></span></span></td><td><span class="cell pass"><span class="d"></span></span></td>
+              <td><span class="cell pass"><span class="d"></span></span></td><td><span class="cell pass"><span class="d"></span></span></td>
+              <td><span class="cell fail"><span class="d"></span></span></td>
+              <td><svg class="spark" width="72" height="22" viewBox="0 0 72 22"><polyline fill="none" stroke="#ff3d8b" stroke-width="1.6" points="0,13 12,12 24,14 36,13 48,15 60,18 72,20"/></svg></td></tr>
+            <tr><th class="rowh">Report export</th>
+              <td><span class="cell pass"><span class="d"></span></span></td><td><span class="cell pass"><span class="d"></span></span></td>
+              <td><span class="cell pass"><span class="d"></span></span></td><td><span class="cell pass"><span class="d"></span></span></td>
+              <td><span class="cell pass"><span class="d"></span></span></td>
+              <td><svg class="spark" width="72" height="22" viewBox="0 0 72 22"><polyline fill="none" stroke="#1ea64a" stroke-width="1.6" points="0,15 12,14 24,15 36,14 48,14 60,13 72,13"/></svg></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="legend" data-reveal style="--i:3">
+        <span><i style="background:#1ea64a"></i>Passed</span>
+        <span><i style="background:#d8911f"></i>Diff · needs review</span>
+        <span><i style="background:#5b6dff"></i>Running</span>
+        <span><i style="background:#ff3d8b"></i>Failed</span>
+        <span class="muted">+ a live runs feed alongside</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 17 · SCHEDULES / ALERTS ============================== -->
+  <section class="slide" data-bg="mint">
+    <div class="slide__inner">
+      <div class="split">
+        <div class="stack" style="--gap:16px">
+          <p class="eyebrow" data-reveal style="--i:0">On autopilot</p>
+          <h2 class="display-lg" data-reveal style="--i:1">It checks while you sleep.</h2>
+          <p class="body-lg measure-wide" data-reveal style="--i:2">Put any suite on a schedule and Varys runs it on its own — nightly, hourly, before every release.</p>
+        </div>
+        <div class="cards" data-reveal style="--i:3;grid-template-columns:1fr">
+          <div class="fcard" style="background:#fff">
+            <div class="ic"><svg class="stroke" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
+            <h3 class="card-title">Scheduled runs</h3>
+            <p class="body-sm muted" style="margin-top:6px">Cron-style timing, per suite, per environment.</p>
+          </div>
+          <div class="fcard" style="background:#fff">
+            <div class="ic"><svg class="stroke" viewBox="0 0 24 24"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg></div>
+            <h3 class="card-title">Alerts only when it matters</h3>
+            <p class="body-sm muted" style="margin-top:6px">Slack and an in-app inbox ping you on a diff or failure — silence when all is well.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 18 · TIMELINE / TRACES =============================== -->
+  <section class="slide" data-bg="cream">
+    <div class="slide__inner">
+      <p class="eyebrow" data-reveal style="--i:0">When something breaks</p>
+      <h2 class="display-lg" data-reveal style="--i:1;margin-top:12px;max-width:18ch">Rewind any run, step by step.</h2>
+      <p class="body-lg measure-xwide" data-reveal style="--i:2;margin-top:18px">Every run keeps a scrubbable <strong style="font-weight:540">timeline</strong> — so you don't guess what went wrong, you watch it.</p>
+      <div class="cards c4" data-reveal style="--i:3;margin-top:30px">
+        <div class="fcard" style="background:#fff"><h3 class="card-title">Before / after</h3><p class="body-sm muted" style="margin-top:6px">A snapshot on either side of every step.</p></div>
+        <div class="fcard" style="background:#fff"><h3 class="card-title">Network</h3><p class="body-sm muted" style="margin-top:6px">Every request the page made, in order.</p></div>
+        <div class="fcard" style="background:#fff"><h3 class="card-title">Console</h3><p class="body-sm muted" style="margin-top:6px">Errors and logs, timestamped.</p></div>
+        <div class="fcard" style="background:#fff"><h3 class="card-title">Video</h3><p class="body-sm muted" style="margin-top:6px">An optional full recording when you want it.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 19 · GLOSSARY ======================================== -->
+  <section class="slide" data-bg="white">
+    <div class="slide__inner">
+      <p class="eyebrow" data-reveal style="--i:0">The words</p>
+      <h2 class="display-lg" data-reveal style="--i:1;margin-top:10px">The vocabulary, in one place.</h2>
+      <div class="cards c4 gloss" data-reveal style="--i:2;margin-top:28px">
+        <div class="fcard"><p class="term">Authoring session</p><p class="body-sm">A live browser Claude drives to write a test.</p></div>
+        <div class="fcard"><p class="term">Run</p><p class="body-sm">One replay of a test against one environment.</p></div>
+        <div class="fcard"><p class="term">Checkpoint</p><p class="body-sm">A named screen that gets photographed &amp; compared.</p></div>
+        <div class="fcard"><p class="term">Baseline</p><p class="body-sm">The approved "known-good" image to compare against.</p></div>
+        <div class="fcard"><p class="term">Draft → Promote</p><p class="body-sm">An AI test, pending until a human accepts it.</p></div>
+        <div class="fcard"><p class="term">Fingerprint</p><p class="body-sm">The many-signal way an element is re-found.</p></div>
+        <div class="fcard"><p class="term">Suite</p><p class="body-sm">A saved set of tests you run as a unit.</p></div>
+        <div class="fcard"><p class="term">Environment</p><p class="body-sm">A place to run — dev, demo, or a customer.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 20 · CLOSE =========================================== -->
+  <section class="slide" data-bg="lime">
+    <div class="slide__inner" style="text-align:center">
+      <p class="eyebrow" data-reveal style="--i:0">Varys</p>
+      <h2 class="display-xl" data-reveal style="--i:1;margin:18px auto 0;max-width:18ch">Tests that write themselves — and survive change.</h2>
+      <div class="row" data-reveal style="--i:2;margin:30px auto 0;justify-content:center">
+        <span class="pill pill--solid">Record</span><span class="pill pill--solid">Replay</span><span class="pill pill--solid">Diff</span>
+        <span class="pill pill--magenta">+ AI authoring</span>
+      </div>
+      <p class="body-lg muted" data-reveal style="--i:3;margin:26px auto 0;max-width:46ch">Point it at your app. Let Claude write the first draft. Review what changed, and ship with your eyes open.</p>
+    </div>
+  </section>
+
+</main>
+
+<script>
+(function(){
+  "use strict";
+  var deck = document.getElementById('deck');
+  var slides = Array.prototype.slice.call(deck.querySelectorAll('.slide'));
+  var total = slides.length;
+  var bar = document.getElementById('bar');
+  var curEl = document.getElementById('cur');
+  var totEl = document.getElementById('tot');
+  var prevBtn = document.getElementById('prev');
+  var nextBtn = document.getElementById('next');
+  var hint = document.getElementById('hint');
+  var i = 0, interacted = false;
+
+  totEl.textContent = String(total).padStart(2,'0');
+
+  function clamp(n){ return Math.max(0, Math.min(total-1, n)); }
+
+  function render(){
+    slides.forEach(function(s, idx){
+      var active = idx === i;
+      s.classList.toggle('is-active', active);
+      s.setAttribute('aria-hidden', active ? 'false' : 'true');
+    });
+    document.body.classList.toggle('is-inverse', slides[i].getAttribute('data-bg') === 'navy');
+    bar.style.width = ((i+1)/total*100) + '%';
+    curEl.textContent = String(i+1).padStart(2,'0');
+    prevBtn.disabled = i === 0;
+    nextBtn.disabled = i === total-1;
+    if (history.replaceState) history.replaceState(null,'','#'+(i+1));
+  }
+
+  function go(n){
+    n = clamp(n);
+    if (n === i) return;
+    i = n;
+    render();
+  }
+  function next(){ go(i+1); }
+  function prev(){ go(i-1); }
+
+  function killHint(){ if(!interacted){ interacted = true; if(hint) hint.classList.add('gone'); } }
+
+  // keyboard
+  document.addEventListener('keydown', function(e){
+    // let the diff slider use arrows when focused / hovered inside it
+    var inCompare = e.target.closest && e.target.closest('.compare-wrap');
+    if (inCompare && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) return;
+    switch(e.key){
+      case 'ArrowRight': case 'ArrowDown': case 'PageDown': case ' ': case 'Spacebar':
+        e.preventDefault(); killHint(); next(); break;
+      case 'ArrowLeft': case 'ArrowUp': case 'PageUp':
+        e.preventDefault(); killHint(); prev(); break;
+      case 'Home': e.preventDefault(); go(0); break;
+      case 'End': e.preventDefault(); go(total-1); break;
+      case 'f': case 'F': toggleFs(); break;
+    }
+  });
+
+  nextBtn.addEventListener('click', function(){ killHint(); next(); });
+  prevBtn.addEventListener('click', function(){ killHint(); prev(); });
+
+  // touch swipe
+  var tx=0, ty=0;
+  deck.addEventListener('touchstart', function(e){ tx=e.touches[0].clientX; ty=e.touches[0].clientY; }, {passive:true});
+  deck.addEventListener('touchend', function(e){
+    var dx=e.changedTouches[0].clientX-tx, dy=e.changedTouches[0].clientY-ty;
+    if (Math.abs(dx) > 55 && Math.abs(dx) > Math.abs(dy)){ killHint(); dx<0 ? next() : prev(); }
+  }, {passive:true});
+
+  // fullscreen
+  function toggleFs(){
+    if (!document.fullscreenElement){ (document.documentElement.requestFullscreen||function(){})(); }
+    else { (document.exitFullscreen||function(){})(); }
+  }
+  var fsBtn = document.getElementById('fs');
+  if (fsBtn) fsBtn.addEventListener('click', toggleFs);
+
+  // deep-link
+  function fromHash(){
+    var m = (location.hash||'').match(/\d+/);
+    if (m){ var n = parseInt(m[0],10)-1; if(!isNaN(n)) i = clamp(n); }
+  }
+  window.addEventListener('hashchange', function(){ fromHash(); render(); });
+  fromHash();
+  render();
+
+  /* ---------- diff comparator ---------- */
+  (function(){
+    var cmp = document.getElementById('cmp');
+    if(!cmp) return;
+    var handle = document.getElementById('handle');
+    var dragging = false;
+
+    function setPos(clientX){
+      var r = cmp.getBoundingClientRect();
+      var p = (clientX - r.left) / r.width * 100;
+      p = Math.max(6, Math.min(94, p));
+      cmp.style.setProperty('--pos', p + '%');
+    }
+    function down(e){ if(!cmp.classList.contains('side') && !cmp.classList.contains('onion')){ dragging = true; setPos((e.touches?e.touches[0]:e).clientX); e.preventDefault(); } }
+    function move(e){ if(dragging) setPos((e.touches?e.touches[0]:e).clientX); }
+    function up(){ dragging = false; }
+    cmp.addEventListener('mousedown', down);
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+    cmp.addEventListener('touchstart', down, {passive:false});
+    window.addEventListener('touchmove', move, {passive:true});
+    window.addEventListener('touchend', up);
+
+    // modes
+    var modes = document.getElementById('modes');
+    modes.addEventListener('click', function(e){
+      var b = e.target.closest('button'); if(!b) return;
+      Array.prototype.forEach.call(modes.querySelectorAll('button'), function(x){ x.setAttribute('aria-pressed','false'); });
+      b.setAttribute('aria-pressed','true');
+      cmp.classList.remove('side','onion');
+      var m = b.getAttribute('data-mode');
+      if (m==='side') cmp.classList.add('side');
+      if (m==='onion') cmp.classList.add('onion');
+    });
+
+    // diff toggle
+    var td = document.getElementById('toggleDiff');
+    td.addEventListener('click', function(){
+      var on = td.getAttribute('aria-pressed') === 'true';
+      td.setAttribute('aria-pressed', String(!on));
+      cmp.classList.toggle('diff', !on);
+    });
+
+    // approve / reject flash
+    var resolve = document.getElementById('resolve');
+    var approve = document.getElementById('approve');
+    var reject = document.getElementById('reject');
+    var flash = resolve.querySelector('.flash');
+    function doFlash(txt, color){
+      flash.textContent = txt; flash.style.background = color;
+      resolve.classList.add('done');
+      setTimeout(function(){ resolve.classList.remove('done'); }, 1400);
+    }
+    approve.addEventListener('click', function(){ doFlash('Baseline updated ✓', 'var(--success)'); });
+    reject.addEventListener('click', function(){ doFlash('Flagged as regression', 'var(--magenta)'); });
+  })();
+})();
+</script>
+</body>
+</html>

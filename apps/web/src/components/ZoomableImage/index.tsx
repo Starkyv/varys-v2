@@ -13,11 +13,14 @@ import styles from "./styles.module.scss";
 export function ZoomableImage({
   src,
   alt,
+  className,
   imgClassName,
   caption,
 }: {
   src: string;
   alt: string;
+  /** Class for the in-flow trigger button — e.g. to make it fill an aspect-ratio frame. */
+  className?: string;
   /** Class for the in-flow image — keeps the host frame's sizing. */
   imgClassName?: string;
   /** Label shown beneath the full image; defaults to `alt`. */
@@ -45,7 +48,7 @@ export function ZoomableImage({
     <>
       <button
         type="button"
-        className={styles.trigger}
+        className={cx(styles.trigger, className)}
         onClick={() => setOpen(true)}
         title="Click to view full image"
         aria-label={`View full image: ${alt}`}

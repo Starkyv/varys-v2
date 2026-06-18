@@ -1,6 +1,7 @@
 import type { FolderSummary, TestSummary } from "@varys/review-contract";
 import { Button, Clock, Folder, Grip, IconButton, Inbox, Input, Lock, MoreHorizontal, Play, Select, Trash } from "@varys/ui";
 import { useState } from "react";
+import { useConfirm } from "../../../../context/confirm";
 import { useRouter } from "../../../../context/router";
 import { useToast } from "../../../../context/toast";
 import { useDeleteTest, useUpdateTest } from "../../../../queries";
@@ -123,19 +124,20 @@ function OrganizeEditor({
   const update = useUpdateTest();
   const del = useDeleteTest();
   const { toast } = useToast();
+  const confirm = useConfirm();
   const [name, setName] = useState(test.name);
   const [folderId, setFolderId] = useState(test.folderId ?? "");
   const [tags, setTags] = useState<string[]>(test.tags);
   const [tagInput, setTagInput] = useState("");
 
-  function onDelete() {
-    if (
-      !window.confirm(
-        `Delete “${test.name}”? This permanently removes the test and all of its runs, baselines, and history. This can’t be undone.`,
-      )
-    ) {
-      return;
-    }
+  async function onDelete() {
+    const ok = await confirm({
+      title: `Delete “${test.name}”?`,
+      message: "This permanently removes the test and all of its runs, baselines, and history. This can’t be undone.",
+      confirmLabel: "Delete test",
+      tone: "danger",
+    });
+    if (!ok) return;
     del.mutate(test.id, {
       onSuccess: () => {
         toast(`Deleted “${test.name}”`);
@@ -213,7 +215,7 @@ function OrganizeEditor({
           size="sm"
           iconLeft={<Trash size={13} />}
           loading={del.isPending}
-          onClick={onDelete}
+          onClick={() => void onDelete()}
         >
           Delete
         </Button>

@@ -15,11 +15,46 @@
 
 .name {
   margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
   font-family: var(--font-display);
   font-size: var(--font-size-xl);
   font-weight: var(--font-weight-bold);
   color: var(--color-text-strong);
   line-height: 1.2;
+}
+
+/* Subtle until you reach for it — brightens on header hover / focus. */
+.renameBtn {
+  flex: 0 0 auto;
+  color: var(--color-text-subtle);
+  opacity: 0.5;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+.header:hover .renameBtn,
+.renameBtn:focus-visible {
+  opacity: 1;
+}
+
+.nameInput {
+  width: 100%;
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-strong);
+  line-height: 1.2;
+  background: var(--color-bg-inset);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  padding: var(--space-4) var(--space-8);
+
+  &:focus {
+    outline: none;
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 3px var(--color-primary-soft);
+  }
 }
 
 .tags {
@@ -160,6 +195,11 @@
     object-fit: cover;
     object-position: top left;
   }
+}
+
+/* Make the ZoomableImage trigger fill the aspect-ratio frame. */
+.previewZoom {
+  height: 100%;
 }
 
 .previewMissing {

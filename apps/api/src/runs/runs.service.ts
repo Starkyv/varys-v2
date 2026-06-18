@@ -361,6 +361,56 @@ export class RunsService {
     );
   }
 
+  /**
+   * Delete a single run and its output — `run_results` + `run_steps`, then the run row.
+   * Irreversible, no rollback. Orphaned artifact blobs (the run's trace and each
+   * checkpoint's actual + diff screenshots) are purged best-effort afterwards; a blob the
+   * `baselines` table still points at (an `actual` that was approved into the live golden)
+   * is KEPT, as is the shared baseline key. `test_schedules.lastRunId` clears itself via
+   * its ON DELETE SET NULL FK.
+   */
+  async deleteRun(runId: string): Promise<{ ok: true }> {
+    const [run] = await this.db
+      .select({ id: runs.id, trace: runs.traceArtifactKey })
+      .from(runs)
+      .where(eq(runs.id, runId))
+      .limit(1);
+    if (!run) throw new NotFoundException(`Run ${runId} not found`);
+
+    // Blobs this run owns: its trace + each result's actual/diff. NOT the baseline key —
+    // that blob belongs to the `baselines` table (the golden), shared across runs.
+    const results = await this.db
+      .select({ actual: runResults.actualArtifactKey, diff: runResults.diffArtifactKey })
+      .from(runResults)
+      .where(eq(runResults.runId, runId));
+    const keys = new Set<string>();
+    if (run.trace) keys.add(run.trace);
+    for (const r of results) for (const k of [r.actual, r.diff]) if (k) keys.add(k);
+
+    // An approved checkpoint's `actual` becomes the live golden (approve reuses the key),
+    // so never purge a blob the baselines table still references.
+    if (keys.size) {
+      const live = await this.db
+        .select({ key: baselines.artifactKey })
+        .from(baselines)
+        .where(inArray(baselines.artifactKey, [...keys]));
+      for (const b of live) keys.delete(b.key);
+    }
+
+    // Non-cascading FK chain: results + steps before the run row, in one transaction.
+    await this.db.transaction(async (tx) => {
+      await tx.delete(runResults).where(eq(runResults.runId, runId));
+      await tx.delete(runSteps).where(eq(runSteps.runId, runId));
+      await tx.delete(runs).where(eq(runs.id, runId));
+    });
+
+    // The DB delete is the source of truth — an orphaned blob is harmless, so purge after.
+    for (const key of keys) {
+      await this.storage.delete(key).catch(() => undefined);
+    }
+    return { ok: true };
+  }
+
   /** The flat "needs review" list: checkpoints awaiting a decision
    *  (pending-baseline | diff, not yet resolved), newest run first. */
   async needsReview(): Promise<NeedsReviewItem[]> {

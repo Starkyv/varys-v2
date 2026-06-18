@@ -1,6 +1,7 @@
 import type { CheckpointView, Rect } from "@varys/review-contract";
 import { Button, Sliders } from "@varys/ui";
 import { type CSSProperties, type PointerEvent as ReactPointerEvent, useRef, useState } from "react";
+import { ZoomableImage } from "../../../../components/ZoomableImage";
 import { useToast } from "../../../../context/toast";
 import { scorePct } from "../../../../lib/format";
 import { usePersistMasks, useReEvaluate } from "../../../../queries";
@@ -194,7 +195,7 @@ export function MaskTuning({ checkpoint: cp, runId }: { checkpoint: CheckpointVi
 
       {result?.diffImage && (
         <div className={styles.previewImage}>
-          <img className={styles.img} src={result.diffImage} alt="masked diff preview" />
+          <ZoomableImage src={result.diffImage} alt="masked diff preview" imgClassName={styles.img} caption="Masked diff preview" />
         </div>
       )}
     </div>

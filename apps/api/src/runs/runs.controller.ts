@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Inject, Param, Post } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Inject, Param, Post } from "@nestjs/common";
 import type { TuningInput } from "@varys/review-contract";
 import { type AuthUser, CurrentUser } from "../auth/current-user.decorator";
 import { RunsService } from "./runs.service";
@@ -33,6 +33,12 @@ export class RunsController {
   @Get(":id")
   get(@Param("id") id: string) {
     return this.runs.getById(id);
+  }
+
+  // Delete a single run and its results/steps (irreversible). Baselines are untouched.
+  @Delete(":id")
+  delete(@Param("id") id: string) {
+    return this.runs.deleteRun(id);
   }
 
   @Post(":id/approve-all")

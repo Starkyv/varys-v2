@@ -109,8 +109,29 @@
 
 .when {
   text-align: right;
-  padding-right: var(--space-20) !important;
   font-size: var(--font-size-sm);
   color: var(--color-text-muted);
   white-space: nowrap;
+}
+
+/* Trailing per-row action column (delete). */
+.thAction {
+  width: 1%;
+}
+.tdAction {
+  text-align: right;
+  padding-right: var(--space-16) !important;
+  white-space: nowrap;
+}
+.deleteBtn {
+  color: var(--color-text-subtle);
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard);
+}
+.row:hover .deleteBtn,
+.deleteBtn:focus-visible {
+  opacity: 1;
+}
+.deleteBtn:hover:not(:disabled) {
+  color: var(--color-danger);
 }

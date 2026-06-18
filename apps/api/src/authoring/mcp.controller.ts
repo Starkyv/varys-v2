@@ -1,6 +1,8 @@
 import { Body, Controller, Get, HttpException, Inject, Post, Res } from "@nestjs/common";
 import { Public } from "../auth/public.decorator";
+import { resolveAuthoringInstructions } from "./authoring-instructions";
 import { AuthoringSessionService, type CheckpointInput } from "./authoring-session.service";
+import { McpStatusService } from "./mcp-status.service";
 
 /** The slice of the HTTP response we touch — avoids depending on express types directly
  *  (it's only available transitively via @nestjs/platform-express). */
@@ -53,6 +55,7 @@ class MethodNotFound extends Error {}
 export class McpController {
   constructor(
     @Inject(AuthoringSessionService) private readonly authoring: AuthoringSessionService,
+    @Inject(McpStatusService) private readonly mcpStatus: McpStatusService,
   ) {}
 
   // Streamable HTTP: this server doesn't push, so the optional server→client SSE stream
@@ -67,6 +70,7 @@ export class McpController {
     @Body() body: JsonRpcMessage | JsonRpcMessage[],
     @Res({ passthrough: true }) res: HttpRes,
   ): Promise<unknown> {
+    this.mcpStatus.touch(); // record activity so the web app can show "Claude Code active"
     let result: unknown;
     if (Array.isArray(body)) {
       const out = (await Promise.all(body.map((m) => this.handle(m)))).filter(
@@ -103,6 +107,9 @@ export class McpController {
           protocolVersion: typeof requested === "string" ? requested : PROTOCOL_VERSION,
           capabilities: { tools: { listChanged: false } },
           serverInfo: SERVER_INFO,
+          // General authoring guidance the client folds into the model's context (the
+          // "middleware prompt"). Configurable via VARYS_AUTHORING_INSTRUCTIONS[_FILE].
+          instructions: resolveAuthoringInstructions(),
         };
       }
       case "notifications/initialized":
@@ -186,7 +193,7 @@ export class McpController {
       {
         name: "observe",
         description:
-          "Perceive the current page: a list of interactive/landmark elements, each with a stable `ref`, role, name, and (for fields) value. Target later actions by `ref`. Set screenshot=true to also get a base64 PNG for visual disambiguation.",
+          "Perceive the current page: a list of interactive/landmark elements, each with a stable `ref`, role, name, and (for fields) value. Target later actions by `ref`. Set screenshot=true to also get a base64 PNG for visual disambiguation. This screenshot is for YOUR perception only — it is NOT a checkpoint and records nothing in the test; if the user asks you to take or capture a screenshot, use the checkpoint tool instead.",
         inputSchema: {
           type: "object",
           properties: {
@@ -282,7 +289,7 @@ export class McpController {
       {
         name: "wait",
         description:
-          "Add a wait before the next step (performed live now, and recorded so replay waits too). kind 'delay' (ms), 'networkIdle' (until the network settles), or 'selector' (until the element at `ref` is visible/hidden). Use when you see something still loading.",
+          "Add a wait before the next step (performed live now, and recorded so replay waits too), ONLY when a specific element is still loading. Prefer kind 'selector' (wait until the element at `ref` is visible/hidden). 'delay' (fixed ms) is a last resort. Avoid 'networkIdle' — replay already settles navigation on network idle, so it is redundant and should not be added by default.",
         inputSchema: {
           type: "object",
           properties: {
@@ -314,7 +321,7 @@ export class McpController {
       {
         name: "checkpoint",
         description:
-          "Add a visual checkpoint (a screenshot diffed against a baseline on replay) — the test's actual assertion. mode 'fullpage' (the whole screen, the natural default for 'this screen renders'), 'element' (a specific component, by ref), or 'region' (a rect). Pass masks (rects) over volatile areas (timestamps, ids) as a best-effort proposal; a human finalizes them in review. Give a stable, meaningful name.",
+          "Add a visual checkpoint (a screenshot diffed against a baseline on replay) — the test's actual assertion. THIS is what the user means when they say \"take a screenshot\", \"capture\", \"snapshot\", or \"check/verify this screen\" — record those as checkpoints, not as observe screenshots. mode 'fullpage' (the whole screen, the natural default for 'this screen renders'), 'element' (a specific component, by ref), or 'region' (a rect). Pass masks (rects) over volatile areas (timestamps, ids) as a best-effort proposal; a human finalizes them in review. Give a stable, meaningful name.",
         inputSchema: {
           type: "object",
           properties: {

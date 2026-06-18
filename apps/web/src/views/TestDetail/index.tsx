@@ -27,6 +27,7 @@ import {
   Skeleton,
   Sliders,
   Switch,
+  Trash,
 } from "@varys/ui";
 import { useState } from "react";
 import { useRouter } from "../../context/router";
@@ -186,6 +187,18 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
     return m;
   });
 
+  // Steps marked for removal (by definition index). Applied on save; the entry
+  // navigation (index 0) can't be removed and never offers the control.
+  const [removed, setRemoved] = useState<Set<number>>(new Set());
+  function toggleRemove(index: number) {
+    setRemoved((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  }
+
   function setStepWait(i: number, next: EditableWait[]) {
     setStepWaits((prev) => prev.map((w, idx) => (idx === i ? next : w)));
   }
@@ -208,6 +221,10 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
 
     const steps: TestConfigStepPatch[] = [];
     config.steps.forEach((s, i) => {
+      if (removed.has(s.index)) {
+        steps.push({ index: s.index, remove: true });
+        return;
+      }
       if (s.type === "navigate") return;
       const waitsChanged = JSON.stringify(stepWaits[i]) !== JSON.stringify(initialStepEditable[i]);
       const cur = (thresholds[s.index] ?? "").trim();
@@ -228,7 +245,8 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
   }
 
   const patch = buildPatch();
-  const anyInvalid = config.steps.some(thresholdInvalid);
+  // A removed step's threshold can't block the save.
+  const anyInvalid = config.steps.some((s) => !removed.has(s.index) && thresholdInvalid(s));
   const canSave = patch !== null && !anyInvalid && !save.isPending;
 
   function onSave() {
@@ -330,8 +348,13 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
             const Icon = STEP_ICON[s.type];
             const locked = splitWaits(s.waitBefore).locked;
             const isLast = i === config.steps.length - 1;
+            const isRemoved = removed.has(s.index);
+            const canRemove = s.index !== 0; // the entry navigation is structural
             return (
-              <div key={s.index} className={`${styles.step} ${isLast ? styles.stepLast : ""}`}>
+              <div
+                key={s.index}
+                className={`${styles.step} ${isLast ? styles.stepLast : ""} ${isRemoved ? styles.stepRemoved : ""}`}
+              >
                 <div className={styles.stepRail}>
                   <span className={styles.stepNum}>{i + 1}</span>
                 </div>
@@ -344,45 +367,68 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
                     {s.type === "screenshot" && s.captureMode && (
                       <span className={styles.stepTag}>{s.captureMode}</span>
                     )}
+                    <span className={styles.stepHeadSpacer} />
+                    {isRemoved ? (
+                      <Button variant="ghost" size="sm" onClick={() => toggleRemove(s.index)}>
+                        Undo
+                      </Button>
+                    ) : (
+                      canRemove && (
+                        <IconButton
+                          variant="ghost"
+                          size="sm"
+                          icon={<Trash size={14} />}
+                          label={`Remove step ${i + 1}`}
+                          className={styles.stepRemove}
+                          onClick={() => toggleRemove(s.index)}
+                        />
+                      )
+                    )}
                   </div>
 
-                  {s.supportsWaits ? (
-                    <WaitListEditor
-                      waits={stepWaits[i]}
-                      locked={locked}
-                      onChange={(next) => setStepWait(i, next)}
-                      emptyHint="Only the test defaults run here."
-                    />
+                  {isRemoved ? (
+                    <div className={styles.stepNote}>Removed — saving writes a new version without this step.</div>
                   ) : (
-                    <div className={styles.stepNote}>Navigation settles on network idle automatically.</div>
-                  )}
+                    <>
+                      {s.supportsWaits ? (
+                        <WaitListEditor
+                          waits={stepWaits[i]}
+                          locked={locked}
+                          onChange={(next) => setStepWait(i, next)}
+                          emptyHint="Only the test defaults run here."
+                        />
+                      ) : (
+                        <div className={styles.stepNote}>Navigation settles on network idle automatically.</div>
+                      )}
 
-                  {s.type === "screenshot" && (
-                    <div className={`${styles.thresholdRow} ${thresholdInvalid(s) ? styles.thresholdRowError : ""}`}>
-                      <Sliders size={13} />
-                      <span className={styles.thresholdLabel}>Diff threshold</span>
-                      <Input
-                        inputSize="sm"
-                        mono
-                        type="number"
-                        min={0}
-                        max={1}
-                        step={0.01}
-                        placeholder="0.01"
-                        aria-label={`Threshold for ${s.checkpointName ?? "checkpoint"}`}
-                        invalid={thresholdInvalid(s)}
-                        className={styles.thresholdInput}
-                        value={thresholds[s.index] ?? ""}
-                        onChange={(e) =>
-                          setThresholds((prev) => ({ ...prev, [s.index]: e.target.value }))
-                        }
-                      />
-                      <span className={styles.thresholdHelp}>
-                        {thresholdInvalid(s)
-                          ? "Enter a value between 0 and 1"
-                          : "max mismatched-pixel ratio · blank = default 0.01"}
-                      </span>
-                    </div>
+                      {s.type === "screenshot" && (
+                        <div className={`${styles.thresholdRow} ${thresholdInvalid(s) ? styles.thresholdRowError : ""}`}>
+                          <Sliders size={13} />
+                          <span className={styles.thresholdLabel}>Diff threshold</span>
+                          <Input
+                            inputSize="sm"
+                            mono
+                            type="number"
+                            min={0}
+                            max={1}
+                            step={0.01}
+                            placeholder="0.01"
+                            aria-label={`Threshold for ${s.checkpointName ?? "checkpoint"}`}
+                            invalid={thresholdInvalid(s)}
+                            className={styles.thresholdInput}
+                            value={thresholds[s.index] ?? ""}
+                            onChange={(e) =>
+                              setThresholds((prev) => ({ ...prev, [s.index]: e.target.value }))
+                            }
+                          />
+                          <span className={styles.thresholdHelp}>
+                            {thresholdInvalid(s)
+                              ? "Enter a value between 0 and 1"
+                              : "max mismatched-pixel ratio · blank = default 0.01"}
+                          </span>
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               </div>
@@ -395,7 +441,11 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
 
       <div className={styles.saveBar}>
         <span className={styles.saveHint}>
-          {patch ? "Saving writes a new test version — it applies on the next run." : "No changes yet."}
+          {patch
+            ? removed.size > 0
+              ? `Saving writes a new version, removing ${removed.size} step${removed.size === 1 ? "" : "s"} — it applies on the next run.`
+              : "Saving writes a new test version — it applies on the next run."
+            : "No changes yet."}
         </span>
         <Button variant="primary" loading={save.isPending} disabled={!canSave} onClick={onSave}>
           Save changes

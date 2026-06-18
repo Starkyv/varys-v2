@@ -652,18 +652,30 @@ export class TestsService {
         : def.defaults;
 
     const stepPatch = new Map((patch.steps ?? []).map((p) => [p.index, p]));
-    const nextSteps = def.steps.map((s, index) => {
-      const p = stepPatch.get(index);
-      if (!p || s.type === "navigate") return s; // navigate has no waits/threshold
-      let out = s;
-      if (p.waitBefore !== undefined) {
-        out = { ...out, waitBefore: mergeWaits(out.waitBefore, p.waitBefore) };
-      }
-      if (p.threshold !== undefined && out.type === "screenshot") {
-        out = { ...out, threshold: p.threshold };
-      }
-      return out;
-    });
+
+    // Removals are keyed by the SAME original index as edits. The entry navigation
+    // (index 0) is the test's start URL → {{baseUrl}} and can't be removed, else replay
+    // has nowhere to begin. Other steps (incl. mid-session navigates) may go.
+    const removed = new Set((patch.steps ?? []).filter((p) => p.remove).map((p) => p.index));
+    if (removed.has(0)) {
+      throw new BadRequestException("The entry navigation step can't be removed.");
+    }
+
+    const nextSteps = def.steps
+      .map((s, index) => {
+        const p = stepPatch.get(index);
+        // Removals are applied in the filter below; navigate has no waits/threshold.
+        if (!p || p.remove || s.type === "navigate") return s;
+        let out = s;
+        if (p.waitBefore !== undefined) {
+          out = { ...out, waitBefore: mergeWaits(out.waitBefore, p.waitBefore) };
+        }
+        if (p.threshold !== undefined && out.type === "screenshot") {
+          out = { ...out, threshold: p.threshold };
+        }
+        return out;
+      })
+      .filter((_s, index) => !removed.has(index));
 
     const nextDefinition = {
       ...def,

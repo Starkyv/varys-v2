@@ -10,6 +10,7 @@ import {
   Select,
 } from "@varys/ui";
 import { useEffect, useId, useState } from "react";
+import { ZoomableImage } from "../../../../components/ZoomableImage";
 import { useToast } from "../../../../context/toast";
 import { useDraft, useFolders, usePromoteDraft } from "../../../../queries";
 import styles from "./styles.module.scss";
@@ -93,7 +94,7 @@ export function PromoteDialog({
               {detail.data?.checkpoints.map((c) => (
                 <figure key={c.name} className={styles.preview}>
                   {c.previewUrl ? (
-                    <img src={c.previewUrl} alt={`${c.name} preview`} loading="lazy" />
+                    <ZoomableImage src={c.previewUrl} alt={`${c.name} preview`} caption={c.name} />
                   ) : (
                     <div className={styles.previewMissing}>no preview</div>
                   )}

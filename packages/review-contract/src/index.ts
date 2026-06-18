@@ -163,7 +163,7 @@ export type EditableWait =
  *  the screenshot-only knobs (threshold). `supportsWaits` is false for navigate. */
 export interface TestConfigStep {
   /** 0-based position in the definition's step list — the stable key the patch uses
-   *  (v1 never reorders/adds/deletes steps). */
+   *  (steps can be removed via the patch, but never reordered or inserted). */
   index: number;
   type: "navigate" | "click" | "type" | "screenshot";
   /** Human label (same `describeStep` vocabulary as the run timeline). */
@@ -200,6 +200,9 @@ export interface TestConfigView {
 /** A per-step edit in a config patch — keyed by `index`. Omitted fields are left as-is. */
 export interface TestConfigStepPatch {
   index: number;
+  /** Remove this step from the definition entirely. The entry navigation (index 0) can't
+   *  be removed; when set, the step's other patch fields are ignored. */
+  remove?: boolean;
   /** Replace this step's authorable (delay/networkIdle) waits; any existing selector
    *  waits are preserved server-side. */
   waitBefore?: EditableWait[];
@@ -270,6 +273,119 @@ export interface PromoteDraftBody {
   folderId?: string | null;
   /** Tags to apply on promotion (full-list replace, normalized). */
   tags?: string[];
+}
+
+/**
+ * One active Authoring Session, as listed for the live-preview picker
+ * (`GET /authoring/sessions`, Slice 15 — Author with AI). An Authoring Session is the live
+ * server-side browser Claude drives; this is just enough to identify and choose one to watch.
+ */
+export interface AuthoringSessionSummary {
+  sessionId: string;
+  /** The name of the test being authored. */
+  name: string;
+  /** The steering intent that opened the session, if any. */
+  intent: string | null;
+  /** The session's current page URL and title. */
+  url: string;
+  title: string;
+  /** Recorded steps and proposed checkpoints so far. */
+  stepCount: number;
+  checkpointCount: number;
+}
+
+/**
+ * A live frame of an Authoring Session — a page screenshot captured after a mutating tool
+ * (click / type / navigate / checkpoint), streamed to the web live-preview pane
+ * (`GET /authoring/sessions/:id/stream`, Slice 15). Decoupled from the model's perception: the
+ * agent only "sees" a screenshot when it calls `observe(screenshot:true)`; these frames are a
+ * human-only channel and are never sent to the model (so watching costs no inference).
+ */
+export interface AuthoringFrame {
+  sessionId: string;
+  /** Monotonic per-session sequence number (ordering / dedup). */
+  seq: number;
+  url: string;
+  title: string;
+  /** Page screenshot as a data URL (`data:image/png;base64,…`), ready for an `<img src>`. */
+  screenshot: string;
+  /** What was just recorded into the test. */
+  recorded: { type: string; checkpoint?: string };
+  /** Recorded steps and proposed checkpoints after this frame. */
+  stepCount: number;
+  checkpointCount: number;
+}
+
+/**
+ * Emitted on the live stream when an Authoring Session finishes and its steps are persisted as a
+ * Draft (Slice 15). The web uses it to hand off to the review queue — "Draft created → Review it"
+ * — the moment authoring completes.
+ */
+export interface AuthoringDraftEvent {
+  sessionId: string;
+  /** The created Draft test id. */
+  testId: string;
+  version: number;
+  checkpointCount: number;
+  /** The authored test's name. */
+  name: string;
+}
+
+/**
+ * A Bridge that links a user's local Bridge Helper to their in-product chat (Slice 15 — Author
+ * with AI). One bridge = one chat = one Authoring Session. Created by the signed-in web user;
+ * the helper claims the short `pairingCode` out-of-band to obtain a chat-scoped token.
+ */
+export interface BridgeChatState {
+  chatId: string;
+  /** Short, one-time pairing code shown in the web UI to link the helper; null once the helper
+   *  has paired or the code has expired. */
+  pairingCode: string | null;
+  /** Unix ms when the pairing code expires; null once paired/expired. */
+  pairingExpiresAt: number | null;
+  /** Whether a Bridge Helper is currently connected to this chat. */
+  helperConnected: boolean;
+  /** The correlated Authoring Session id (drives the slice-01 live preview); null until the
+   *  helper binds one. */
+  sessionId: string | null;
+}
+
+/** Result of claiming a pairing code (`POST /authoring/bridge/pair`) — returned ONLY to the
+ *  helper. `bridgeToken` is a chat-scoped secret the helper presents on its stream/event calls. */
+export interface BridgePairResult {
+  chatId: string;
+  bridgeToken: string;
+}
+
+/** An event mirrored into the web chat (server → web). The relay owns `status`; `assistant` and
+ *  `tool` are forwarded from the Bridge Helper. */
+export type BridgeEvent =
+  | { type: "assistant"; text: string }
+  | { type: "tool"; name: string; detail?: string }
+  | { type: "status"; helperConnected: boolean; sessionId: string | null };
+
+/** A command the web sends down to the Bridge Helper (server → helper). Prompts only for now;
+ *  cancel/interrupt arrive in a later slice. */
+export type BridgeCommand = { type: "prompt"; text: string };
+
+/** What the Bridge Helper POSTs up to the relay (helper → server). `assistant`/`tool` are
+ *  mirrored to the web verbatim; `session` correlates the Authoring Session and the relay turns
+ *  it into a `status` event. */
+export type BridgeHelperEvent =
+  | { type: "assistant"; text: string }
+  | { type: "tool"; name: string; detail?: string }
+  | { type: "session"; sessionId: string };
+
+/**
+ * Whether Claude Code is driving the MCP authoring server (Slice 15). The MCP transport is
+ * **stateless HTTP** — each tool call is a separate POST with no held connection — so this is an
+ * *activity* signal (a request seen within the recent window), not a literal socket state.
+ */
+export interface McpStatus {
+  /** True when an MCP request was seen within the recent-activity window. */
+  connected: boolean;
+  /** Unix ms of the last MCP request seen this server process, or null if none yet. */
+  lastSeenAt: number | null;
 }
 
 /** A flat folder — each test's one browsable home (DESIGN §5). */

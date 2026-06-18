@@ -9,6 +9,7 @@ import {
   type IconProps,
   Inbox,
   ListRun,
+  Pencil,
   Squares,
 } from "@varys/ui";
 import { motion } from "framer-motion";
@@ -29,6 +30,7 @@ const GROUPS: NavGroup[] = [
     label: "Library",
     items: [
       { key: "tests", name: "Tests", Icon: Flask },
+      { key: "author", name: "Author with AI", Icon: Pencil },
       { key: "drafts", name: "Review queue", Icon: Inbox },
       { key: "suites", name: "Suites", Icon: Squares },
     ],

@@ -13,6 +13,7 @@ import { getAuth } from "../src/auth/auth";
  */
 let cachedCookie: string | null = null;
 let cachedEmail: string | null = null;
+let cachedUserId: string | null = null;
 
 /** Mint a session (idempotent per test process) and cache its cookie. Call in beforeAll
  *  AFTER `app.init()` — `getAuth()` binds the Testcontainers DB lazily on first use. */
@@ -28,6 +29,8 @@ export async function prepareAuth(): Promise<void> {
   if (!match) throw new Error(`E2E auth: no session cookie minted (status ${res.status})`);
   cachedCookie = match[0];
   cachedEmail = email;
+  const body = (await res.json().catch(() => null)) as { user?: { id?: string } } | null;
+  cachedUserId = body?.user?.id ?? null;
 }
 
 /** The Cookie header value for an authenticated request. Requires `prepareAuth()` first. */
@@ -40,6 +43,12 @@ export function authCookie(): string {
 export function authEmail(): string {
   if (!cachedEmail) throw new Error("E2E auth: call prepareAuth() in beforeAll first");
   return cachedEmail;
+}
+
+/** The better-auth id of the signed-in E2E user — for tests that owner-scope by user id. */
+export function authUserId(): string {
+  if (!cachedUserId) throw new Error("E2E auth: call prepareAuth() in beforeAll first (no user id)");
+  return cachedUserId;
 }
 
 type Verb = "get" | "post" | "put" | "delete" | "patch";

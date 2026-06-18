@@ -9,9 +9,12 @@ import {
   type DecisionAction,
   deleteEnvironment,
   deleteFolder,
+  deleteRun,
   deleteSuite,
   deleteTest,
   discardDraft,
+  fetchAuthoringSessions,
+  fetchMcpStatus,
   fetchDashboard,
   fetchDraft,
   fetchDrafts,
@@ -87,6 +90,20 @@ export function useRunView(runId: string) {
   });
 }
 
+/** Delete a single run (irreversible). Refreshes the history, the needs-review queue
+ *  (a deleted run's checkpoints leave it), and the dashboard. */
+export function useDeleteRun() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (runId: string) => deleteRun(runId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: runsQueryKey() });
+      qc.invalidateQueries({ queryKey: needsReviewQueryKey() });
+      qc.invalidateQueries({ queryKey: dashboardQueryKey() });
+    },
+  });
+}
+
 export function testsQueryKey() {
   return ["tests"] as const;
 }
@@ -116,6 +133,32 @@ export function useDrafts(opts?: { enabled?: boolean }) {
     queryFn: fetchDrafts,
     refetchInterval: 5000,
     enabled: opts?.enabled ?? true,
+  });
+}
+
+/** Key for the active Authoring Sessions list (Slice 15 — Author with AI). */
+export function authoringSessionsQueryKey() {
+  return ["authoring-sessions"] as const;
+}
+
+/** Active Authoring Sessions to watch live. Polled so sessions opening/finishing (driven from
+ *  Claude Code) appear and disappear without a manual refresh; the per-session frames stream
+ *  over EventSource, not through React Query. */
+export function useAuthoringSessions() {
+  return useQuery({
+    queryKey: authoringSessionsQueryKey(),
+    queryFn: fetchAuthoringSessions,
+    refetchInterval: 5000,
+  });
+}
+
+/** Whether Claude Code is currently driving the MCP server (activity-based). Polled so the
+ *  "active / idle" indicator updates as the connection comes and goes. */
+export function useMcpStatus() {
+  return useQuery({
+    queryKey: ["mcp-status"] as const,
+    queryFn: fetchMcpStatus,
+    refetchInterval: 5000,
   });
 }
 
@@ -154,6 +197,21 @@ export function useDiscardDraft() {
   return useMutation({
     mutationFn: (id: string) => discardDraft(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: draftsQueryKey() }),
+  });
+}
+
+/** Rename an AI-authored draft (PATCH /tests/:id — a draft is a test held out of the
+ *  corpus). Refreshes the review-queue list and this draft's detail so the new name shows
+ *  immediately; testsQueryKey too in case it's later promoted. */
+export function useRenameDraft() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { id: string; name: string }) => updateTest(vars.id, { name: vars.name }),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: draftsQueryKey() });
+      qc.invalidateQueries({ queryKey: draftQueryKey(vars.id) });
+      qc.invalidateQueries({ queryKey: testsQueryKey() });
+    },
   });
 }
 

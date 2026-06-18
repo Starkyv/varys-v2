@@ -1,14 +1,33 @@
-import { Activity, EmptyState, ErrorState, Skeleton } from "@varys/ui";
+import { Activity, EmptyState, ErrorState, IconButton, Skeleton, Trash } from "@varys/ui";
 import { LiveIndicator } from "../../components/LiveIndicator";
+import { useConfirm } from "../../context/confirm";
 import { useRouter } from "../../context/router";
+import { useToast } from "../../context/toast";
 import { relativeTime } from "../../lib/format";
 import { StatusBadge } from "../../lib/status";
-import { useRuns } from "../../queries";
+import { useDeleteRun, useRuns } from "../../queries";
 import styles from "./styles.module.scss";
 
 export function Runs() {
   const runs = useRuns();
   const { navigate } = useRouter();
+  const { toast } = useToast();
+  const confirm = useConfirm();
+  const del = useDeleteRun();
+
+  async function onDelete(runId: string, testName: string) {
+    const ok = await confirm({
+      title: "Delete run?",
+      message: `This deletes the run of “${testName}” — its screenshots and history are removed (baselines are kept). This can’t be undone.`,
+      confirmLabel: "Delete run",
+      tone: "danger",
+    });
+    if (!ok) return;
+    del.mutate(runId, {
+      onSuccess: () => toast("Run deleted"),
+      onError: (e) => toast(e instanceof Error ? e.message : "Couldn’t delete run"),
+    });
+  }
 
   if (runs.isLoading) {
     return (
@@ -59,30 +78,48 @@ export function Runs() {
               <th>Environment</th>
               <th>Status</th>
               <th className={styles.thRight}>When</th>
+              <th className={styles.thAction} aria-label="Actions" />
             </tr>
           </thead>
           <tbody>
-            {data.map((r) => (
-              <tr
-                key={r.runId}
-                tabIndex={0}
-                className={styles.row}
-                onClick={() => navigate({ name: "runDetail", runId: r.runId })}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") navigate({ name: "runDetail", runId: r.runId });
-                }}
-              >
-                <td className={styles.tdTest}>
-                  <div className={styles.testName}>{r.testName}</div>
-                  {r.error && <div className={styles.error}>{r.error}</div>}
-                </td>
-                <td className={styles.env}>{r.environment}</td>
-                <td>
-                  <StatusBadge status={r.status} />
-                </td>
-                <td className={styles.when}>{relativeTime(r.runTimestamp)}</td>
-              </tr>
-            ))}
+            {data.map((r) => {
+              const inFlight = r.status === "queued" || r.status === "running";
+              return (
+                <tr
+                  key={r.runId}
+                  tabIndex={0}
+                  className={styles.row}
+                  onClick={() => navigate({ name: "runDetail", runId: r.runId })}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") navigate({ name: "runDetail", runId: r.runId });
+                  }}
+                >
+                  <td className={styles.tdTest}>
+                    <div className={styles.testName}>{r.testName}</div>
+                    {r.error && <div className={styles.error}>{r.error}</div>}
+                  </td>
+                  <td className={styles.env}>{r.environment}</td>
+                  <td>
+                    <StatusBadge status={r.status} />
+                  </td>
+                  <td className={styles.when}>{relativeTime(r.runTimestamp)}</td>
+                  <td className={styles.tdAction}>
+                    <IconButton
+                      variant="ghost"
+                      size="sm"
+                      icon={<Trash size={15} />}
+                      label={inFlight ? "Can’t delete a run that’s still in progress" : "Delete run"}
+                      className={styles.deleteBtn}
+                      disabled={inFlight || del.isPending}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void onDelete(r.runId, r.testName);
+                      }}
+                    />
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

@@ -32,3 +32,17 @@ The human action that accepts a Draft: assign it a folder + tags and make it act
 (eligible for suites and schedules). Distinct from baseline approval, which remains a
 separate per-environment gate.
 _Avoid_: publish; approve (reserved for baseline/checkpoint approval)
+
+**Bridge Helper**:
+A small process the user runs locally that launches the Claude authoring agent (Claude
+Agent SDK) under their **own** Claude subscription and relays its conversation + tool
+activity to the Varys web app — so in-product authoring is billed to the user's
+subscription, not Varys. Distinct from the Authoring Session (the server-side browser it
+drives).
+_Avoid_: agent, daemon, connector
+
+**Author with AI**:
+The in-product authoring surface: a chat inside the Varys web app that drives an Authoring
+Session through the user's Bridge Helper, with a live browser preview. Distinct from
+connecting your own Claude Code directly to the public MCP server.
+_Avoid_: AI mode, copilot

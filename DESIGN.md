@@ -311,6 +311,13 @@ replays.** The recording's screenshot is a *target + preview + mask surface*, no
 - **Output workflow:** AI-authored test lands in a **draft** → **human reviews/edits** in the
   recorder/diff UI → **promotes** into a folder + tags. (This is the one human checkpoint on AI
   output.)
+- **In-product surface (slice 15 — Author with AI):** the same server-side **Authoring Session**
+  is drivable from a chat **inside the Varys web app**, with the model running on the **user's
+  own Claude subscription** via a small local **Bridge Helper** (Claude Agent SDK) that relays
+  the conversation to the web UI; Varys streams a **live browser preview** server-side. *(A
+  third-party app can't spend a user's subscription quota and can't tap a Claude Code session it
+  didn't launch — hence the local helper.)* Review/**promote** stay web-UI-only. See
+  `prd/author-with-ai.md`.
 
 ---
 
@@ -326,7 +333,7 @@ replays.** The recording's screenshot is a *target + preview + mask surface*, no
 
 Responsive multi-viewport · cross-browser (webkit/firefox) · API/CI webhook trigger ·
 per-project retention config · RBAC role-gating · multi-tenant isolation · custom timeline UI ·
-email notifications · "existing tests as examples" for AI · in-product embedded AI button.
+email notifications · "existing tests as examples" for AI.
 
 
 | #  | Slice                                 | Scope (one line)                                                                 | Depends on         |
@@ -344,4 +351,5 @@ email notifications · "existing tests as examples" for AI · in-product embedde
 | 11 | Cloud storage + retention enforcement | Azure Blob + S3 adapters + tiered cleanup job                                   | —                  |
 | 12 | CI/webhook triggers                   | Pipeline-driven runs                                                            | 6                  |
 | 13 | Scored-locator upgrade ✅             | Replace ranked matcher with confidence scoring (no re-record)                   | 1                  |
-| 14 | Claude/MCP authoring (Phase 2)        | MCP server → live-session authoring → draft → promote (likely 2 PRDs)           | Most of the above  |
+| 14 | Claude/MCP authoring (Phase 2) ✅     | MCP server → live-session authoring → draft → promote (Claude Code + MCP)       | Most of the above  |
+| 15 | Author with AI (in-product)           | In-Varys chat + live browser preview; model runs on the user's own Claude subscription via a local Bridge Helper relayed to the web UI | 14 |
