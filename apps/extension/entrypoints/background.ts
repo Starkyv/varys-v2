@@ -13,7 +13,10 @@ import type { Step, TestDefinition, Viewport } from "@varys/step-schema";
  *  3. Save the assembled definition to the API — the content script can't reach
  *     the API cross-origin, but the background can (host_permissions).
  */
-const API_BASE = "http://localhost:4000";
+// The API origin the extension talks to. Build-time configurable via WXT_API_BASE
+// (WXT/Vite inlines it at build); defaults to localhost for dev. For the team build,
+// set WXT_API_BASE=https://varys.datagenie.ai.
+const API_BASE = import.meta.env.WXT_API_BASE ?? "http://localhost:4000";
 const KEY = "varys:recording";
 
 // better-auth's session cookie. The extension can't read whether it's signed in by
