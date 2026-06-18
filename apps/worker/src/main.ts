@@ -2,14 +2,15 @@ import "./load-env"; // FIRST — populate process.env from .env before anything
 import { createDb } from "@varys/db";
 import { createBoss, startBoss, workRuns } from "@varys/queue";
 import { processRun } from "@varys/runner";
-import { LocalFsAdapter } from "@varys/storage-adapter";
+import { createStorageFromEnv } from "@varys/storage-adapter";
 
 async function main() {
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) throw new Error("DATABASE_URL is not set");
 
   const { db } = createDb(connectionString);
-  const storage = new LocalFsAdapter(process.env.VARYS_STORAGE_DIR ?? "./.varys-artifacts");
+  // local FS (default) or Azure Blob, selected by VARYS_STORAGE_DRIVER — must match the API.
+  const storage = createStorageFromEnv();
   const boss = createBoss(connectionString);
 
   await startBoss(boss);

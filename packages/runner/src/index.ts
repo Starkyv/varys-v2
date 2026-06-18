@@ -29,6 +29,16 @@ import {
   type Page,
 } from "playwright";
 
+/** Extra Chromium flags from VARYS_BROWSER_ARGS (comma-separated). In containers the
+ *  browser runs unprivileged with a small /dev/shm, so set
+ *  `--no-sandbox,--disable-dev-shm-usage`. Unset (local/dev) → no extra args. */
+export function browserLaunchArgs(): string[] {
+  return (process.env.VARYS_BROWSER_ARGS ?? "")
+    .split(",")
+    .map((a) => a.trim())
+    .filter(Boolean);
+}
+
 export interface ReplayDeps {
   db: Db;
   storage: StorageAdapter;
@@ -173,7 +183,7 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
     }
     const vpKey = viewportKey(recorded.viewport);
 
-    browser = await chromium.launch();
+    browser = await chromium.launch({ args: browserLaunchArgs() });
     context = await browser.newContext({
       viewport: {
         width: recorded.viewport.width,

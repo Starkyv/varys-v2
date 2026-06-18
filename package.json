@@ -19,6 +19,9 @@
     "vitest": "^3.0.5"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild", "@swc/core"]
+    "onlyBuiltDependencies": ["esbuild", "@swc/core"],
+    "overrides": {
+      "typescript": "5.9.3"
+    }
   }
 }
