@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: varys-api
+  labels:
+    app: varys-api
+spec:
+  # Kept at 1: in-memory authoring sessions + sole applier of the boot-time schema.
+  replicas: {{ .Values.api.replicas }}
+  selector:
+    matchLabels:
+      app: varys-api
+  template:
+    metadata:
+      labels:
+        app: varys-api
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: {{ .Values.runAsUser }}
+      containers:
+        - name: api
+          image: "{{ .Values.image.registry }}/{{ .Values.image.appRepository }}:{{ .Values.image.appTag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          workingDir: /app/apps/api
+          command: ["/app/node_modules/.bin/tsx", "src/main.ts"]
+          ports:
+            - name: http
+              containerPort: 4000
+          envFrom:
+            - configMapRef:
+                name: varys-config
+            - secretRef:
+                name: {{ .Values.existingSecret }}
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+          volumeMounts:
+            - name: dev-shm
+              mountPath: /dev/shm
+      volumes:
+        - name: dev-shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.devShmSizeLimit }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: varys-api
+  labels:
+    app: varys-api
+spec:
+  selector:
+    app: varys-api
+  ports:
+    - name: http
+      port: 4000
+      targetPort: http

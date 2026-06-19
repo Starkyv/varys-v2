@@ -1,0 +1,98 @@
+# Default configuration for the Varys chart. Override per-environment with
+# `--set key=value` or a custom `-f my-values.yaml`.
+
+image:
+  registry: dgvarysacr.azurecr.io
+  appRepository: varys-app   # API + worker share this image
+  webRepository: varys-web   # web SPA
+  # Tags are tracked separately so a web-only deploy doesn't force an app rebuild.
+  # deploy/deploy.sh sets these to the git SHA.
+  appTag: v1                 # api + worker
+  webTag: v1                 # web
+  pullPolicy: IfNotPresent
+
+# Public HTTPS host the app is served at. Drives BETTER_AUTH_URL + the Ingress host.
+domain: varys.datagenie.ai
+
+# Non-secret env shared by api + worker (rendered into a ConfigMap). The auth URLs
+# are derived from `domain` automatically, so set the host in ONE place (above).
+config:
+  NODE_ENV: production
+  PORT: "4000"
+  VARYS_AUTH_METHODS: password,google
+  VARYS_AUTH_ALLOWED_DOMAINS: datagenie.ai
+  VARYS_AUTH_DOMAIN_SCOPE: google
+  VARYS_STORAGE_DRIVER: azure
+  AZURE_STORAGE_ACCOUNT: dgvarys
+  AZURE_STORAGE_CONTAINER: varys-container
+  # Headless Chromium in an unprivileged container with a small /dev/shm.
+  VARYS_BROWSER_ARGS: "--no-sandbox,--disable-dev-shm-usage"
+
+# The Secret (DATABASE_URL, BETTER_AUTH_SECRET, AZURE_STORAGE_SAS_TOKEN, GOOGLE_*) is
+# created OUT OF BAND with `kubectl create secret` — it is NOT managed by this chart,
+# so real secrets never live in values/git. The deployments reference it by name.
+existingSecret: varys-secrets
+
+# Non-root UID baked into the app image (so runAsNonRoot can verify it).
+runAsUser: 10001
+# Memory-backed /dev/shm size for Chromium.
+devShmSizeLimit: 1Gi
+
+api:
+  replicas: 1   # in-memory authoring sessions + sole schema applier — see chart README
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+worker:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+web:
+  replicas: 2
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi
+
+ingress:
+  enabled: true
+  className: nginx
+  clusterIssuer: letsencrypt-prod
+  tlsSecretName: varys-tls
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+  # API path prefixes routed to the API; everything else → web.
+  # Keep in sync with apps/web/vite.config.ts.
+  apiPaths:
+    - /api/auth
+    - /auth-config
+    - /health
+    - /dashboard
+    - /runs
+    - /suite-runs
+    - /tests
+    - /drafts
+    - /authoring
+    - /environments
+    - /folders
+    - /tags
+    - /suites
+    - /artifacts
+    - /trace-viewer
+    - /mcp

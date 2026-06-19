@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: varys-config
+  labels:
+    app.kubernetes.io/part-of: varys
+data:
+  # Derived from .Values.domain so the host is set in one place.
+  BETTER_AUTH_URL: "https://{{ .Values.domain }}"
+  BETTER_AUTH_TRUSTED_ORIGINS: "https://{{ .Values.domain }}"
+  {{- range $k, $v := .Values.config }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}

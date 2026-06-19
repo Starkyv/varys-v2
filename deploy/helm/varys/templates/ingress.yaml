@@ -1,0 +1,39 @@
+{{- if .Values.ingress.enabled }}
+# Single-origin routing: API path prefixes → varys-api, everything else → varys-web.
+# Production equivalent of the Vite dev proxy (apps/web/vite.config.ts).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: varys
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.ingress.clusterIssuer | quote }}
+    {{- range $k, $v := .Values.ingress.annotations }}
+    {{ $k }}: {{ $v | quote }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  tls:
+    - hosts:
+        - {{ .Values.domain | quote }}
+      secretName: {{ .Values.ingress.tlsSecretName }}
+  rules:
+    - host: {{ .Values.domain | quote }}
+      http:
+        paths:
+          {{- range .Values.ingress.apiPaths }}
+          - path: {{ . | quote }}
+            pathType: Prefix
+            backend:
+              service:
+                name: varys-api
+                port:
+                  number: 4000
+          {{- end }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: varys-web
+                port:
+                  number: 80
+{{- end }}

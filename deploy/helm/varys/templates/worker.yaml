@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: varys-worker
+  labels:
+    app: varys-worker
+spec:
+  # Pulls run jobs off pg-boss; scalable. No Service (no inbound HTTP).
+  replicas: {{ .Values.worker.replicas }}
+  selector:
+    matchLabels:
+      app: varys-worker
+  template:
+    metadata:
+      labels:
+        app: varys-worker
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: {{ .Values.runAsUser }}
+      containers:
+        - name: worker
+          image: "{{ .Values.image.registry }}/{{ .Values.image.appRepository }}:{{ .Values.image.appTag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          workingDir: /app/apps/worker
+          command: ["/app/node_modules/.bin/tsx", "src/main.ts"]
+          envFrom:
+            - configMapRef:
+                name: varys-config
+            - secretRef:
+                name: {{ .Values.existingSecret }}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          volumeMounts:
+            - name: dev-shm
+              mountPath: /dev/shm
+      volumes:
+        - name: dev-shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.devShmSizeLimit }}

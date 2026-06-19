@@ -1,0 +1,8 @@
+apiVersion: v2
+name: varys
+description: Varys visual-regression testing — API, worker, and web SPA on Kubernetes.
+type: application
+# Chart version — bump when you change the templates.
+version: 0.1.0
+# The app version this chart deploys (informational).
+appVersion: "1.0.0"
