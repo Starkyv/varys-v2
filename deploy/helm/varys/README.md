@@ -1,8 +1,8 @@
 # Varys Helm chart
 
-Deploys the Varys API, worker, and web SPA into a Kubernetes namespace. This is the
-parameterized equivalent of the raw manifests in `deploy/k8s/` — use one or the other,
-not both.
+Deploys the Varys API, worker, and web SPA into a Kubernetes namespace. This chart is the
+single source of truth for the cluster resources; `deploy/deploy.sh` builds + ships a
+change through it.
 
 ## What's in it
 - `varys-api` Deployment + Service (port 4000)
@@ -69,8 +69,7 @@ helm uninstall varys -n varys      # remove everything in the chart
 - **`api.replicas` stays 1** unless you add Ingress sticky sessions — live-authoring
   sessions are held in memory on one pod (auth sessions are in Postgres, so other routes
   are fine).
-- **Adopting Helm on an already-`kubectl apply`'d namespace**: Helm refuses to manage
-  resources it didn't create. Either delete the raw resources first
-  (`kubectl delete -f deploy/k8s/{configmap,api,worker,web,ingress}.yaml` — leave the
-  Secret) then `helm install`, or on Helm ≥3.17 use `--take-ownership`. Deleting causes a
-  brief restart; fine on dev.
+- **First-run adoption**: if resources from a previous non-Helm `kubectl apply` still
+  exist, Helm won't manage them unless it takes ownership. `deploy/deploy.sh` passes
+  `--take-ownership` (Helm ≥3.17) so the first run adopts them with no downtime; it's a
+  no-op afterward.

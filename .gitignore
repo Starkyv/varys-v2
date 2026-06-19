@@ -14,8 +14,9 @@ playwright-report/
 # Local dev artifact storage (shared by the API + worker)
 .varys-artifacts/
 
-# Filled-in K8s secret (only the .example template is committed)
-deploy/k8s/secret.yaml
+# Never commit a rendered K8s Secret — the chart references an out-of-band secret
+# created with `kubectl create secret`.
+deploy/**/secret*.yaml
 
 # WXT extension build output
 .wxt/
