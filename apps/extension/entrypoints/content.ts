@@ -61,7 +61,6 @@ export default defineContentScript({
     let modeBtns: Record<CaptureMode, HTMLButtonElement>;
     let toastEl: HTMLElement | null = null;
     let toastMsgEl: HTMLElement;
-    let collapsed = false;
     let flashTimer: ReturnType<typeof setTimeout> | undefined;
 
     /** Transient confirmation toast under the bar (replaces the old result line). */
@@ -743,7 +742,6 @@ export default defineContentScript({
           .bar { display: inline-flex; align-items: center; background: #FFFFFF; border: 1px solid #E7EAEF;
                  border-radius: 16px; padding: 9px 10px; white-space: nowrap;
                  box-shadow: 0 10px 30px rgba(16,24,40,0.14), 0 2px 6px rgba(16,24,40,0.06); }
-          .wrap.collapsed .bar, .wrap.collapsed .confirm, .wrap.collapsed .toast { display: none; }
 
           /* Grip + brand (drag handle) */
           .grip { display: flex; align-items: center; gap: 9px; padding: 4px 6px 4px 4px; cursor: grab; touch-action: none; }
@@ -839,13 +837,6 @@ export default defineContentScript({
           .toast.show { display: inline-flex; animation: varysToast 0.18s ease-out; }
           .toast-dot { width: 6px; height: 6px; border-radius: 9999px; background: #5347CE; flex: none; }
 
-          /* Collapsed pill */
-          .pill { display: none; width: 54px; height: 54px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.18);
-                  background: #5347CE; color: #fff; font-weight: 700; font-size: 22px; cursor: pointer;
-                  align-items: center; justify-content: center; box-shadow: 0 10px 30px rgba(16,24,40,0.2); }
-          .wrap.collapsed .pill { display: flex; }
-          .pill:hover { filter: brightness(0.96); }
-
           @keyframes varysPulse { 0% { box-shadow: 0 0 0 0 rgba(240,68,94,0.5); } 70% { box-shadow: 0 0 0 7px rgba(240,68,94,0); } 100% { box-shadow: 0 0 0 0 rgba(240,68,94,0); } }
           @keyframes varysToast { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
         </style>
@@ -877,7 +868,6 @@ export default defineContentScript({
           </div>
           <div class="confirm"></div>
           <div class="toast"><span class="toast-dot"></span><span class="toast-msg"></span></div>
-          <button class="pill" title="Open Varys recorder">V</button>
         </div>`;
       document.documentElement.appendChild(host);
 
@@ -896,7 +886,6 @@ export default defineContentScript({
       cancelBtn = shadow.querySelector(".cancel") as HTMLButtonElement;
       toastEl = shadow.querySelector(".toast") as HTMLElement;
       toastMsgEl = shadow.querySelector(".toast-msg") as HTMLElement;
-      const pillEl = shadow.querySelector(".pill") as HTMLButtonElement;
       modeBtns = {
         element: shadow.querySelector(".m-element") as HTMLButtonElement,
         region: shadow.querySelector(".m-region") as HTMLButtonElement,
@@ -941,15 +930,10 @@ export default defineContentScript({
       });
       applyPos();
 
-      // --- collapse to pill ----------------------------------------------------
-      const applyCollapsed = () => wrapEl.classList.toggle("collapsed", collapsed);
+      // --- close: hide the overlay entirely (the toolbar icon brings it back) --
+      // `toggle()` flips this same display, so the next toolbar-icon click re-shows it.
       (shadow.querySelector(".close") as HTMLElement).addEventListener("click", () => {
-        collapsed = true;
-        applyCollapsed();
-      });
-      pillEl.addEventListener("click", () => {
-        collapsed = false;
-        applyCollapsed();
+        if (host) host.style.display = "none";
       });
 
       startBtn.addEventListener("click", () => (recording ? stop() : void start()));

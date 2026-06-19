@@ -55,6 +55,13 @@ You're building the version your team installs, pointing at the hosted API.
 **Prerequisite for users:** signed in at **https://varys.datagenie.ai** with a
 `datagenie.ai` Google account (the domain restriction), in the same Chrome profile.
 
+**For teammates — just download it (no build):** the deployed web app self-serves the
+prod build. Sign in, open **Browser extension** in the sidebar, and click *Download for
+Chrome* (served at `/downloads/varys-extension-chrome.zip`). The web image builds and
+bundles this zip automatically (`deploy/Dockerfile.web`, `WXT_API_BASE` build arg), so a
+`deploy/deploy.sh web` ships the matching extension alongside the SPA. The manual build
+below is only for local dev or targeting a different API.
+
 **Build + package into a shareable zip:**
 ```sh
 WXT_API_BASE=https://varys.datagenie.ai pnpm --filter @varys/extension exec wxt zip

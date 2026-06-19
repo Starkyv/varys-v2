@@ -3,6 +3,7 @@ import { Author } from "../../views/Author";
 import { Dashboard } from "../../views/Dashboard";
 import { Drafts } from "../../views/Drafts";
 import { Environments } from "../../views/Environments";
+import { Extension } from "../../views/Extension";
 import { NeedsReview } from "../../views/NeedsReview";
 import { RunDetail } from "../../views/RunDetail";
 import { Runs } from "../../views/Runs";
@@ -33,6 +34,8 @@ export function RouteOutlet() {
       return <NeedsReview />;
     case "environments":
       return <Environments />;
+    case "extension":
+      return <Extension />;
     case "runDetail":
       return <RunDetail runId={route.runId} />;
     case "testDetail":

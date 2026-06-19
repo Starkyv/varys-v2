@@ -27,7 +27,8 @@ export type NavKey =
   | "runs"
   | "suiteRuns"
   | "needsReview"
-  | "environments";
+  | "environments"
+  | "extension";
 
 export type Route =
   | { name: "dashboard" }
@@ -39,6 +40,7 @@ export type Route =
   | { name: "suiteRuns"; suiteRunId?: string }
   | { name: "needsReview" }
   | { name: "environments" }
+  | { name: "extension" }
   | { name: "runDetail"; runId: string }
   | { name: "testDetail"; testId: string };
 
@@ -52,6 +54,7 @@ const VIEW_PARAM: Record<NavKey, string> = {
   suiteRuns: "suite-runs",
   needsReview: "needs-review",
   environments: "environments",
+  extension: "extension",
 };
 const PARAM_VIEW: Record<string, NavKey> = Object.fromEntries(
   Object.entries(VIEW_PARAM).map(([k, v]) => [v, k as NavKey]),
@@ -149,6 +152,8 @@ export function routeHeading(route: Route): { title: string; subtitle: string } 
       return { title: "Needs review", subtitle: "Checkpoints awaiting a human decision" };
     case "environments":
       return { title: "Environments", subtitle: "Per-deployment variables & secrets" };
+    case "extension":
+      return { title: "Browser extension", subtitle: "Record tests right in Chrome" };
     case "runDetail":
       return { title: "Run detail", subtitle: "Replay timeline & diff review" };
     case "testDetail":

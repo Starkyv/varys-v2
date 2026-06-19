@@ -226,6 +226,9 @@
   display: block;
   font-size: var(--font-size-xs);
   color: var(--color-text-subtle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .accountChevron {
   flex: 0 0 auto;

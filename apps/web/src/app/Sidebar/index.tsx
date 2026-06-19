@@ -10,12 +10,15 @@ import {
   Inbox,
   ListRun,
   Pencil,
+  Puzzle,
   Squares,
 } from "@varys/ui";
 import { motion } from "framer-motion";
 import type { ComponentType } from "react";
 import { activeNav, type NavKey, type Route, useRouter } from "../../context/router";
 import { useUI } from "../../context/ui";
+import { useSession } from "../../lib/auth";
+import { initials } from "../../lib/user";
 import { useDrafts, useNeedsReview } from "../../queries";
 import styles from "./styles.module.scss";
 
@@ -43,7 +46,13 @@ const GROUPS: NavGroup[] = [
       { key: "needsReview", name: "Needs review", Icon: Eye },
     ],
   },
-  { label: "Configure", items: [{ key: "environments", name: "Environments", Icon: Database }] },
+  {
+    label: "Configure",
+    items: [
+      { key: "environments", name: "Environments", Icon: Database },
+      { key: "extension", name: "Browser extension", Icon: Puzzle },
+    ],
+  },
 ];
 
 export function Sidebar() {
@@ -54,6 +63,13 @@ export function Sidebar() {
   const active = activeNav(route);
   const reviewCount = needsReview.data?.length ?? 0;
   const draftCount = drafts.data?.length ?? 0;
+
+  // The signed-in identity, same source as the top bar's <UserMenu>.
+  const user = useSession().data?.user;
+  const accountName = user?.name || user?.email || "Signed in";
+  // Show the email as the secondary line — unless the name is already the email
+  // (no display name set), in which case there's nothing more to show.
+  const accountSub = user?.name ? user.email : "";
 
   return (
     <aside className={cx(styles.sidebar, sidebarCollapsed && styles.collapsed)}>
@@ -100,13 +116,13 @@ export function Sidebar() {
       </nav>
 
       <div className={styles.footer}>
-        <button type="button" className={styles.account}>
-          <span className={styles.avatar}>M</span>
+        <button type="button" className={styles.account} title={accountName}>
+          <span className={styles.avatar}>{initials(accountName)}</span>
           {!sidebarCollapsed && (
             <>
               <span className={styles.accountText}>
-                <span className={styles.accountName}>Mothil V</span>
-                <span className={styles.accountRole}>QA · Platform</span>
+                <span className={styles.accountName}>{accountName}</span>
+                {accountSub && <span className={styles.accountRole}>{accountSub}</span>}
               </span>
               <span className={styles.accountChevron}>
                 <ChevronDown size={16} />

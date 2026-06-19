@@ -18,6 +18,15 @@ ARG VITE_API_BASE=""
 ENV VITE_API_BASE=$VITE_API_BASE
 RUN pnpm --filter @varys/web build
 
+# Build the production-pointed recorder extension and expose it as a stable static
+# download under the SPA (served by nginx below; the in-app "Browser extension" page
+# links to /downloads/varys-extension-chrome.zip). The API URL is baked into the
+# extension at build time, so point it at the same origin this web bundle serves.
+ARG WXT_API_BASE=https://varys.datagenie.ai
+RUN WXT_API_BASE="$WXT_API_BASE" pnpm --filter @varys/extension exec wxt zip \
+ && mkdir -p apps/web/dist/downloads \
+ && cp apps/extension/.output/*-chrome.zip apps/web/dist/downloads/varys-extension-chrome.zip
+
 # Unprivileged nginx (listens on 8080, runs as a non-root user).
 FROM nginxinc/nginx-unprivileged:alpine
 COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf

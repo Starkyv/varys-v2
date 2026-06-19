@@ -1,16 +1,8 @@
 import { ChevronDown } from "@varys/ui";
 import { useEffect, useRef, useState } from "react";
 import { signOut, useSession } from "../../lib/auth";
+import { initials } from "../../lib/user";
 import styles from "./styles.module.scss";
-
-/** Two-letter avatar initials from a name ("Ada Lovelace" → "AL") or email. */
-function initials(label: string): string {
-  const base = label.trim();
-  if (!base) return "?";
-  const parts = base.split(/\s+/);
-  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
-  return base.slice(0, 2).toUpperCase();
-}
 
 /** The signed-in identity + sign-out, in the top bar. */
 export function UserMenu() {

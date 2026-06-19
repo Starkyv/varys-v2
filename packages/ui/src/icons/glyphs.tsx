@@ -310,3 +310,19 @@ export const MousePointer = (p: IconProps) => (
     <path d="m4 4 7.07 17 2.51-7.42L21 11.07 4 4Z" />
   </IconBase>
 );
+
+/** A download tray — fronts a "save this file" action. */
+export const Download = (p: IconProps) => (
+  <IconBase {...p}>
+    <path d="M12 3v12" />
+    <path d="m7 11 5 5 5-5" />
+    <path d="M5 21h14" />
+  </IconBase>
+);
+
+/** A puzzle piece — the universal "browser extension" symbol. */
+export const Puzzle = (p: IconProps) => (
+  <IconBase {...p}>
+    <path d="M9 4.5a1.8 1.8 0 1 1 3.6 0c0 .6.5 1 1 1H16a1 1 0 0 1 1 1v1.9c0 .5.4 1 1 1a1.8 1.8 0 1 1 0 3.6c-.6 0-1 .5-1 1V17a1 1 0 0 1-1 1h-1.9c-.5 0-1 .4-1 1a1.8 1.8 0 1 1-3.6 0c0-.6-.5-1-1-1H6a1 1 0 0 1-1-1v-1.9c0-.5-.4-1-1-1a1.8 1.8 0 1 1 0-3.6c.6 0 1-.5 1-1V6.5a1 1 0 0 1 1-1h2c.6 0 1-.4 1-1Z" />
+  </IconBase>
+);
