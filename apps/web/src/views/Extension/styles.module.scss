@@ -1,66 +1,131 @@
 @use "../../styles/mixins" as *;
 
+@keyframes vpulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
 .page {
   display: flex;
   flex-direction: column;
   gap: var(--space-20);
-  max-width: 760px;
+  max-width: 860px;
+  margin: 0 auto;
 }
 
-/* --- Hero / download --- */
+/* ============================ hero ============================ */
 .hero {
+  position: relative;
+  overflow: hidden;
+  padding: var(--space-48) clamp(var(--space-24), 5vw, var(--space-48)) var(--space-40);
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-2xl);
+  box-shadow: var(--shadow-md);
+}
+
+.heroGlow {
+  position: absolute;
+  top: -140px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 520px;
+  height: 300px;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, rgba(83, 71, 206, 0.1), rgba(83, 71, 206, 0) 70%);
+}
+
+.heroInner {
+  position: relative;
   display: flex;
-  gap: var(--space-20);
-  align-items: flex-start;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-16);
 }
 
 .heroIcon {
-  @include icon-square(56px, 30px);
-  flex: none;
-  border-radius: var(--radius-2xl);
-  background: var(--color-primary-soft);
-  color: var(--color-primary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  border-radius: var(--radius-xl);
+  background: linear-gradient(140deg, var(--color-brand-400), var(--color-brand-600));
+  color: #fff;
+  box-shadow: 0 10px 28px rgba(83, 71, 206, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.25);
 }
 
-.heroBody {
-  min-width: 0;
+.heroPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 var(--space-10);
+  border-radius: var(--radius-full);
+  background: var(--color-bg-inset);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+}
+
+.heroPillDot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-primary);
+  animation: vpulse 1.8s infinite;
 }
 
 .heroTitle {
-  margin: 0 0 var(--space-6);
-  font-size: var(--font-size-xl);
-  font-weight: var(--font-weight-semibold);
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--font-size-3xl);
+  font-weight: var(--font-weight-bold);
   color: var(--color-text-strong);
+  letter-spacing: var(--letter-spacing-tight);
+  line-height: 1.1;
 }
 
-.heroLede {
-  margin: 0 0 var(--space-16);
-  font-size: var(--font-size-sm);
-  line-height: var(--line-height-relaxed);
-  color: var(--color-text-subtle);
+.heroDesc {
+  margin: 0;
+  max-width: 540px;
+  font-size: var(--font-size-md);
+  line-height: 1.6;
+  color: var(--color-text-muted);
 }
 
 .heroActions {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   align-items: center;
   gap: var(--space-12);
+  margin-top: var(--space-4);
 }
 
-/* A real <a download> styled as the primary CTA (so native download / save-as works). */
+/* A real <a download> styled as the primary CTA (native save/right-click works). */
 .download {
   display: inline-flex;
   align-items: center;
   gap: var(--space-8);
-  height: 40px;
-  padding: 0 var(--space-16);
+  height: 44px;
+  padding: 0 var(--space-20);
   border-radius: var(--radius-lg);
   background: var(--color-primary);
   color: var(--color-text-on-primary);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-base);
   font-weight: var(--font-weight-semibold);
   text-decoration: none;
   cursor: pointer;
+  box-shadow: 0 8px 22px rgba(83, 71, 206, 0.26);
+  transition: background var(--duration-fast) var(--ease-standard), box-shadow var(--duration-fast) var(--ease-standard);
 
   @include focus-ring;
 
@@ -72,22 +137,23 @@
 .req {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-6);
+  gap: 6px;
   font-size: var(--font-size-xs);
   color: var(--color-text-muted);
 }
 
 .devNote {
-  margin: var(--space-16) 0 0;
+  margin: var(--space-8) 0 0;
+  max-width: 540px;
   padding: var(--space-10) var(--space-12);
   border-radius: var(--radius-md);
   background: var(--color-warning-soft);
   color: var(--color-warning-fg);
   font-size: var(--font-size-xs);
-  line-height: var(--line-height-normal);
+  line-height: 1.5;
 }
 
-/* --- Install steps --- */
+/* ============================ install steps ============================ */
 .steps {
   margin: var(--space-8) 0 0;
   padding: 0;
@@ -104,33 +170,75 @@
 }
 
 .stepNum {
-  flex: none;
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 24px;
   height: 24px;
   border-radius: var(--radius-full);
-  background: var(--color-primary-soft);
-  color: var(--color-primary);
+  background: var(--color-primary);
+  color: #fff;
   font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-semibold);
+  font-weight: var(--font-weight-bold);
 }
 
 .stepText {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
+  padding-top: 1px;
 }
+
 .stepTitle {
   font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
+  font-weight: var(--font-weight-semibold);
   color: var(--color-text-strong);
 }
+
 .stepBody {
   font-size: var(--font-size-sm);
-  line-height: var(--line-height-normal);
-  color: var(--color-text-subtle);
+  line-height: 1.55;
+  color: var(--color-text-muted);
+
+  strong {
+    color: var(--color-text-strong);
+    font-weight: var(--font-weight-semibold);
+  }
+}
+
+/* An inline copyable mono chip (chrome://extensions). */
+.codeChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 7px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-inset);
+  color: var(--color-text-strong);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  cursor: pointer;
+  vertical-align: baseline;
+
+  svg {
+    color: var(--color-text-subtle);
+  }
+  &:hover {
+    border-color: var(--color-brand-200);
+    svg {
+      color: var(--color-primary);
+    }
+  }
+}
+
+/* ============================ build / terminal ============================ */
+.bodyText {
+  margin: var(--space-8) 0 var(--space-16);
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+  color: var(--color-text-muted);
 
   code {
     font-family: var(--font-mono);
@@ -142,40 +250,6 @@
   }
 }
 
-/* --- Copy rows (chrome://extensions, build command) --- */
-.copyRow {
-  display: flex;
-  align-items: center;
-  gap: var(--space-8);
-  margin-top: var(--space-16);
-  padding: var(--space-8) var(--space-8) var(--space-8) var(--space-12);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-inset);
-}
-
-.code {
-  flex: 1;
-  min-width: 0;
-  overflow-x: auto;
-  white-space: nowrap;
-  font-family: var(--font-mono);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-strong);
-}
-
-.bodyText {
-  margin: var(--space-8) 0 0;
-  font-size: var(--font-size-sm);
-  line-height: var(--line-height-relaxed);
-  color: var(--color-text-subtle);
-
-  code {
-    font-family: var(--font-mono);
-    font-size: 0.92em;
-  }
-}
-
 .bodyMuted {
   margin: var(--space-12) 0 0;
   font-size: var(--font-size-xs);
@@ -183,5 +257,89 @@
 
   code {
     font-family: var(--font-mono);
+  }
+}
+
+.term {
+  border-radius: var(--radius-lg);
+  background: var(--color-neutral-950);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+}
+
+.termBar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 var(--space-14);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.termLight {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.termRed {
+  background: #ff5f57;
+}
+.termAmber {
+  background: #febc2e;
+}
+.termGreen {
+  background: #28c840;
+}
+
+.termLabel {
+  margin-left: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-neutral-500);
+}
+
+.termBody {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  padding: var(--space-14) var(--space-16);
+}
+
+.termCmd {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  color: #e7eaef;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.termPrompt {
+  color: var(--color-brand-300);
+}
+
+.termCopy {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 var(--space-12);
+  border: 1px solid var(--color-neutral-700);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--color-neutral-300);
+  font-family: var(--font-text);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-standard), background var(--duration-fast) var(--ease-standard);
+
+  @include focus-ring;
+
+  &:hover {
+    color: #fff;
+    background: var(--color-neutral-800);
   }
 }
