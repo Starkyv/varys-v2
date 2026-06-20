@@ -13,9 +13,14 @@ import {
   Globe,
   type IconProps,
   Info,
+  Modal,
+  ModalBody,
+  ModalFooter,
+  ModalHeader,
   MousePointer,
   Pencil,
   Skeleton,
+  Sliders,
   Sparkles,
   X,
 } from "@varys/ui";
@@ -23,11 +28,22 @@ import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { API_BASE } from "../../api";
 import { ZoomableImage } from "../../components/ZoomableImage";
 import { useRouter } from "../../context/router";
-import { useAuthoringSessions, useMcpStatus } from "../../queries";
+import { useToast } from "../../context/toast";
+import {
+  useAuthoringInstructions,
+  useAuthoringSessions,
+  useMcpStatus,
+  useSaveAuthoringInstructions,
+} from "../../queries";
 import styles from "./styles.module.scss";
 
+/** Where the MCP server lives — it IS the API, served same-origin as this app (the Vite proxy
+ *  in dev, the ingress in prod), so derive it from where this page is actually served instead of
+ *  hardcoding a host. A split-origin deploy sets VITE_API_BASE (→ API_BASE) to the API origin; in
+ *  local dev the SPA (:5174) and API (:4000) differ, so target the API port directly. */
+const MCP_BASE = API_BASE || (import.meta.env.DEV ? "http://localhost:4000" : window.location.origin);
 /** The shell command that points a user's own Claude Code at Varys's MCP server. */
-const CONNECT_CMD = "claude mcp add --transport http varys http://localhost:4000/mcp";
+const CONNECT_CMD = `claude mcp add --transport http varys ${MCP_BASE}/mcp`;
 
 /** One captured step of a live session: the action Claude took + the screenshot taken right
  *  after it. A `checkpoint` name marks the steps that become the test's visual assertions. */
@@ -138,6 +154,16 @@ function ConnectionPill({ status }: { status?: McpStatus }) {
   );
 }
 
+/** One example line inside a mode card (a violet ›-chevron + text). */
+function ExampleLine({ children }: { children: ReactNode }) {
+  return (
+    <div className={styles.modeLine}>
+      <span className={styles.modeChevron}>›</span>
+      <span>{children}</span>
+    </div>
+  );
+}
+
 /** Connect / empty state — how to point your own Claude Code at Varys and what to say to it. */
 function ConnectState() {
   const [copied, setCopied] = useState(false);
@@ -152,46 +178,126 @@ function ConnectState() {
   };
   return (
     <div className={styles.connect}>
-      <span className={styles.connectIcon}>
-        <Pencil size={30} />
-      </span>
-      <div className={styles.connectTitle}>No active authoring session</div>
-      <p className={styles.connectDesc}>
-        Connect your own Claude Code to Varys, then describe the flow you want to test in plain
-        language. Claude drives a real browser on the server — every step and checkpoint streams in
-        here.
-      </p>
+      <div className={styles.connectGlow} aria-hidden />
 
-      <div className={styles.steps}>
-        <div className={styles.connectStep}>
-          <div className={styles.connectStepLabel}>
-            <span className={styles.stepNum}>1</span>Connect Claude Code
+      {/* intro */}
+      <div className={styles.intro}>
+        <span className={styles.connectIcon}>
+          <Pencil size={28} />
+        </span>
+        <div className={styles.introHead}>
+          <span className={styles.idle}>
+            <span className={styles.idleDot} />
+            Idle
+          </span>
+          <div className={styles.connectTitle}>No active authoring session</div>
+        </div>
+        <p className={styles.connectDesc}>
+          Connect your Claude Code to Varys, then describe the flow in plain language. Claude drives
+          a real browser on the server — every step and checkpoint streams in here.
+        </p>
+      </div>
+
+      {/* step 1 — connect */}
+      <div className={styles.step}>
+        <div className={styles.stepLabel}>
+          <span className={styles.stepNum}>1</span>
+          <span className={styles.stepLabelText}>Connect Claude Code</span>
+        </div>
+        <div className={styles.term}>
+          <div className={styles.termBar}>
+            <span className={cx(styles.termLight, styles.termRed)} />
+            <span className={cx(styles.termLight, styles.termAmber)} />
+            <span className={cx(styles.termLight, styles.termGreen)} />
+            <span className={styles.termLabel}>terminal</span>
           </div>
-          <div className={styles.cmd}>
-            <span className={styles.cmdText}>
-              <span className={styles.cmdPrompt}>$</span> {CONNECT_CMD}
+          <div className={styles.termBody}>
+            <span className={styles.termCmd}>
+              <span className={styles.termPrompt}>$</span> {CONNECT_CMD}
             </span>
-            <button type="button" className={styles.cmdCopy} onClick={copy} title="Copy command" aria-label="Copy command">
+            <button type="button" className={styles.termCopy} onClick={copy} aria-label="Copy command">
               {copied ? <Check size={14} /> : <CopyGlyph />}
+              {copied ? "Copied" : "Copy"}
             </button>
           </div>
         </div>
-        <div className={styles.connectStep}>
-          <div className={styles.connectStepLabel}>
-            <span className={styles.stepNum}>2</span>Tell it what to test
+      </div>
+
+      {/* step 2 — what to test, two ways */}
+      <div className={styles.step}>
+        <div className={styles.stepLabel}>
+          <span className={styles.stepNum}>2</span>
+          <span className={styles.stepLabelText}>Tell it what to test</span>
+          <span className={styles.stepLabelSub}>— two ways</span>
+        </div>
+        <div className={styles.twoUp}>
+          {/* step-by-step */}
+          <div className={styles.modeCard}>
+            <div className={styles.modeHead}>
+              <span className={styles.modeIcon}>
+                <MousePointer size={19} />
+              </span>
+              <div className={styles.modeTitleWrap}>
+                <div className={styles.modeTitle}>Step-by-step</div>
+                <div className={styles.modeTags}>
+                  <span className={styles.modeTag}>interactive</span>
+                  <span className={styles.modeTagSub}>default</span>
+                </div>
+              </div>
+            </div>
+            <div className={styles.modeDesc}>
+              One instruction at a time. Claude does a single action, then stops and reports what
+              changed — you stay in control.
+            </div>
+            <div className={styles.modeExample}>
+              <ExampleLine>Open the dashboard, log in as a standard user</ExampleLine>
+              <ExampleLine>
+                Click <strong>Reports</strong>
+              </ExampleLine>
+              <ExampleLine>Screenshot the revenue chart as a checkpoint</ExampleLine>
+            </div>
           </div>
-          <div className={styles.example}>
-            <span className={styles.exampleIcon}>
-              <Sparkles size={16} />
-            </span>
-            <div className={styles.exampleText}>
-              “Open the dashboard, log in as a standard user, click <strong>Reports</strong>, then
-              take a screenshot of the revenue chart as a checkpoint.”
+
+          {/* batch */}
+          <div className={styles.modeCard}>
+            <div className={styles.modeHead}>
+              <span className={styles.modeIcon}>
+                <Sparkles size={19} />
+              </span>
+              <div className={styles.modeTitleWrap}>
+                <div className={styles.modeTitle}>Batch</div>
+                <div className={styles.modeTags}>
+                  <span className={styles.modeTag}>batch</span>
+                  <span className={styles.modeTagSub}>runs end-to-end</span>
+                </div>
+              </div>
+            </div>
+            <div className={styles.modeDesc}>
+              Hand Claude a whole plan. It executes the file start to finish, captures every
+              checkpoint, and finishes the draft on its own.
+            </div>
+            <div className={styles.modeExample}>
+              <ExampleLine>
+                Author a Varys test from <strong>./plans/reports.md</strong> in <strong>batch</strong>{" "}
+                mode
+              </ExampleLine>
             </div>
           </div>
         </div>
       </div>
 
+      {/* checkpoints note */}
+      <div className={styles.connectNote}>
+        <span className={styles.connectNoteIcon}>
+          <Info size={15} />
+        </span>
+        <span>
+          Checkpoints — the test’s visual assertions — are captured <strong>only</strong> where you
+          explicitly say “screenshot”, “capture”, or “checkpoint”. Everything else is just navigation.
+        </span>
+      </div>
+
+      {/* waiting footer */}
       <div className={styles.connectWait}>
         <span className={styles.connectWaitDot} />
         Waiting for a session — this view goes live the moment Claude connects.
@@ -211,6 +317,147 @@ function CopyGlyph() {
 }
 
 /**
+ * Editor for the AI authoring instructions (the MCP `initialize` prompt), in two layers served to
+ * Claude as base + additional. Edits are stored server-side and served on the next connect — no
+ * redeploy. "Additional" (team guidance) is the prominent, frequently-edited field; "Base" (the
+ * foundational prompt — modes, checkpoint discipline) sits in a collapsed advanced section since
+ * it changes rarely. When the additional layer is env-locked it's shown read-only.
+ */
+function InstructionsEditor({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { data } = useAuthoringInstructions({ enabled: open });
+  const save = useSaveAuthoringInstructions();
+  const { toast } = useToast();
+  const [additional, setAdditional] = useState("");
+  const [base, setBase] = useState("");
+  const [baseOpen, setBaseOpen] = useState(false);
+  const [seeded, setSeeded] = useState(false);
+
+  // Seed both drafts once per open from the loaded value; reset on close.
+  useEffect(() => {
+    if (!open) {
+      setSeeded(false);
+      setBaseOpen(false);
+      return;
+    }
+    if (!seeded && data) {
+      setAdditional(data.additional);
+      setBase(data.base);
+      setSeeded(true);
+    }
+  }, [open, seeded, data]);
+
+  const additionalDirty = data ? additional !== data.additional : false;
+  const baseDirty = data ? base !== data.base : false;
+  const dirty = additionalDirty || baseDirty;
+  const envLocked = data?.additionalLockedByEnv ?? false;
+
+  const onSave = () => {
+    const body: { base?: string; additional?: string } = {};
+    if (baseDirty) body.base = base;
+    if (additionalDirty && !envLocked) body.additional = additional;
+    save.mutate(body, {
+      onSuccess: () => {
+        toast("Instructions saved");
+        onClose();
+      },
+      onError: (e) => toast(e instanceof Error ? e.message : "Couldn’t save"),
+    });
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} width={760} labelledBy="authoring-instructions-title">
+      <ModalHeader
+        icon={<Sliders />}
+        title="Authoring instructions"
+        titleId="authoring-instructions-title"
+        subtitle="The guidance Claude Code receives on connect. Edits take effect the next time it connects."
+        onClose={onClose}
+      />
+      <ModalBody>
+        {!data ? (
+          <Skeleton height={340} radius="var(--radius-md)" />
+        ) : (
+          <>
+            {/* Additional — the frequently-edited layer, front and centre. */}
+            <div className={styles.instrField}>
+              <div className={styles.instrLabel}>Additional instructions</div>
+              <p className={styles.instrHelp}>
+                Team-specific guidance, appended to the base. Edit this freely — it’s where
+                per-project rules live.
+              </p>
+              <textarea
+                className={styles.instrEditor}
+                value={additional}
+                onChange={(e) => setAdditional(e.target.value)}
+                disabled={envLocked}
+                spellCheck={false}
+                placeholder="e.g. Our app’s login is at /auth. Prefer element checkpoints over full-page."
+                aria-label="Additional instructions"
+              />
+              {envLocked && (
+                <div className={styles.instrNote}>
+                  <Info size={14} />
+                  <span>
+                    Set via environment (a deployment lock) and appended on top — it can’t be edited
+                    here.
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Base — the foundational prompt; rarely changed, so tucked behind a toggle. */}
+            <button
+              type="button"
+              className={styles.instrAdvancedToggle}
+              aria-expanded={baseOpen}
+              onClick={() => setBaseOpen((v) => !v)}
+            >
+              <ChevronRight size={14} className={cx(styles.instrChevron, baseOpen && styles.instrChevronOpen)} />
+              Base instructions
+              <span className={styles.instrAdvancedHint}>
+                · the foundational prompt — change rarely{data.baseUsingDefault ? "" : " · customised"}
+              </span>
+            </button>
+            {baseOpen && (
+              <div className={styles.instrField}>
+                <p className={styles.instrHelp}>
+                  The core contract (the two modes, the checkpoint discipline). Changing this affects
+                  how every test is authored — edit with care.{" "}
+                  {!data.baseUsingDefault && (
+                    <button
+                      type="button"
+                      className={styles.instrResetInline}
+                      onClick={() => setBase(data.baseDefault)}
+                    >
+                      Reset to default
+                    </button>
+                  )}
+                </p>
+                <textarea
+                  className={styles.instrEditor}
+                  value={base}
+                  onChange={(e) => setBase(e.target.value)}
+                  spellCheck={false}
+                  aria-label="Base instructions"
+                />
+              </div>
+            )}
+          </>
+        )}
+      </ModalBody>
+      <ModalFooter>
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button loading={save.isPending} disabled={!dirty} onClick={onSave}>
+          Save
+        </Button>
+      </ModalFooter>
+    </Modal>
+  );
+}
+
+/**
  * Author with AI (Slice 15) — drive authoring from your own Claude Code (your subscription,
  * first-party) and watch it here step by step. Each action Claude takes against Varys's MCP
  * server shows with the screenshot captured right after it; the steps marked **Checkpoint** are
@@ -223,6 +470,7 @@ export function Author() {
   const { navigate } = useRouter();
   const [pickedSeq, setPickedSeq] = useState<number | null>(null);
   const [draft, setDraft] = useState<AuthoringDraftEvent | null>(null);
+  const [editorOpen, setEditorOpen] = useState(false);
 
   const all = sessions.data ?? [];
   // Just the live one: the most recent active session (no multi-session history).
@@ -398,12 +646,17 @@ export function Author() {
 
   return (
     <div className={styles.page}>
-      {/* control row: session header (when live) + connection pill */}
+      <InstructionsEditor open={editorOpen} onClose={() => setEditorOpen(false)} />
+
+      {/* control row: session header (when live) + instructions editor + connection pill */}
       <div className={styles.controlRow}>
         {session && (
           <div className={styles.sessionHead}>
             <div className={styles.sessionTitleRow}>
               <span className={styles.sessionName}>{session.name}</span>
+              <Badge tone={session.mode === "batch" ? "primary" : "neutral"} appearance="soft" size="sm">
+                {session.mode === "batch" ? "Batch" : "Step-by-step"}
+              </Badge>
               <span className={styles.livePill}>
                 <span className={styles.livePillDot} />
                 Live
@@ -416,6 +669,14 @@ export function Author() {
           </div>
         )}
         <span className={styles.spacer} />
+        <Button
+          variant="secondary"
+          size="sm"
+          iconLeft={<Sliders size={15} />}
+          onClick={() => setEditorOpen(true)}
+        >
+          Instructions
+        </Button>
         <ConnectionPill status={mcp.data} />
       </div>
 

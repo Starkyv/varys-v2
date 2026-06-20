@@ -1,4 +1,5 @@
 import type {
+  AuthoringInstructionsView,
   AuthoringSessionSummary,
   BridgeChatState,
   DashboardView,
@@ -119,6 +120,33 @@ export async function sendBridgePrompt(chatId: string, text: string): Promise<vo
   });
   if (!res.ok) {
     throw new Error(`Failed to send prompt (${res.status})`);
+  }
+}
+
+/** Read the editable AI authoring instructions (the MCP `initialize` prompt) for the Author-page
+ *  editor. Throws on a non-2xx response. */
+export async function fetchAuthoringInstructions(): Promise<AuthoringInstructionsView> {
+  const res = await fetch(`${API_BASE}/authoring/instructions`);
+  if (!res.ok) {
+    throw new Error(`Failed to load authoring instructions (${res.status})`);
+  }
+  return (await res.json()) as AuthoringInstructionsView;
+}
+
+/** Save the authoring instructions. Pass `base` and/or `additional` — an omitted layer is left
+ *  untouched. A `base` equal to the default (or empty) clears its override; empty `additional`
+ *  clears that layer. */
+export async function saveAuthoringInstructions(body: {
+  base?: string;
+  additional?: string;
+}): Promise<void> {
+  const res = await fetch(`${API_BASE}/authoring/instructions`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to save authoring instructions (${res.status})`);
   }
 }
 

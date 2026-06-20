@@ -1,5 +1,6 @@
 // Re-export the shared schema so existing intra-app imports keep working.
 export {
+  appSettings,
   baselines,
   DDL,
   draftPreviews,

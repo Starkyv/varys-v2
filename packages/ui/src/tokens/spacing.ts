@@ -11,6 +11,7 @@ export const space = {
   8: "0.5rem", // 8px
   10: "0.625rem", // 10px
   12: "0.75rem", // 12px
+  14: "0.875rem", // 14px
   16: "1rem", // 16px
   20: "1.25rem", // 20px
   24: "1.5rem", // 24px

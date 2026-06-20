@@ -263,6 +263,17 @@ export const testSchedules = pgTable("test_schedules", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+/**
+ * Generic key/value store for runtime-editable app settings — config that the team
+ * changes from the UI without a redeploy, rather than env vars baked at boot. First user:
+ * the AI authoring instructions (the MCP `initialize` prompt), edited on the Author page.
+ */
+export const appSettings = pgTable("app_settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const schema = {
   folders,
   tests,
@@ -278,6 +289,7 @@ export const schema = {
   environments,
   draftPreviews,
   testSchedules,
+  appSettings,
 };
 
 /**
@@ -433,6 +445,13 @@ DELETE FROM run_results a USING run_results b
   WHERE a.run_id = b.run_id AND a.checkpoint_name = b.checkpoint_name
     AND (a.created_at < b.created_at OR (a.created_at = b.created_at AND a.id < b.id));
 CREATE UNIQUE INDEX IF NOT EXISTS run_results_run_checkpoint_uq ON run_results (run_id, checkpoint_name);
+-- Generic key/value store for runtime-editable app settings (no redeploy). First user:
+-- the AI authoring instructions, edited from the Author page.
+CREATE TABLE IF NOT EXISTS app_settings (
+  key text PRIMARY KEY,
+  value text NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
 -- Auth & multi-user (Slice 10 — better-auth-owned tables). These back Varys's OWN
 -- user authentication (who can use Varys), distinct from the per-environment
 -- app-under-test login vault. better-auth manages these tables itself (via its kysely

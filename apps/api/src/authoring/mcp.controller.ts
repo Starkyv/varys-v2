@@ -1,6 +1,6 @@
 import { Body, Controller, Get, HttpException, Inject, Post, Res } from "@nestjs/common";
 import { Public } from "../auth/public.decorator";
-import { resolveAuthoringInstructions } from "./authoring-instructions";
+import { AuthoringInstructionsService } from "./authoring-instructions.service";
 import { AuthoringSessionService, type CheckpointInput } from "./authoring-session.service";
 import { McpStatusService } from "./mcp-status.service";
 
@@ -56,6 +56,7 @@ export class McpController {
   constructor(
     @Inject(AuthoringSessionService) private readonly authoring: AuthoringSessionService,
     @Inject(McpStatusService) private readonly mcpStatus: McpStatusService,
+    @Inject(AuthoringInstructionsService) private readonly instructions: AuthoringInstructionsService,
   ) {}
 
   // Streamable HTTP: this server doesn't push, so the optional server→client SSE stream
@@ -108,8 +109,9 @@ export class McpController {
           capabilities: { tools: { listChanged: false } },
           serverInfo: SERVER_INFO,
           // General authoring guidance the client folds into the model's context (the
-          // "middleware prompt"). Configurable via VARYS_AUTHORING_INSTRUCTIONS[_FILE].
-          instructions: resolveAuthoringInstructions(),
+          // "middleware prompt"). Editable from the Author page (DB-backed) and resolved per
+          // connect, so a change takes effect on the next connect with no restart.
+          instructions: await this.instructions.resolve(),
         };
       }
       case "notifications/initialized":
@@ -173,13 +175,19 @@ export class McpController {
       {
         name: "open_session",
         description:
-          "Open a Varys authoring session: launch a browser, navigate to the start URL, and begin recording. Returns a sessionId used by every later tool. The entry URL's origin becomes {{baseUrl}} so the test stays environment-agnostic.",
+          "Open a Varys authoring session: launch a browser, navigate to the start URL, and begin recording. Returns a sessionId used by every later tool, plus the session `mode` and mode-specific `guidance` — read the guidance and follow it for the rest of the session. The entry URL's origin becomes {{baseUrl}} so the test stays environment-agnostic.",
         inputSchema: {
           type: "object",
           properties: {
             startUrl: { type: "string", description: "The URL to open the session on (e.g. the app's login page)." },
             name: { type: "string", description: "A name for the test being authored." },
             intent: { type: "string", description: "What this test should verify — the steering instruction (shown in the review queue)." },
+            mode: {
+              type: "string",
+              enum: ["interactive", "batch"],
+              description:
+                "How you'll drive this session. Rule: use 'batch' ONLY when the user explicitly says 'batch' or points you at a plan/instructions file to run; otherwise use 'interactive' (the default), and when unsure pick 'interactive'. 'interactive': the user gives one instruction at a time — do that one action, then stop and wait. 'batch': run the whole plan/file end-to-end, then finish_session. In BOTH modes, checkpoint only when explicitly asked.",
+            },
           },
           required: ["startUrl"],
         },
@@ -188,6 +196,7 @@ export class McpController {
             startUrl: String(args.startUrl ?? ""),
             name: args.name ? String(args.name) : undefined,
             intent: args.intent ? String(args.intent) : undefined,
+            mode: args.mode === "batch" ? "batch" : args.mode === "interactive" ? "interactive" : undefined,
           }),
       },
       {
@@ -321,7 +330,7 @@ export class McpController {
       {
         name: "checkpoint",
         description:
-          "Add a visual checkpoint (a screenshot diffed against a baseline on replay) — the test's actual assertion. THIS is what the user means when they say \"take a screenshot\", \"capture\", \"snapshot\", or \"check/verify this screen\" — record those as checkpoints, not as observe screenshots. mode 'fullpage' (the whole screen, the natural default for 'this screen renders'), 'element' (a specific component, by ref), or 'region' (a rect). Pass masks (rects) over volatile areas (timestamps, ids) as a best-effort proposal; a human finalizes them in review. Give a stable, meaningful name.",
+          "Add a visual checkpoint (a screenshot diffed against a baseline on replay) — the test's actual assertion. Call this ONLY when the instruction explicitly asks for one: \"take a screenshot\", \"capture\", \"snapshot\", \"checkpoint\", or \"check/verify this screen\". Do NOT add a checkpoint on your own initiative, after every step, or just to make the test 'assert something' — most actions are not assertions. When asked, record it here (not as an observe screenshot). mode 'fullpage' (the whole screen), 'element' (a specific component, by ref), or 'region' (a rect). Pass masks (rects) over volatile areas (timestamps, ids) as a best-effort proposal; a human finalizes them in review. Give a stable, meaningful name.",
         inputSchema: {
           type: "object",
           properties: {
@@ -362,7 +371,7 @@ export class McpController {
       {
         name: "finish_session",
         description:
-          "Finish the session: assemble the recorded steps into a draft test and end the session. Returns the draft testId and a warning if it has no checkpoints. A human reviews and promotes the draft in the Varys web app.",
+          "Finish the session: assemble the recorded steps into a draft test and end the session. Returns the draft testId and a warning if it has no checkpoints. Finishing with zero checkpoints IS allowed (the draft just carries that warning) — do NOT invent a checkpoint to avoid the warning; only the user/plan decides what to assert. A human reviews and promotes the draft in the Varys web app.",
         inputSchema: {
           type: "object",
           properties: { sessionId: { type: "string" } },

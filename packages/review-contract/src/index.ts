@@ -276,6 +276,33 @@ export interface PromoteDraftBody {
 }
 
 /**
+ * How an Authoring Session is being driven (Author with AI):
+ *  - `interactive` — step-by-step: Claude performs one action per instruction, then waits.
+ *  - `batch` — Claude runs a whole plan/file to completion in one go.
+ * Chosen when the session opens (`open_session`'s `mode`); steers Claude's behavior and the
+ * checkpoint cadence, and drives a badge in the live view. Defaults to `interactive`.
+ */
+export type AuthoringMode = "interactive" | "batch";
+
+/**
+ * The AI authoring instructions (the MCP `initialize` prompt), as read/edited from the Author
+ * page (`GET/PUT /authoring/instructions`). Two layers, served to Claude as `base` + `additional`:
+ *  - `base` — the foundational prompt (modes, checkpoint discipline, core rules). Changed rarely;
+ *    edited in an "advanced" section. `baseUsingDefault` is true when no override is stored (so
+ *    `base` is the baked-in `baseDefault`, the reset target).
+ *  - `additional` — team-specific guidance, edited frequently and appended under its own heading.
+ *    When `additionalLockedByEnv` is true it's supplied via env (a deployment lock) and read-only
+ *    here. Changes apply on the next Claude Code connect.
+ */
+export interface AuthoringInstructionsView {
+  base: string;
+  baseUsingDefault: boolean;
+  baseDefault: string;
+  additional: string;
+  additionalLockedByEnv: boolean;
+}
+
+/**
  * One active Authoring Session, as listed for the live-preview picker
  * (`GET /authoring/sessions`, Slice 15 — Author with AI). An Authoring Session is the live
  * server-side browser Claude drives; this is just enough to identify and choose one to watch.
@@ -286,6 +313,8 @@ export interface AuthoringSessionSummary {
   name: string;
   /** The steering intent that opened the session, if any. */
   intent: string | null;
+  /** Whether the session is being driven step-by-step or as a batch plan. */
+  mode: AuthoringMode;
   /** The session's current page URL and title. */
   url: string;
   title: string;

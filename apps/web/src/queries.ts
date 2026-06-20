@@ -13,8 +13,10 @@ import {
   deleteSuite,
   deleteTest,
   discardDraft,
+  fetchAuthoringInstructions,
   fetchAuthoringSessions,
   fetchMcpStatus,
+  saveAuthoringInstructions,
   fetchDashboard,
   fetchDraft,
   fetchDrafts,
@@ -159,6 +161,28 @@ export function useMcpStatus() {
     queryKey: ["mcp-status"] as const,
     queryFn: fetchMcpStatus,
     refetchInterval: 5000,
+  });
+}
+
+export function authoringInstructionsQueryKey() {
+  return ["authoring-instructions"] as const;
+}
+
+/** The editable AI authoring instructions (MCP prompt). Fetched lazily — only when the editor
+ *  opens — since it's a config surface, not part of the live view. */
+export function useAuthoringInstructions(opts?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: authoringInstructionsQueryKey(),
+    queryFn: fetchAuthoringInstructions,
+    enabled: opts?.enabled ?? true,
+  });
+}
+
+export function useSaveAuthoringInstructions() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { base?: string; additional?: string }) => saveAuthoringInstructions(body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: authoringInstructionsQueryKey() }),
   });
 }
 

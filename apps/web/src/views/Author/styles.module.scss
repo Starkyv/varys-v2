@@ -204,19 +204,47 @@
 }
 
 /* ============================ connect / empty state ============================ */
+@keyframes vpulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
 .connect {
+  position: relative;
+  overflow: hidden;
+  max-width: 900px;
+  margin: var(--space-24) auto 0;
+  padding: var(--space-48) clamp(var(--space-24), 5vw, var(--space-48)) var(--space-32);
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-2xl);
+  box-shadow: var(--shadow-md);
+}
+
+/* Ambient violet glow behind the intro. */
+.connectGlow {
+  position: absolute;
+  top: -140px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 520px;
+  height: 300px;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, rgba(83, 71, 206, 0.1), rgba(83, 71, 206, 0) 70%);
+}
+
+.intro {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
   text-align: center;
   gap: var(--space-16);
-  max-width: 720px;
-  margin: var(--space-24) auto 0;
-  padding: var(--space-64) var(--space-48);
-  background: var(--color-bg-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-sm);
 }
 
 .connectIcon {
@@ -225,42 +253,89 @@
   justify-content: center;
   width: 64px;
   height: 64px;
-  border-radius: var(--radius-2xl);
-  background: var(--color-primary-soft);
-  color: var(--color-primary);
+  border-radius: var(--radius-xl);
+  background: linear-gradient(140deg, var(--color-brand-400), var(--color-brand-600));
+  color: #fff;
+  box-shadow: 0 10px 28px rgba(83, 71, 206, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+
+.introHead {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.idle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 var(--space-10);
+  border-radius: var(--radius-full);
+  background: var(--color-bg-inset);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+}
+
+.idleDot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-neutral-400);
+  animation: vpulse 1.8s infinite;
 }
 
 .connectTitle {
   font-family: var(--font-display);
-  font-size: var(--font-size-2xl);
+  font-size: var(--font-size-3xl);
   font-weight: var(--font-weight-bold);
   color: var(--color-text-strong);
   letter-spacing: var(--letter-spacing-tight);
+  line-height: 1.1;
 }
 
 .connectDesc {
   margin: 0;
-  max-width: 520px;
+  max-width: 540px;
   font-size: var(--font-size-md);
-  line-height: 1.55;
+  line-height: 1.6;
   color: var(--color-text-muted);
 }
 
-.steps {
-  width: 100%;
-  max-width: 560px;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-12);
-  margin-top: var(--space-8);
-  text-align: left;
+/* --- steps --- */
+.step {
+  position: relative;
+  margin-top: var(--space-40);
+}
+.step + .step {
+  margin-top: var(--space-32);
 }
 
-.connectStepLabel {
+.stepLabel {
   display: flex;
   align-items: center;
-  gap: var(--space-8);
-  margin-bottom: var(--space-8);
+  gap: var(--space-10);
+  margin-bottom: var(--space-12);
+}
+
+.stepNum {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-full);
+  background: var(--color-primary);
+  color: #fff;
+  font-size: 11px;
+  font-weight: var(--font-weight-bold);
+}
+
+.stepLabelText {
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-semibold);
   letter-spacing: var(--letter-spacing-wide);
@@ -268,29 +343,58 @@
   color: var(--color-text-muted);
 }
 
-.stepNum {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: var(--radius-full);
-  background: var(--color-bg-inset);
-  color: var(--color-text);
-  font-size: 11px;
+.stepLabelSub {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
 }
 
-.cmd {
+/* --- terminal (step 1) --- */
+.term {
+  border-radius: var(--radius-lg);
+  background: var(--color-neutral-950);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+}
+
+.termBar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 var(--space-14);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.termLight {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.termRed {
+  background: #ff5f57;
+}
+.termAmber {
+  background: #febc2e;
+}
+.termGreen {
+  background: #28c840;
+}
+
+.termLabel {
+  margin-left: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-neutral-500);
+}
+
+.termBody {
   display: flex;
   align-items: center;
   gap: var(--space-12);
-  padding: var(--space-12) 14px;
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
-  background: var(--color-neutral-950);
+  padding: var(--space-14) var(--space-16);
 }
 
-.cmdText {
+.termCmd {
   flex: 1;
   min-width: 0;
   font-family: var(--font-mono);
@@ -300,21 +404,24 @@
   white-space: nowrap;
 }
 
-.cmdPrompt {
+.termPrompt {
   color: var(--color-brand-300);
 }
 
-.cmdCopy {
+.termCopy {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
+  gap: 6px;
+  height: 32px;
+  padding: 0 var(--space-12);
   border: 1px solid var(--color-neutral-700);
   border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--color-neutral-400);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--color-neutral-300);
+  font-family: var(--font-text);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
   cursor: pointer;
   transition: color var(--duration-fast) var(--ease-standard), background var(--duration-fast) var(--ease-standard);
 
@@ -326,38 +433,163 @@
   }
 }
 
-.example {
-  display: flex;
-  gap: var(--space-12);
-  padding: 14px var(--space-16);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-subtle);
+/* --- two mode cards (step 2) --- */
+.twoUp {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-16);
+
+  @media (max-width: 640px) {
+    grid-template-columns: 1fr;
+  }
 }
 
-.exampleIcon {
+.modeCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+  padding: var(--space-20);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  background: var(--color-bg-surface);
+  transition: border-color var(--duration-base) var(--ease-standard), box-shadow var(--duration-base) var(--ease-standard);
+
+  &:hover {
+    border-color: var(--color-brand-200);
+    box-shadow: var(--shadow-sm);
+  }
+}
+
+.modeHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+}
+
+.modeIcon {
   flex: 0 0 auto;
-  margin-top: 1px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: var(--radius-md);
+  background: var(--color-primary-soft);
   color: var(--color-primary);
 }
 
-.exampleText {
+.modeTitleWrap {
+  flex: 1;
+  min-width: 0;
+}
+
+.modeTitle {
+  font-family: var(--font-display);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+  line-height: 1.2;
+}
+
+.modeTags {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 3px;
+}
+
+.modeTag {
   font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.modeTagSub {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+
+.modeDesc {
   font-size: var(--font-size-sm);
   line-height: 1.6;
-  color: var(--color-text);
+  color: var(--color-text-muted);
+}
 
+.modeExample {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--space-12) var(--space-14);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  color: var(--color-text);
+}
+
+.modeLine {
+  display: flex;
+  gap: 7px;
+
+  span:last-child {
+    flex: 1;
+    min-width: 0;
+  }
   strong {
     color: var(--color-text-strong);
     font-weight: var(--font-weight-semibold);
   }
 }
 
-.connectWait {
+.modeChevron {
+  color: var(--color-primary);
+}
+
+/* --- checkpoints note --- */
+.connectNote {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-12);
+  margin-top: var(--space-20);
+  padding: var(--space-14) var(--space-16);
+  border-radius: var(--radius-lg);
+  background: var(--color-primary-soft);
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+  color: var(--color-brand-800);
+
+  strong {
+    font-weight: var(--font-weight-bold);
+  }
+}
+
+.connectNoteIcon {
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  margin-top: var(--space-8);
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-md);
+  background: rgba(83, 71, 206, 0.14);
+  color: var(--color-primary);
+}
+
+/* --- waiting footer --- */
+.connectWait {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  margin-top: var(--space-32);
+  padding-top: var(--space-20);
+  border-top: 1px solid var(--color-border);
   font-size: var(--font-size-xs);
   color: var(--color-text-subtle);
 }
@@ -367,6 +599,112 @@
   height: 7px;
   border-radius: var(--radius-full);
   background: var(--color-neutral-400);
+  animation: vpulse 1.8s infinite;
+}
+
+/* ============================ authoring-instructions editor ============================ */
+.instrField {
+  margin-bottom: var(--space-16);
+}
+
+.instrLabel {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+}
+
+.instrHelp {
+  margin: 4px 0 var(--space-8);
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  color: var(--color-text-subtle);
+}
+
+.instrEditor {
+  width: 100%;
+  min-height: 220px;
+  resize: vertical;
+  padding: var(--space-12);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-surface);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  line-height: 1.55;
+  outline: none;
+
+  &:focus {
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 3px var(--color-primary-soft);
+  }
+  &:disabled {
+    background: var(--color-bg-subtle);
+    color: var(--color-text-muted);
+    cursor: not-allowed;
+  }
+}
+
+.instrNote {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: var(--space-8);
+  padding: var(--space-10) var(--space-12);
+  border-radius: var(--radius-md);
+  background: var(--color-warning-soft);
+  color: var(--color-warning-fg);
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+
+  svg {
+    flex: 0 0 auto;
+    margin-top: 1px;
+  }
+}
+
+/* Collapsed "advanced" toggle for the base layer. */
+.instrAdvancedToggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: var(--space-8) 0;
+  border: none;
+  border-top: 1px solid var(--color-border);
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-strong);
+}
+
+.instrChevron {
+  flex: 0 0 auto;
+  color: var(--color-text-subtle);
+  transition: transform 0.12s ease;
+}
+.instrChevronOpen {
+  transform: rotate(90deg);
+}
+
+.instrAdvancedHint {
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-subtle);
+}
+
+.instrResetInline {
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-size-xs);
+  color: var(--color-primary);
+
+  &:hover {
+    text-decoration: underline;
+  }
 }
 
 .loading {

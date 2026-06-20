@@ -13,7 +13,12 @@ import {
   type TypedKind,
 } from "@varys/recorder";
 import type { Fingerprint, Rect, Step, Viewport, Wait } from "@varys/step-schema";
-import type { AuthoringDraftEvent, AuthoringFrame, AuthoringSessionSummary } from "@varys/review-contract";
+import type {
+  AuthoringDraftEvent,
+  AuthoringFrame,
+  AuthoringMode,
+  AuthoringSessionSummary,
+} from "@varys/review-contract";
 import { type Browser, type BrowserContext, chromium, type Locator, type Page } from "playwright-core";
 import { type Observable, Subject } from "rxjs";
 import { TestsService } from "../tests/tests.service";
@@ -87,6 +92,7 @@ interface SessionState {
   viewport: Viewport;
   name: string;
   intent: string | null;
+  mode: AuthoringMode;
   /** Waits requested since the last recorded step — drained onto the next step's waitBefore. */
   pendingWaits: Wait[];
   /** Variables typed so far (name → authoring-time value) — the selector guard's reference. */
@@ -104,6 +110,8 @@ export interface OpenSessionInput {
   startUrl: string;
   name?: string;
   intent?: string;
+  /** How Claude will drive this session (default "interactive"). See AuthoringMode. */
+  mode?: AuthoringMode;
   viewport?: Partial<Viewport>;
 }
 
@@ -112,6 +120,19 @@ export interface OpenSessionResult {
   url: string;
   title: string;
   nodes: SnapshotNode[];
+  /** The mode this session was opened in (echoed so the agent can confirm it stuck). */
+  mode: AuthoringMode;
+  /** Mode-specific steering for the rest of this session — reasserted here because the MCP
+   *  `initialize` instructions are global/once, while this lands right when work begins. */
+  guidance: string;
+}
+
+/** Per-mode steering returned from open_session, anchoring how Claude proceeds. The checkpoint
+ *  discipline (only on an explicit request) holds in BOTH modes — see authoring-instructions. */
+function modeGuidance(mode: AuthoringMode): string {
+  return mode === "batch"
+    ? "Batch mode: execute the whole plan to completion without pausing for confirmation between steps. Take a checkpoint ONLY where the plan explicitly asks for one (e.g. 'screenshot', 'capture', 'snapshot', 'checkpoint', 'verify this screen') — never add one on your own. When the plan is done, call finish_session."
+    : "Step-by-step mode: perform ONLY the single action just requested, then stop and report what you did and what the page now shows. Do not run ahead to later steps. Take a checkpoint only when explicitly told to, and call finish_session only when the user says they're done.";
 }
 
 export interface FinishResult {
@@ -247,6 +268,7 @@ export class AuthoringSessionService {
     rec.push(buildEntryNavigate(href, new URL(href).origin));
 
     const sessionId = randomUUID();
+    const mode: AuthoringMode = input.mode === "batch" ? "batch" : "interactive";
     this.sessions.set(sessionId, {
       browser,
       context,
@@ -255,15 +277,16 @@ export class AuthoringSessionService {
       viewport,
       name: input.name?.trim() || "authored test",
       intent: input.intent?.trim() || null,
+      mode,
       pendingWaits: [],
       knownVariables: [],
       previews: new Map(),
       frameSeq: 0,
     });
-    this.log.log(`opened authoring session ${sessionId} on ${href}`);
+    this.log.log(`opened authoring session ${sessionId} on ${href} (${mode})`);
     const { nodes } = await page.evaluate(collectSnapshot);
     await this.emitFrame(sessionId, { type: "navigate" });
-    return { sessionId, url: href, title: await page.title(), nodes };
+    return { sessionId, url: href, title: await page.title(), nodes, mode, guidance: modeGuidance(mode) };
   }
 
   /** Perceive the current page: a ref-annotated node list (+ optional screenshot). */
@@ -437,7 +460,7 @@ export class AuthoringSessionService {
       checkpointCount,
       warning:
         checkpointCount === 0
-          ? "This draft has no checkpoints — it asserts nothing. Add at least one checkpoint before finishing."
+          ? "This draft has no checkpoints, so it asserts nothing yet. That's expected if the plan never asked for one — a human can add a checkpoint in review. Do NOT add a checkpoint just to clear this notice."
           : null,
     };
   }
@@ -474,6 +497,7 @@ export class AuthoringSessionService {
         sessionId,
         name: s.name,
         intent: s.intent,
+        mode: s.mode,
         url: s.page.url(),
         title: await s.page.title().catch(() => ""),
         stepCount: s.rec.stepCount(),
