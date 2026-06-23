@@ -1,5 +1,6 @@
 import type { SuiteSummary } from "@varys/review-contract";
 import { Button, Pencil, Play, Squares } from "@varys/ui";
+import { formatActor } from "../../../../lib/format";
 import styles from "./styles.module.scss";
 
 export function SuiteCard({
@@ -19,7 +20,12 @@ export function SuiteCard({
         </span>
         <div className={styles.text}>
           <div className={styles.name}>{suite.name}</div>
-          <div className={styles.count}>{suite.testCount} tests</div>
+          <div className={styles.count}>
+            {suite.testCount} tests
+            {suite.createdBy && (
+              <span title={`Created by ${suite.createdBy}`}> · by {formatActor(suite.createdBy)}</span>
+            )}
+          </div>
         </div>
       </div>
       <div className={styles.actions}>

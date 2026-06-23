@@ -1,6 +1,9 @@
 import type {
   ConfigWait,
   EditableWait,
+  EnvironmentView,
+  FingerprintPatch,
+  LocatorVerifyResult,
   TestConfigPatch,
   TestConfigStep,
   TestConfigStepPatch,
@@ -9,10 +12,12 @@ import type {
 } from "@varys/review-contract";
 import {
   Activity,
+  AlertTriangle,
   ArrowLeft,
   Badge,
   Button,
   Card,
+  Check,
   Clock,
   ErrorState,
   ExternalLink,
@@ -20,6 +25,7 @@ import {
   IconButton,
   Input,
   Lock,
+  MousePointer,
   Pencil,
   Play,
   Select,
@@ -30,11 +36,19 @@ import {
   Trash,
 } from "@varys/ui";
 import { useState } from "react";
+import { NotesCard } from "../../components/NotesCard";
 import { useRouter } from "../../context/router";
 import { useRunDialog } from "../../context/run-dialog";
 import { useToast } from "../../context/toast";
 import { absoluteTime, relativeTime } from "../../lib/format";
-import { useEnvironments, useSaveTestConfig, useTestConfig, useUpdateTest } from "../../queries";
+import { isVariableSatisfied } from "../../lib/variables";
+import {
+  useEnvironments,
+  useSaveTestConfig,
+  useTestConfig,
+  useUpdateTest,
+  useVerifyLocator,
+} from "../../queries";
 import styles from "./styles.module.scss";
 
 /** Plain-language summary of common cron expressions (display only — the server's
@@ -67,6 +81,16 @@ function scheduleKey(s: TestSchedule | null): string {
 }
 
 type LockedWait = Extract<ConfigWait, { kind: "selector" }>;
+
+/** The editable locator signals for one step, as draft strings ("" = absent/cleared). */
+type LocatorDraft = {
+  role: string;
+  accessibleName: string;
+  text: string;
+  testId: string;
+  selectorOverride: string;
+};
+const LOCATOR_FIELDS = ["role", "accessibleName", "text", "testId", "selectorOverride"] as const;
 
 /** Split a step's waits into the selector waits (display-only, preserved on save) and
  *  the delay/networkIdle waits the editor manages. */
@@ -171,6 +195,7 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
   const { openRunDialog } = useRunDialog();
   const { toast } = useToast();
   const save = useSaveTestConfig(config.id);
+  const notesUpdate = useUpdateTest();
 
   const checkpointCount = config.steps.filter((s) => s.type === "screenshot").length;
 
@@ -186,6 +211,76 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
     }
     return m;
   });
+
+  // Per-step editable locator signals, seeded from the read-model. Only steps with an
+  // element target (click / type / element-mode screenshot) get an entry.
+  const initialTargets: Record<number, LocatorDraft> = {};
+  for (const s of config.steps) {
+    if (s.target) {
+      initialTargets[s.index] = {
+        role: s.target.role ?? "",
+        accessibleName: s.target.accessibleName ?? "",
+        text: s.target.text ?? "",
+        testId: s.target.testId ?? "",
+        selectorOverride: s.target.selectorOverride ?? "",
+      };
+    }
+  }
+  const [targets, setTargets] = useState<Record<number, LocatorDraft>>(initialTargets);
+  function setTargetField(index: number, field: keyof LocatorDraft, value: string) {
+    setTargets((prev) => ({ ...prev, [index]: { ...prev[index], [field]: value } }));
+    // A locator edit invalidates that step's last verdict — clear it so we never show stale.
+    setVerdicts((prev) => {
+      if (!(index in prev)) return prev;
+      const next = { ...prev };
+      delete next[index];
+      return next;
+    });
+  }
+
+  // Live locator verify (Slice 16.3b). The env picker mirrors the Run pre-flight: required
+  // (with a satisfied-check) when the test declares variables; absent for a no-variable test.
+  const environments = useEnvironments();
+  const verifyMut = useVerifyLocator(config.id);
+  const [verifyEnvId, setVerifyEnvId] = useState<string>("");
+  const [verdicts, setVerdicts] = useState<Record<number, LocatorVerifyResult>>({});
+  const [verifyingStep, setVerifyingStep] = useState<number | null>(null);
+
+  const envList = environments.data ?? [];
+  const selectedEnv: EnvironmentView | undefined = verifyEnvId
+    ? envList.find((e) => e.id === verifyEnvId)
+    : undefined;
+  const missingVars =
+    config.needsEnvironment && selectedEnv
+      ? config.variables.filter((v) => !isVariableSatisfied(v, selectedEnv))
+      : [];
+  // Can't verify until a needed environment is chosen and satisfies the test's variables.
+  const canVerify =
+    (!config.needsEnvironment || (!!selectedEnv && missingVars.length === 0)) &&
+    verifyingStep === null;
+
+  function onVerify(stepIndex: number) {
+    const td = targets[stepIndex];
+    if (!td) return;
+    // Send the CURRENT (unsaved) draft for every editable signal so the server's merge
+    // reproduces exactly the candidate a save would write ("" clears a signal).
+    const target: FingerprintPatch = {
+      role: td.role,
+      accessibleName: td.accessibleName,
+      text: td.text,
+      testId: td.testId,
+      selectorOverride: td.selectorOverride,
+    };
+    setVerifyingStep(stepIndex);
+    verifyMut.mutate(
+      { stepIndex, environmentId: verifyEnvId || undefined, target },
+      {
+        onSuccess: (res) => setVerdicts((prev) => ({ ...prev, [stepIndex]: res })),
+        onError: (e) => toast(e instanceof Error ? e.message : "Couldn’t verify the locator"),
+        onSettled: () => setVerifyingStep(null),
+      },
+    );
+  }
 
   // Steps marked for removal (by definition index). Applied on save; the entry
   // navigation (index 0) can't be removed and never offers the control.
@@ -230,10 +325,24 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
       const cur = (thresholds[s.index] ?? "").trim();
       const thresholdChanged =
         s.type === "screenshot" && cur !== "" && cur !== initialThreshold(s) && !thresholdInvalid(s);
-      if (!waitsChanged && !thresholdChanged) return;
+
+      // Locator: send only the signals that actually changed ("" = clear that signal).
+      let targetPatch: FingerprintPatch | undefined;
+      const td = targets[s.index];
+      const ti = initialTargets[s.index];
+      if (td && ti) {
+        const fp: FingerprintPatch = {};
+        for (const k of LOCATOR_FIELDS) {
+          if ((td[k] ?? "") !== (ti[k] ?? "")) fp[k] = td[k];
+        }
+        if (Object.keys(fp).length > 0) targetPatch = fp;
+      }
+
+      if (!waitsChanged && !thresholdChanged && !targetPatch) return;
       const p: TestConfigStepPatch = { index: s.index };
       if (waitsChanged) p.waitBefore = stepWaits[i];
       if (thresholdChanged) p.threshold = Number(cur);
+      if (targetPatch) p.target = targetPatch;
       steps.push(p);
     });
 
@@ -305,6 +414,21 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
             schedule={config.schedule}
           />
 
+          <NotesCard
+            notes={config.notes}
+            saving={notesUpdate.isPending}
+            placeholder="Add a note about this test — coverage, known flakiness, ownership…"
+            onSave={(text) =>
+              notesUpdate.mutateAsync({ id: config.id, body: { notes: text } }).then(
+                () => toast("Note saved"),
+                (e) => {
+                  toast(e instanceof Error ? e.message : "Couldn’t save note");
+                  throw e;
+                },
+              )
+            }
+          />
+
           <Card>
             <div className={styles.cardHead}>
               <span className={styles.cardIcon}>
@@ -341,6 +465,29 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
           </div>
           <span className={styles.cardCount}>
             {config.steps.length} step{config.steps.length === 1 ? "" : "s"}
+          </span>
+        </div>
+        <div className={styles.verifyBar}>
+          {config.needsEnvironment && (
+            <>
+              <span className={styles.verifyBarLabel}>Verify against</span>
+              <Select
+                ariaLabel="Verify environment"
+                selectSize="sm"
+                value={verifyEnvId}
+                onValueChange={setVerifyEnvId}
+                placeholder="Select an environment"
+                options={envList.map((e) => ({ value: e.id, label: e.name }))}
+              />
+              {selectedEnv && missingVars.length > 0 && (
+                <span className={styles.verifyBarWarn}>
+                  <AlertTriangle size={12} /> missing {missingVars.map((v) => v.name).join(", ")}
+                </span>
+              )}
+            </>
+          )}
+          <span className={styles.verifyNote}>
+            Verify drives the steps up to each one in a real browser, then checks the locator there.
           </span>
         </div>
         <div className={styles.steps}>
@@ -399,6 +546,62 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
                         />
                       ) : (
                         <div className={styles.stepNote}>Navigation settles on network idle automatically.</div>
+                      )}
+
+                      {s.target && (
+                        <div className={styles.locator}>
+                          <div className={styles.locatorHead}>
+                            <MousePointer size={13} />
+                            <span className={styles.locatorLabel}>Locator</span>
+                            <span className={styles.locatorTag}>{s.target.tag}</span>
+                          </div>
+                          <div className={styles.locatorGrid}>
+                            {(
+                              [
+                                ["role", "Role"],
+                                ["accessibleName", "Name"],
+                                ["text", "Text"],
+                                ["testId", "Test id"],
+                              ] as const
+                            ).map(([field, label]) => (
+                              <LocatorField
+                                key={field}
+                                label={label}
+                                value={targets[s.index]?.[field] ?? ""}
+                                onChange={(v) => setTargetField(s.index, field, v)}
+                              />
+                            ))}
+                          </div>
+                          <details className={styles.advanced}>
+                            <summary className={styles.advancedSummary}>Advanced — raw selector override</summary>
+                            <Input
+                              inputSize="sm"
+                              mono
+                              value={targets[s.index]?.selectorOverride ?? ""}
+                              placeholder="e.g. #submit-btn  or  .form > button"
+                              aria-label="Selector override"
+                              onChange={(e) => setTargetField(s.index, "selectorOverride", e.target.value)}
+                            />
+                            <div className={styles.advancedHelp}>
+                              Used as-is when it resolves to exactly one element; otherwise the signals above are used.
+                            </div>
+                          </details>
+                          <div className={styles.locatorHelp}>
+                            Edit a signal, or clear one to drop it — the rest of the locator is kept. Applies on the next run.
+                          </div>
+                          <div className={styles.verifyRow}>
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              loading={verifyingStep === s.index}
+                              disabled={!canVerify}
+                              onClick={() => onVerify(s.index)}
+                            >
+                              Verify
+                            </Button>
+                            {verdicts[s.index] && <Verdict result={verdicts[s.index]} />}
+                          </div>
+                        </div>
                       )}
 
                       {s.type === "screenshot" && (
@@ -716,6 +919,66 @@ function ScheduleCard({ testId, schedule }: { testId: string; schedule: TestSche
         </Button>
       </div>
     </Card>
+  );
+}
+
+/** One labelled locator-signal input (role / name / text / test id). Empty = the signal
+ *  is absent or being cleared. */
+function LocatorField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <label className={styles.locatorField}>
+      <span className={styles.locatorFieldLabel}>{label}</span>
+      <Input
+        inputSize="sm"
+        value={value}
+        placeholder="—"
+        aria-label={label}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </label>
+  );
+}
+
+/** Inline verdict for a live locator verify (Slice 16.3b): resolved (with matched signal +
+ *  healed flag), ambiguous, not-found, or — when the drive couldn't reach the step — the
+ *  step that failed. */
+function Verdict({ result }: { result: LocatorVerifyResult }) {
+  if (result.failedStepIndex != null) {
+    return (
+      <span className={`${styles.verdict} ${styles.verdictWarn}`}>
+        <AlertTriangle size={13} /> couldn’t reach this step — failed at step{" "}
+        {result.failedStepIndex + 1}
+        {result.failedStepLabel ? ` (${result.failedStepLabel})` : ""}
+      </span>
+    );
+  }
+  if (result.status === "resolved") {
+    return (
+      <span className={`${styles.verdict} ${styles.verdictOk}`}>
+        <Check size={13} /> resolves{result.matchedSignal ? ` · ${result.matchedSignal}` : ""}
+        {result.healed ? " · healed (weak signal)" : ""}
+      </span>
+    );
+  }
+  if (result.status === "ambiguous") {
+    return (
+      <span className={`${styles.verdict} ${styles.verdictWarn}`}>
+        <AlertTriangle size={13} /> ambiguous — matches more than one element
+      </span>
+    );
+  }
+  return (
+    <span className={`${styles.verdict} ${styles.verdictBad}`}>
+      <AlertTriangle size={13} /> not found
+    </span>
   );
 }
 

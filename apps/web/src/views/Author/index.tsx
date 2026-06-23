@@ -12,6 +12,7 @@ import {
   Eye,
   Globe,
   type IconProps,
+  Image,
   Info,
   Modal,
   ModalBody,
@@ -548,7 +549,7 @@ export function Author() {
                   >
                     <span className={styles.rowSeq}>{s.seq}</span>
                     <span className={styles.rowThumb}>
-                      <img className={styles.rowThumbImg} src={s.screenshot} alt="" loading="lazy" />
+                      <Image imgClassName={styles.rowThumbImg} src={s.screenshot} alt="" loading="lazy" />
                       {cp && (
                         <span className={styles.rowThumbCp} aria-hidden>
                           <Camera size={9} />

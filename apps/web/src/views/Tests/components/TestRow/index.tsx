@@ -5,7 +5,7 @@ import { useConfirm } from "../../../../context/confirm";
 import { useRouter } from "../../../../context/router";
 import { useToast } from "../../../../context/toast";
 import { useDeleteTest, useUpdateTest } from "../../../../queries";
-import { absoluteTime, shortDate } from "../../../../lib/format";
+import { absoluteTime, formatActor, shortDate } from "../../../../lib/format";
 import styles from "./styles.module.scss";
 
 export function TestRow({
@@ -66,6 +66,11 @@ export function TestRow({
               {test.folderId ? <Folder size={13} /> : <Inbox size={13} />}
               {test.folderName ?? "Unfiled"}
             </span>
+            {test.createdBy && (
+              <span className={styles.author} title={`Created by ${test.createdBy}`}>
+                by {formatActor(test.createdBy)}
+              </span>
+            )}
             {test.tags.map((tag) => (
               <span key={tag} className={styles.tag}>
                 {tag}

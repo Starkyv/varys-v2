@@ -289,6 +289,142 @@
   font-style: italic;
 }
 
+/* --- locator --- */
+.locator {
+  padding: var(--space-10) var(--space-12);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-subtle);
+}
+
+.locatorHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  color: var(--color-text-subtle);
+  margin-bottom: var(--space-8);
+}
+
+.locatorLabel {
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+  font-weight: var(--font-weight-medium);
+}
+
+.locatorTag {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  padding: 0 var(--space-6);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-inset);
+}
+
+.locatorGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-8);
+}
+
+.locatorField {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.locatorFieldLabel {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.advanced {
+  margin-top: var(--space-8);
+}
+
+.advancedSummary {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  user-select: none;
+  margin-bottom: var(--space-6);
+
+  &:hover {
+    color: var(--color-text);
+  }
+}
+
+.advancedHelp {
+  margin-top: var(--space-4);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+
+.locatorHelp {
+  margin-top: var(--space-8);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+
+/* --- verify --- */
+.verifyBar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+  padding: var(--space-10) var(--space-16);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-subtle);
+}
+
+.verifyBarLabel {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text);
+}
+
+.verifyBarWarn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-size: var(--font-size-xs);
+  color: var(--color-warning-fg);
+}
+
+.verifyNote {
+  flex: 1;
+  min-width: 12ch;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+  text-align: right;
+}
+
+.verifyRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-10);
+  margin-top: var(--space-8);
+  flex-wrap: wrap;
+}
+
+.verdict {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+}
+
+.verdictOk {
+  color: var(--color-success);
+}
+
+.verdictWarn {
+  color: var(--color-warning-fg);
+}
+
+.verdictBad {
+  color: var(--color-danger);
+}
+
 /* --- threshold --- */
 .thresholdRow {
   display: flex;

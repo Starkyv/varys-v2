@@ -23,7 +23,11 @@ export function DecisionBar({ checkpoint: cp, runId }: { checkpoint: CheckpointV
   if (cp.resolution) {
     return (
       <div className={styles.bar}>
-        <span className={styles.decided}>Decision recorded · {cp.resolution}</span>
+        <span className={styles.decided}>
+          Decision recorded · {cp.resolution}
+          {cp.resolvedBy ? ` by ${cp.resolvedBy}` : ""}
+          {cp.resolvedAt ? ` · ${new Date(cp.resolvedAt).toLocaleString()}` : ""}
+        </span>
         {audit}
       </div>
     );

@@ -4,6 +4,7 @@ import {
   Badge,
   Button,
   Eye,
+  Image,
   Inbox,
   EmptyState,
   ErrorState,
@@ -179,7 +180,7 @@ export function Drafts() {
                     onClick={() => setSelectedId(d.id)}
                   >
                     <span className={styles.thumb}>
-                      {d.previewUrl ? <img src={d.previewUrl} alt="" loading="lazy" /> : <Eye size={16} />}
+                      <Image src={d.previewUrl} alt="" loading="lazy" fallback={<Eye size={16} />} />
                     </span>
                     <span className={styles.rowBody}>
                       <span className={styles.rowTitle}>

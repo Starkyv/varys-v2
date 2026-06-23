@@ -75,3 +75,8 @@
     position: static;
   }
 }
+
+/* Optional free-form note on the run (NotesCard), under the header. */
+.notes {
+  margin: var(--space-16) 0;
+}

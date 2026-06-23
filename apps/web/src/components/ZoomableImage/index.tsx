@@ -1,4 +1,4 @@
-import { cx, Search, X } from "@varys/ui";
+import { cx, Image, Search, Spinner, X } from "@varys/ui";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import styles from "./styles.module.scss";
@@ -56,7 +56,7 @@ export function ZoomableImage({
         title="Click to view full image"
         aria-label={`View full image: ${alt}`}
       >
-        <img className={cx(styles.img, imgClassName)} src={src} alt={alt} draggable={false} />
+        <Image className={styles.frame} imgClassName={cx(styles.img, imgClassName)} src={src} alt={alt} loadingMinHeight={220} />
         <span className={cx(styles.hint, hintLabel && styles.hintLabeled)} aria-hidden>
           <Search size={14} />
           {hintLabel}
@@ -79,7 +79,14 @@ export function ZoomableImage({
             <button type="button" className={styles.close} onClick={() => setOpen(false)} aria-label="Close full image" autoFocus>
               <X size={20} />
             </button>
-            <img className={styles.full} src={src} alt={alt} draggable={false} />
+            <Image
+              className={styles.fullFrame}
+              imgClassName={styles.full}
+              src={src}
+              alt={alt}
+              loadingMinHeight={160}
+              placeholder={<Spinner size={32} className={styles.fullSpin} />}
+            />
             <div className={styles.caption}>{caption ?? alt}</div>
           </div>,
           document.body,

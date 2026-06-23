@@ -1,0 +1,95 @@
+@use "../../styles/mixins" as *;
+
+/* A quiet, low-chrome surface — hairline only, no shadow. Turns into a soft focus
+ * ring while editing so "edit mode" reads without buttons. */
+.root {
+  padding: var(--space-12) var(--space-14);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-surface);
+  transition: border-color var(--duration-fast) var(--ease-standard), box-shadow var(--duration-fast) var(--ease-standard);
+}
+.editing {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-soft);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 16px;
+  margin-bottom: var(--space-8);
+}
+
+.label {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.status {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+
+/* Shared text metrics so the display ⇄ textarea swap is seamless (no reflow jump). */
+.display,
+.empty,
+.textarea {
+  display: block;
+  width: 100%;
+  margin: 0;
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+  text-align: left;
+}
+
+.display {
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text);
+  cursor: text;
+
+  @include focus-ring;
+
+  &:hover {
+    color: var(--color-text-strong);
+  }
+}
+
+.empty {
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-subtle);
+  cursor: text;
+
+  @include focus-ring;
+
+  &:hover {
+    color: var(--color-text-muted);
+  }
+}
+
+.textarea {
+  resize: none;
+  overflow: hidden; /* height is driven by the auto-grow effect */
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--color-text);
+  outline: none;
+
+  &::placeholder {
+    color: var(--color-text-subtle);
+  }
+}

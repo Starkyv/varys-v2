@@ -96,6 +96,12 @@
   font-size: var(--font-size-xs);
   color: var(--color-text-muted);
 }
+.author {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
 
 .tag {
   display: inline-flex;

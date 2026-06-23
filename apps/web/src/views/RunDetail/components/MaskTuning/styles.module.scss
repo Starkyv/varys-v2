@@ -41,6 +41,21 @@
   display: block;
   width: 100%;
   height: auto;
+  opacity: 0;
+  transition: opacity var(--duration-base) var(--ease-standard);
+}
+
+/* Hold the capture hidden until fully decoded so it never paints half-drawn. */
+.imgReady {
+  opacity: 1;
+}
+
+/* In-flow placeholder while the capture loads — gives the (otherwise 0-tall) stage
+ * a visible skeleton block; replaced by the image once it decodes. */
+.shimmer {
+  display: block;
+  width: 100%;
+  height: 280px;
 }
 
 .drawLayer {

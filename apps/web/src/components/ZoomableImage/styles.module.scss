@@ -16,6 +16,11 @@
   @include focus-ring;
 }
 
+/* The <Image> wrapper inside the trigger — fills the button, inherits its rounding. */
+.frame {
+  border-radius: inherit;
+}
+
 .img {
   display: block;
   width: 100%;
@@ -72,6 +77,20 @@
   overflow: auto;
 }
 
+/* Centered, viewport-bounded box for the lightbox <Image> — overrides the design
+ * system wrapper's fill behaviour and centers the image (or its loading spinner). */
+.fullFrame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  height: auto;
+  max-width: min(96vw, 100%);
+  max-height: 86vh;
+  overflow: visible;
+  cursor: default;
+}
+
 .full {
   max-width: min(96vw, 100%);
   max-height: 86vh;
@@ -80,6 +99,10 @@
   box-shadow: var(--shadow-md);
   background: #fff;
   cursor: default;
+}
+
+.fullSpin {
+  color: rgba(255, 255, 255, 0.85);
 }
 
 .close {

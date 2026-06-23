@@ -1,5 +1,5 @@
 import type { CheckpointView, Rect } from "@varys/review-contract";
-import { Button, Sliders } from "@varys/ui";
+import { Button, cx, Skeleton, Sliders } from "@varys/ui";
 import { type CSSProperties, type PointerEvent as ReactPointerEvent, useRef, useState } from "react";
 import { ZoomableImage } from "../../../../components/ZoomableImage";
 import { useToast } from "../../../../context/toast";
@@ -34,6 +34,7 @@ export function MaskTuning({ checkpoint: cp, runId }: { checkpoint: CheckpointVi
   const [threshold, setThreshold] = useState(cp.threshold);
   const [draft, setDraft] = useState<Rect | null>(null);
   const [nat, setNat] = useState<{ w: number; h: number } | null>(null);
+  const [imgReady, setImgReady] = useState(false);
   const imgRef = useRef<HTMLImageElement>(null);
   const dragStart = useRef<{ x: number; y: number } | null>(null);
   const reEval = useReEvaluate(runId, cp.name);
@@ -115,12 +116,18 @@ export function MaskTuning({ checkpoint: cp, runId }: { checkpoint: CheckpointVi
         {cp.actualUrl && (
           <img
             ref={imgRef}
-            className={styles.img}
+            className={cx(styles.img, imgReady && styles.imgReady)}
             src={cp.actualUrl}
             alt="capture to mask"
-            onLoad={(e) => setNat({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
+            decoding="async"
+            draggable={false}
+            onLoad={(e) => {
+              setNat({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight });
+              setImgReady(true);
+            }}
           />
         )}
+        {cp.actualUrl && !imgReady && <Skeleton className={styles.shimmer} radius="0" />}
         <div
           className={styles.drawLayer}
           onPointerDown={onPointerDown}

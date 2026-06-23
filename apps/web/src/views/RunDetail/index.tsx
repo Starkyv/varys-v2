@@ -4,9 +4,10 @@ import { createElement, useEffect, useMemo, useState } from "react";
 import { useConfirm } from "../../context/confirm";
 import { useRouter } from "../../context/router";
 import { useToast } from "../../context/toast";
-import { absoluteTime } from "../../lib/format";
+import { absoluteTime, formatActor } from "../../lib/format";
 import { StatusBadge } from "../../lib/status";
-import { useApproveAll, useDeleteRun, useRunView } from "../../queries";
+import { useApproveAll, useDeleteRun, useRunView, useUpdateRunNotes } from "../../queries";
+import { NotesCard } from "../../components/NotesCard";
 import { ApproveDialog } from "./components/ApproveDialog";
 import { CheckpointViewer } from "./components/CheckpointViewer";
 import {
@@ -35,6 +36,7 @@ export function RunDetail({ runId }: { runId: string }) {
   const { toast } = useToast();
   const approveAll = useApproveAll(runId);
   const del = useDeleteRun();
+  const notesMutation = useUpdateRunNotes(runId);
   const confirm = useConfirm();
   const reduce = useReducedMotion();
 
@@ -106,6 +108,15 @@ export function RunDetail({ runId }: { runId: string }) {
           </div>
           <div className={styles.meta}>
             <span className={styles.env}>{data.environment}</span> · {absoluteTime(data.runTimestamp)}
+            {data.triggeredBy && (
+              <span
+                title={`Triggered by ${data.triggeredBy}${data.triggerSource ? ` (${data.triggerSource})` : ""}`}
+              >
+                {" "}
+                · by {formatActor(data.triggeredBy)}
+                {data.triggerSource ? ` (${data.triggerSource})` : ""}
+              </span>
+            )}
           </div>
         </div>
         {data.traceUrl && (
@@ -128,6 +139,23 @@ export function RunDetail({ runId }: { runId: string }) {
           Delete
         </Button>
       </header>
+
+      <div className={styles.notes}>
+        <NotesCard
+          notes={data.notes}
+          saving={notesMutation.isPending}
+          placeholder="Add a note about this run — what you were checking, an anomaly, a follow-up…"
+          onSave={(text) =>
+            notesMutation.mutateAsync(text).then(
+              () => toast("Note saved"),
+              (e) => {
+                toast(e instanceof Error ? e.message : "Couldn’t save note");
+                throw e;
+              },
+            )
+          }
+        />
+      </div>
 
       {!hasTimeline ? (
         <div className={styles.notice}>
