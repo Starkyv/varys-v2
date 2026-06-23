@@ -19,7 +19,8 @@ fingerprints + checkpoints). A hosted backend **replays** that test server-side 
 Playwright, screenshots designated elements, and **diffs** them against an approved baseline
 per environment. Results land in a **test × environment dashboard**; failures are
 investigated via a **Playwright-trace timeline** and resolved in a **diff viewer**
-(approve → new baseline, or reject → regression). Tests are organized with **folders + tags +
+(a diff *fails* the run — set the new actual as baseline if the change is intended, else fix the app;
+test-runner model, §4 Slice 17). Tests are organized with **folders + tags +
 suites** and run **manually or on a schedule**. Later, **Claude (via an MCP server)** can
 author tests by driving a live session that Varys records.
 
@@ -170,7 +171,8 @@ replays.** The recording's screenshot is a *target + preview + mask surface*, no
 2. SEED     (server/Playwright) → first replay per environment captures the GOLDEN baselines
 3. APPROVE  → human eyeballs seeded baselines once → test goes active
 4. RUN      (server/Playwright) → compare actual vs approved baseline
-5. ON DIFF  → review → APPROVE (new baseline) or REJECT (regression/bug)
+5. ON DIFF  → run FAILS → set the new actual as baseline (if intended) or fix the app & re-run
+              (test-runner model — see the Slice 17 note below; no separate "reject")
 ```
 
 - **First baseline:** auto-seed → stays *pending* → **one-time human approval** → active.
@@ -183,12 +185,16 @@ replays.** The recording's screenshot is a *target + preview + mask surface*, no
   freeze), dynamic regions masked.
 - **Per-env baselines** seed independently (data differs across environments).
 - The **diff viewer** does double duty: step-3 initial approval *and* step-5 diff resolution.
-- **Run outcome ≠ stored status (Slice 17).** A run that *establishes/updates* goldens (step 3 seed-approve,
-  step 5 diff-approve, or promoting a *passed* actual) is a **Baseline** run; a run that *compares and holds*
-  is a **Verified** run. Both store `status="passed"`, so a derived `RunOutcome`
-  (`deriveRunOutcome`, `@varys/review-contract`) separates them on every surface. **Approve now also
-  promotes a `passed` actual** to a new baseline (same destructive-replace + irreversible confirm).
-  Baseline runs are **excluded from the dashboard pass-rate** (pass-rate measures verification only). See
+- **Run outcome — test-runner model (Slice 17).** A derived `RunOutcome` (`deriveRunOutcome`,
+  `@varys/review-contract`) refines the stored `status` on every surface, following the **test-runner
+  model**: once a baseline exists, a capture that **differs** (or a crash) is **`failed`** (red) — there is
+  **no "needs review" wait state and no Reject**; a real bug is left red and fixed in the app. A **first run**
+  has no baseline to fail against, so it is **`pending-baseline`** (awaiting approval), not a failure;
+  approving it seeds the golden and the run reads **`baseline`**. A run that set/updated the reference reads
+  **`baseline`**, a clean match reads **`passed`**. The only action on a failed/pending checkpoint is **"set
+  as baseline"** (also available to re-anchor a *passing* capture) — `approve()` now accepts a `passed`
+  checkpoint too (same destructive-replace + irreversible confirm). `baseline` and `pending-baseline` runs
+  are **excluded from the dashboard pass-rate** (it measures verification only). See
   `prd/run-outcome-baseline-vs-verified.md`.
 
 ---
@@ -243,8 +249,10 @@ replays.** The recording's screenshot is a *target + preview + mask surface*, no
 
 - **View modes:** all four — **side-by-side, diff-highlight overlay, swipe slider,
   onion-skin/blink — with a switchable control.**
-- **Review actions:** per-checkpoint approve/reject **+ bulk "approve all in run"**; every action
-  audited; **irreversible-confirm** on approve.
+- **Review actions:** per-checkpoint **"set as baseline"** (seed a first baseline, accept a diff, or
+  re-anchor a passing capture) **+ bulk "approve all in run"**; every action audited;
+  **irreversible-confirm** on the destructive replace. No "reject" — a diff just fails the run until
+  the actual is set as baseline or the app is fixed (test-runner model, §4 Slice 17).
 - **In-viewer tuning:** **draw masks + nudge per-checkpoint threshold live, re-evaluate
   instantly**; the mask/threshold persists to the test for future runs. (Primary defense against
   false-positive fatigue.)
@@ -410,4 +418,4 @@ email notifications · "existing tests as examples" for AI.
 | 14 | Claude/MCP authoring (Phase 2) ✅     | MCP server → live-session authoring → draft → promote (Claude Code + MCP)       | Most of the above  |
 | 15 | Author with AI (in-product)           | In-Varys chat + live browser preview; model runs on the user's own Claude subscription via a local Bridge Helper relayed to the web UI | 14 |
 | 16 | Locator editor + live verify          | Edit a step's locator (role/name/text/testId + raw override) in Test Details; verify it against an env via a real, artifact-free partial replay (the matcher Runs use) — §14 | 13 |
-| 17 | Run outcome — Baseline vs Verified    | Derived `RunOutcome` distinguishes a baseline-creation/-update run from a real verification pass on every surface; promote a *passed* actual to a new baseline; baseline runs excluded from pass-rate — §4 (`prd/run-outcome-baseline-vs-verified.md`) | 1–3, 7 |
+| 17 | Run outcome — test-runner status model | Derived `RunOutcome` (Pending baseline / Baseline / Passed / Failed): a diff or crash is Failed, a first run is Pending baseline (awaiting approval), no Reject; set any actual (incl. a passing one) as baseline; baseline + pending runs excluded from pass-rate — §4 (`prd/run-outcome-baseline-vs-verified.md`) | 1–3, 7 |

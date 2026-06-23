@@ -48,3 +48,33 @@ Tracer-bullet slices for [`prd/locator-editor-live-verify.md`](../prd/locator-ed
 
 **Start with 1** — it's self-contained (no schema or matcher change) and immediately
 demoable: edit a click's accessible name, save, see the new version carry it.
+
+## Slice 17 — Run outcome — test-runner status model
+
+Tracer-bullet slices for [`prd/run-outcome-baseline-vs-verified.md`](../prd/run-outcome-baseline-vs-verified.md)
+(DESIGN.md **§4 / §8 / slice 17**). All AFK — the decisions are locked in the PRD; no mandatory schema
+change (outcome is derived from data already stored). The derived `RunOutcome` follows the **test-runner
+model**: **Pending baseline** (first run, awaiting approval) → **Baseline** (set/updated reference) →
+**Passed** (matched) / **Failed** (diff or crash); no Reject. Slice 1 is the foundation (the shared
+`deriveRunOutcome` helper + the status vocabulary); 2–5 fan out from it.
+
+```
+1 (derived outcome + run-detail badge) ─┬─▶ 2 (runs list + test history)
+                                         ├─▶ 3 (matrix + suite runs)
+                                         ├─▶ 4 (re-baseline a passed actual) ──▶ 6 (sourceRunId audit · deferred)
+                                         └─▶ 5 (pass-rate excludes baseline runs)
+```
+
+| #  | Slice                                  | Type | Label           | Blocked by |
+|----|----------------------------------------|------|-----------------|------------|
+| 1  | [Derived RunOutcome + run-detail badge](outcome-1-derived-runoutcome-run-detail.md) | AFK | ready-for-agent | —  |
+| 2  | [Outcome on runs list + test history](outcome-2-runs-list-test-history.md)          | AFK | ready-for-agent | 1  |
+| 3  | [Outcome in dashboard matrix + suite runs](outcome-3-dashboard-matrix-suite-runs.md) | AFK | ready-for-agent | 1  |
+| 4  | [Re-baseline a passed actual](outcome-4-rebaseline-passed-actual.md)                | AFK | ready-for-agent | 1  |
+| 5  | [Pass-rate excludes baseline runs](outcome-5-pass-rate-excludes-baseline.md)        | AFK | ready-for-agent | 1  |
+| 6  | [Baseline source-run audit](outcome-6-baseline-source-run-audit.md)                 | AFK | ready-for-agent (deferred) | 4 |
+
+**Start with 1** — it's the only one with no blocker and is immediately demoable: a first run reads
+**Pending baseline**, an approved one reads **Baseline**, a matched re-run reads **Passed**, and a
+diff reads **Failed** on the run page. 2–5 are independent fan-out from 1 (grab in any order). **6 is
+deferred** (the sole schema touch; not needed for the core ask).
