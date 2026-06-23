@@ -183,6 +183,13 @@ replays.** The recording's screenshot is a *target + preview + mask surface*, no
   freeze), dynamic regions masked.
 - **Per-env baselines** seed independently (data differs across environments).
 - The **diff viewer** does double duty: step-3 initial approval *and* step-5 diff resolution.
+- **Run outcome ≠ stored status (Slice 17).** A run that *establishes/updates* goldens (step 3 seed-approve,
+  step 5 diff-approve, or promoting a *passed* actual) is a **Baseline** run; a run that *compares and holds*
+  is a **Verified** run. Both store `status="passed"`, so a derived `RunOutcome`
+  (`deriveRunOutcome`, `@varys/review-contract`) separates them on every surface. **Approve now also
+  promotes a `passed` actual** to a new baseline (same destructive-replace + irreversible confirm).
+  Baseline runs are **excluded from the dashboard pass-rate** (pass-rate measures verification only). See
+  `prd/run-outcome-baseline-vs-verified.md`.
 
 ---
 
@@ -321,6 +328,55 @@ replays.** The recording's screenshot is a *target + preview + mask surface*, no
 
 ---
 
+## 14. Editable test definition — locator editor + live verify (Slice 16)
+
+First slice of making **Test Details** a configurable definition editor (not just
+waits/thresholds). Scope here is the **locator** only; values/URLs/capture-modes/masks/
+checkpoint-rename/step-ordering are later slices. See `prd/locator-editor-live-verify.md`.
+
+### Editing the locator
+- **Stance:** a recorded locator that is wrong/brittle must be **fixable in place**, never
+  forcing a full re-record. But editing must **not** betray the robustness core (DESIGN §2):
+  we never collapse a step to a single selector.
+- **Surface:** edit the four high-value fingerprint signals — `role`, `accessibleName`,
+  `text`, `testId` — as structured fields, plus a raw **selector override** under Advanced.
+  All other captured signals (`ancestors`, `stableClasses`, `domIndex`, `neighborText`,
+  `scope`, `boundingBox`) are **preserved untouched** on save.
+- **Override semantics:** add an **author-only** `Fingerprint.selectorOverride?: string`,
+  distinct from the recorder's `cssPath` (whose last-resort-screenshot-only role is
+  unchanged). The scored matcher gains a **top-priority override branch**: try
+  `selectorOverride` first; if it resolves to exactly one element, win with
+  `matchedSignal:"override"`; else fall through to the scored bundle. So the override is
+  "used as-is when set" yet still **self-heals** to the bundle if it goes stale.
+- **Write path:** rides the existing config-save seam (`PUT /tests/:id/config`). The patch
+  gains `step.target?: FingerprintPatch`; `saveConfig` merges it, re-validates via Zod, and
+  writes a new audited `test_version` under the same optimistic lock. **No new tables.**
+- **Baseline safety:** a locator edit never changes `screenshot.name`, so the
+  `(test, checkpoint, env, viewport)` baseline key is stable — no orphaning, no re-seed.
+  (This is why locator editing precedes checkpoint rename.)
+
+### Live verify
+- **Goal:** answer "does this locator resolve at this step in env X?" **before** a Run,
+  using the **real** matcher — so "verified here" ⇒ "resolves at Run time".
+- **Mechanism:** `POST /tests/:id/config/verify` runs a **transient, artifact-free partial
+  replay** — launch a short-lived headless Chromium (Authoring-Session launch args), resolve
+  tokens via `@varys/variable-resolver` for the chosen environment, **drive steps
+  `[0..stepIndex)`**, then resolve the *candidate* (unsaved, merged) fingerprint at
+  `stepIndex` via `@varys/locator-engine`. No run row, no `run_results`, no baselines, no
+  artifacts, no enqueue.
+- **Shared drive core:** factor the step-driving loop out of the runner's `processRun` into a
+  reusable "drive to step N" in `@varys/runner`; Run and Verify both call it (the probe
+  substitutes the candidate target at the final step). Guarantees identical drive semantics.
+- **Verdict:** `resolved | ambiguous | not-found`, the **matched signal**, a **healed** flag
+  (leaned on a weaker signal), and — when the drive itself failed earlier — the failed step,
+  so "wrong locator" is distinguishable from "broken path to the step".
+- **Env contract:** mirrors the Run pre-flight — a test with variables needs a satisfying
+  environment; a no-variable test verifies env-less ("default").
+- **Accepted limitation:** Verify is a *real* partial replay, so preceding mutating steps
+  execute (same posture as accepted risk #2). It is not a side-effect-free dry run.
+
+---
+
 ## ⚠️ Accepted risks (chosen knowingly)
 
 1. **Irreversible baseline approval** — old baselines are deleted on replace; a mistaken approval
@@ -353,3 +409,5 @@ email notifications · "existing tests as examples" for AI.
 | 13 | Scored-locator upgrade ✅             | Replace ranked matcher with confidence scoring (no re-record)                   | 1                  |
 | 14 | Claude/MCP authoring (Phase 2) ✅     | MCP server → live-session authoring → draft → promote (Claude Code + MCP)       | Most of the above  |
 | 15 | Author with AI (in-product)           | In-Varys chat + live browser preview; model runs on the user's own Claude subscription via a local Bridge Helper relayed to the web UI | 14 |
+| 16 | Locator editor + live verify          | Edit a step's locator (role/name/text/testId + raw override) in Test Details; verify it against an env via a real, artifact-free partial replay (the matcher Runs use) — §14 | 13 |
+| 17 | Run outcome — Baseline vs Verified    | Derived `RunOutcome` distinguishes a baseline-creation/-update run from a real verification pass on every surface; promote a *passed* actual to a new baseline; baseline runs excluded from pass-rate — §4 (`prd/run-outcome-baseline-vs-verified.md`) | 1–3, 7 |
