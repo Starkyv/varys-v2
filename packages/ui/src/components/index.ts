@@ -9,6 +9,7 @@ export * from "./Skeleton";
 export * from "./Spinner";
 export * from "./Image";
 export * from "./IconButton";
+export * from "./InfoTip";
 export * from "./EmptyState";
 export * from "./ErrorState";
 export * from "./Modal";
