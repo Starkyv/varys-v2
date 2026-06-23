@@ -32,6 +32,7 @@ import type {
   StepRun,
   TuningInput,
 } from "@varys/review-contract";
+import { deriveRunOutcome } from "@varys/review-contract";
 import { describeStep, type TestDefinition } from "@varys/step-schema";
 import type { StorageAdapter } from "@varys/storage-adapter";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
@@ -241,9 +242,31 @@ export class RunsService {
         outcome: s.outcome as "passed" | "failed",
       }));
 
+    const checkpoints: CheckpointView[] = dedupedResults.map(
+      (r): CheckpointView => ({
+        name: r.name,
+        reviewState: r.reviewState as ReviewState,
+        captureMode: captureModes.get(r.name) ?? "element",
+        resolution: r.resolution as Resolution | null,
+        resolvedBy: r.resolvedBy,
+        resolvedAt: r.resolvedAt ? r.resolvedAt.toISOString() : null,
+        diffScore: r.diffScore,
+        threshold: r.threshold,
+        healed: r.healed,
+        masks: masksByName.get(r.name) ?? [],
+        actualUrl: url(r.actualArtifactKey),
+        baselineUrl: url(r.baselineArtifactKey),
+        diffUrl: url(r.diffArtifactKey),
+        baselineApprovedBy: baselineByName.get(r.name)?.approvedBy ?? null,
+        baselineApprovedAt: baselineByName.get(r.name)?.approvedAt?.toISOString() ?? null,
+      }),
+    );
+
     return {
       runId,
       status: row.status,
+      // Derived display refinement — baseline-creation vs verification (see deriveRunOutcome).
+      outcome: deriveRunOutcome(checkpoints, { status: row.status, error: row.error }),
       testName: row.testName,
       environment,
       runTimestamp: row.createdAt.toISOString(),
@@ -256,25 +279,7 @@ export class RunsService {
       traceUrl: url(row.traceArtifactKey),
       timeline,
       notes: row.notes ?? null,
-      checkpoints: dedupedResults.map(
-        (r): CheckpointView => ({
-          name: r.name,
-          reviewState: r.reviewState as ReviewState,
-          captureMode: captureModes.get(r.name) ?? "element",
-          resolution: r.resolution as Resolution | null,
-          resolvedBy: r.resolvedBy,
-          resolvedAt: r.resolvedAt ? r.resolvedAt.toISOString() : null,
-          diffScore: r.diffScore,
-          threshold: r.threshold,
-          healed: r.healed,
-          masks: masksByName.get(r.name) ?? [],
-          actualUrl: url(r.actualArtifactKey),
-          baselineUrl: url(r.baselineArtifactKey),
-          diffUrl: url(r.diffArtifactKey),
-          baselineApprovedBy: baselineByName.get(r.name)?.approvedBy ?? null,
-          baselineApprovedAt: baselineByName.get(r.name)?.approvedAt?.toISOString() ?? null,
-        }),
-      ),
+      checkpoints,
     };
   }
 
@@ -308,8 +313,9 @@ export class RunsService {
 
   /** Every STANDALONE run, newest first — the Runs history (all outcomes).
    *  Suite-run children are excluded: they surface through their parent's
-   *  aggregate row + report, so one fan-out doesn't flood the flat list. */
-  async listRuns(limit = 100): Promise<RunSummary[]> {
+   *  aggregate row + report, so one fan-out doesn't flood the flat list.
+   *  Pass `testId` to scope to one test's run history (the TestDetail panel). */
+  async listRuns(limit = 100, testId?: string): Promise<RunSummary[]> {
     const rows = await this.db
       .select({
         runId: runs.id,
@@ -324,7 +330,9 @@ export class RunsService {
       .from(runs)
       .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
       .innerJoin(tests, eq(tests.id, testVersions.testId))
-      .where(isNull(runs.suiteRunId))
+      .where(
+        testId ? and(isNull(runs.suiteRunId), eq(testVersions.testId, testId)) : isNull(runs.suiteRunId),
+      )
       .orderBy(desc(runs.createdAt))
       .limit(limit);
 
@@ -341,12 +349,33 @@ export class RunsService {
       for (const e of envs) envNames.set(e.id, e.name);
     }
 
+    // One batched read of every listed run's checkpoint verdicts, grouped per run, so the
+    // display outcome (baseline vs verified, …) is derived once via the shared helper.
+    const runIds = rows.map((r) => r.runId);
+    const checkpointsByRun = new Map<string, { reviewState: ReviewState; resolution: Resolution | null }[]>();
+    if (runIds.length) {
+      const resultRows = await this.db
+        .select({
+          runId: runResults.runId,
+          reviewState: runResults.reviewState,
+          resolution: runResults.resolution,
+        })
+        .from(runResults)
+        .where(inArray(runResults.runId, runIds));
+      for (const rr of resultRows) {
+        const list = checkpointsByRun.get(rr.runId) ?? [];
+        list.push({ reviewState: rr.reviewState as ReviewState, resolution: rr.resolution as Resolution | null });
+        checkpointsByRun.set(rr.runId, list);
+      }
+    }
+
     return rows.map(
       (r): RunSummary => ({
         runId: r.runId,
         testName: r.testName,
         environment: r.environmentId ? (envNames.get(r.environmentId) ?? ENVIRONMENT) : ENVIRONMENT,
         status: r.status,
+        outcome: deriveRunOutcome(checkpointsByRun.get(r.runId) ?? [], { status: r.status, error: r.error }),
         runTimestamp: r.createdAt.toISOString(),
         error: r.error,
         triggeredBy: r.triggeredBy,
@@ -557,7 +586,11 @@ export class RunsService {
         approvedBy,
         approvedAt: new Date(),
       });
-    } else if (result.reviewState === "diff") {
+    } else if (result.reviewState === "diff" || result.reviewState === "passed") {
+      // `diff` = an over-threshold change accepted as the new golden.
+      // `passed` = re-baseline a *passing* capture (Slice 17.4): re-anchor the golden to
+      // this run's actual even though it matched (e.g. to lock in accepted drift). Both
+      // replace the existing golden identically — a passing checkpoint always has one.
       const [existing] = await this.db
         .select({ id: baselines.id, artifactKey: baselines.artifactKey })
         .from(baselines)
@@ -630,7 +663,7 @@ export class RunsService {
    *  `resolvedBy` is the signed-in user (audit pair with the recorded decision). */
   async reject(runId: string, checkpointName: string, resolvedBy: string): Promise<{ ok: true }> {
     const [result] = await this.db
-      .select({ id: runResults.id, resolution: runResults.resolution })
+      .select({ id: runResults.id, reviewState: runResults.reviewState, resolution: runResults.resolution })
       .from(runResults)
       .where(
         and(eq(runResults.runId, runId), eq(runResults.checkpointName, checkpointName)),
@@ -641,6 +674,11 @@ export class RunsService {
     }
     if (result.resolution) {
       throw new ConflictException(`Checkpoint already ${result.resolution}`);
+    }
+    // A passing checkpoint matched its baseline — there's nothing to reject (you'd
+    // re-baseline it via approve instead).
+    if (result.reviewState === "passed") {
+      throw new BadRequestException("can't reject a passing checkpoint");
     }
     await this.db
       .update(runResults)

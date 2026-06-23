@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Inject, Param, Patch, Post } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Inject, Param, Patch, Post, Query } from "@nestjs/common";
 import type { TuningInput } from "@varys/review-contract";
 import { type AuthUser, CurrentUser } from "../auth/current-user.decorator";
 import { RunsService } from "./runs.service";
@@ -23,10 +23,11 @@ export class RunsController {
     });
   }
 
-  // The Runs history — every run, newest first (all outcomes).
+  // The Runs history — every run, newest first (all outcomes). `?testId=` scopes to
+  // a single test's run history (TestDetail's "Recent runs" panel).
   @Get()
-  list() {
-    return this.runs.listRuns();
+  list(@Query("testId") testId?: string) {
+    return this.runs.listRuns(undefined, testId);
   }
 
   // Declared before the `:id` param route so it isn't matched as a run id.

@@ -7,7 +7,11 @@ import type {
   DashboardView,
   MatrixCell,
   MatrixCellStatus,
+  Resolution,
+  ReviewState,
+  RunOutcome,
 } from "@varys/review-contract";
+import { deriveRunOutcome } from "@varys/review-contract";
 import { and, eq, gte, inArray, isNotNull, isNull } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
 import { RunsService } from "../runs/runs.service";
@@ -106,6 +110,7 @@ export class DashboardService {
       .select({
         runId: runs.id,
         status: runs.status,
+        error: runs.error,
         environmentId: runs.environmentId,
         createdAt: runs.createdAt,
         testId: testVersions.testId,
@@ -141,34 +146,34 @@ export class DashboardService {
       if (!cur || r.createdAt > cur.createdAt) latest.set(key, { ...r, envName });
     }
 
-    // For the latest runs that are `needs_review`, which carry a real diff (vs only a
-    // first-capture pending baseline) — the review-vs-baseline cell distinction.
-    const needsReviewRunIds = [...latest.values()]
-      .filter((r) => r.status === "needs_review")
-      .map((r) => r.runId);
-    const hasDiff = new Set<string>();
-    if (needsReviewRunIds.length) {
-      const diffRows = await this.db
-        .select({ runId: runResults.runId })
+    // Each latest run's checkpoint verdicts, grouped per run — so the cell's outcome
+    // (verified vs baseline vs needs_review vs pending-baseline …) comes from the single
+    // shared derivation, not an ad-hoc diff probe.
+    const latestRunIds = [...latest.values()].map((r) => r.runId);
+    const checkpointsByRun = new Map<string, { reviewState: ReviewState; resolution: Resolution | null }[]>();
+    if (latestRunIds.length) {
+      const resultRows = await this.db
+        .select({
+          runId: runResults.runId,
+          reviewState: runResults.reviewState,
+          resolution: runResults.resolution,
+        })
         .from(runResults)
-        .where(and(inArray(runResults.runId, needsReviewRunIds), eq(runResults.reviewState, "diff")));
-      for (const d of diffRows) hasDiff.add(d.runId);
+        .where(inArray(runResults.runId, latestRunIds));
+      for (const rr of resultRows) {
+        const list = checkpointsByRun.get(rr.runId) ?? [];
+        list.push({ reviewState: rr.reviewState as ReviewState, resolution: rr.resolution as Resolution | null });
+        checkpointsByRun.set(rr.runId, list);
+      }
     }
 
-    const cellStatus = (status: string, runId: string): MatrixCellStatus => {
-      switch (status) {
-        case "failed":
-          return "failed";
-        case "queued":
-        case "running":
-          return "running";
-        case "passed":
-          return "passed";
-        case "needs_review":
-          return hasDiff.has(runId) ? "needs_review" : "pending-baseline";
-        default:
-          return "running"; // unreachable — run status taxonomy is fixed
-      }
+    const cellStatus = (run: { runId: string; status: string; error: string | null }): MatrixCellStatus => {
+      const outcome = deriveRunOutcome(checkpointsByRun.get(run.runId) ?? [], {
+        status: run.status,
+        error: run.error,
+      });
+      // The cell shows a uniform in-progress state; queued and running collapse.
+      return outcome === "queued" ? "running" : outcome;
     };
 
     // Column order: environments by creation order, "default" (env-less) last.
@@ -194,7 +199,7 @@ export class DashboardService {
         cells: columns.map((envName): MatrixCell => {
           const r = latest.get(`${testId}::${envName}`);
           return r
-            ? { environment: envName, status: cellStatus(r.status, r.runId), runId: r.runId }
+            ? { environment: envName, status: cellStatus(r), runId: r.runId }
             : { environment: envName, status: "none", runId: null };
         }),
       }));
@@ -222,13 +227,35 @@ export class DashboardService {
       envRows.filter((r) => r.environmentId != null).length + (hasDefault ? 1 : 0);
 
     // Finished runs in the last 14 days — enough to cover both the current and prior
-    // 7-day pass-rate windows in one read.
+    // 7-day pass-rate windows in one read. Pass-rate measures *verification* only, so each
+    // run's derived outcome is computed and only `passed`/`failed` count — baseline-
+    // establishment and first-run ("pending baseline") runs are neither a pass nor a fail.
     const finishedRows = await this.db
-      .select({ status: runs.status, createdAt: runs.createdAt })
+      .select({ runId: runs.id, status: runs.status, error: runs.error, createdAt: runs.createdAt })
       .from(runs)
       .where(and(gte(runs.createdAt, d14), inArray(runs.status, [...FINISHED])));
-    const passRate = this.rate(finishedRows, d7, new Date(now));
-    const passRatePrev = this.rate(finishedRows, d14, d7);
+    const finishedCheckpoints = new Map<string, { reviewState: ReviewState; resolution: Resolution | null }[]>();
+    if (finishedRows.length) {
+      const resultRows = await this.db
+        .select({
+          runId: runResults.runId,
+          reviewState: runResults.reviewState,
+          resolution: runResults.resolution,
+        })
+        .from(runResults)
+        .where(inArray(runResults.runId, finishedRows.map((r) => r.runId)));
+      for (const rr of resultRows) {
+        const list = finishedCheckpoints.get(rr.runId) ?? [];
+        list.push({ reviewState: rr.reviewState as ReviewState, resolution: rr.resolution as Resolution | null });
+        finishedCheckpoints.set(rr.runId, list);
+      }
+    }
+    const finished = finishedRows.map((r) => ({
+      outcome: deriveRunOutcome(finishedCheckpoints.get(r.runId) ?? [], { status: r.status, error: r.error }),
+      createdAt: r.createdAt,
+    }));
+    const passRate = this.rate(finished, d7, new Date(now));
+    const passRatePrev = this.rate(finished, d14, d7);
     const passRateDeltaPct = (passRate - passRatePrev) * 100;
 
     // Failed runs in the last 48h — covers the current and prior 24h windows.
@@ -267,15 +294,20 @@ export class DashboardService {
     };
   }
 
-  /** Pass rate (passed ÷ finished) over [from, to); 0 when nothing finished. */
+  /** Verification pass rate (`passed` ÷ verifications) over [from, to), where a verification is a
+   *  run whose outcome is `passed` or `failed`. Baseline-establishment and first-run
+   *  ("pending baseline") runs are excluded — they don't verify anything. 0 when no verification
+   *  finished in the window. */
   private rate(
-    rows: { status: string; createdAt: Date }[],
+    rows: { outcome: RunOutcome; createdAt: Date }[],
     from: Date,
     to: Date,
   ): number {
-    const inWindow = rows.filter((r) => r.createdAt >= from && r.createdAt < to);
-    if (inWindow.length === 0) return 0;
-    const passed = inWindow.filter((r) => r.status === "passed").length;
-    return passed / inWindow.length;
+    const verifications = rows.filter(
+      (r) => r.createdAt >= from && r.createdAt < to && (r.outcome === "passed" || r.outcome === "failed"),
+    );
+    if (verifications.length === 0) return 0;
+    const passed = verifications.filter((r) => r.outcome === "passed").length;
+    return passed / verifications.length;
   }
 }

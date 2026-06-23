@@ -4,13 +4,16 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { environments, runs, suiteRuns, suites, suiteTests, tests, testVersions } from "@varys/db";
+import { environments, runResults, runs, suiteRuns, suites, suiteTests, tests, testVersions } from "@varys/db";
 import type {
+  Resolution,
+  ReviewState,
   SuiteRunChild,
   SuiteRunCounts,
   SuiteRunSummary,
   SuiteRunView,
 } from "@varys/review-contract";
+import { deriveRunOutcome } from "@varys/review-contract";
 import { asc, desc, eq, inArray } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
 import { RunsService } from "../runs/runs.service";
@@ -190,12 +193,36 @@ export class SuiteRunsService {
       .orderBy(asc(tests.name));
     const envNames = await this.environmentNames(rows.map((r) => r.environmentId));
 
+    // Each child's checkpoint verdicts, grouped per run, for the shared outcome derivation
+    // (baseline vs verified, …). The parent aggregate + counts stay on coarse `status`.
+    const childIds = rows.map((r) => r.runId);
+    const checkpointsByRun = new Map<string, { reviewState: ReviewState; resolution: Resolution | null }[]>();
+    if (childIds.length) {
+      const resultRows = await this.db
+        .select({
+          runId: runResults.runId,
+          reviewState: runResults.reviewState,
+          resolution: runResults.resolution,
+        })
+        .from(runResults)
+        .where(inArray(runResults.runId, childIds));
+      for (const rr of resultRows) {
+        const list = checkpointsByRun.get(rr.runId) ?? [];
+        list.push({ reviewState: rr.reviewState as ReviewState, resolution: rr.resolution as Resolution | null });
+        checkpointsByRun.set(rr.runId, list);
+      }
+    }
+
     const children: SuiteRunChild[] = rows
       .map((r) => ({
         runId: r.runId,
         testName: r.testName,
         environment: this.envName(r.environmentId, envNames),
         status: r.status,
+        outcome: deriveRunOutcome(checkpointsByRun.get(r.runId) ?? [], {
+          status: r.status,
+          error: r.error,
+        }),
         error: r.error,
       }))
       .sort(
