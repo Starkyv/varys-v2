@@ -22,6 +22,7 @@ import type {
   TestScheduleSummary,
   TestStatus,
   TestSummary,
+  TestVariable,
 } from "@varys/review-contract";
 import {
   describeStep,
@@ -87,13 +88,29 @@ function normalizeTags(tags: string[]): string[] {
 }
 
 /**
- * Does a recording need an environment to run? True when it declares variables, or
- * (for recordings made before declared variables) its definition still carries an
- * unresolved `{{token}}` anywhere. The Run UI uses this to require an environment.
+ * Every variable a recording references, as `{name, kind}` — the exact set the worker's
+ * resolver must fill from the chosen environment, so the Run UI can flag a missing value
+ * up front instead of failing mid-run with "unresolved variable". Seeded from the
+ * declared `variables` (kinds the recorder assigned), then unioned with a scan of the
+ * WHOLE definition for `{{token}}`s — navigate urls, typed values, AND selector-bound
+ * fingerprint text, which `variablesFromSteps` (declared `variables`) doesn't cover but
+ * the resolver still tries to fill. Also recovers variables for recordings made before
+ * declared `variables` existed. `{{secret:x}}` → secret; `{{baseUrl}}` → url; else data.
+ * Deduped by name, first-seen order.
  */
-function needsEnvironment(definition: TestDefinition): boolean {
-  if (definition.variables && definition.variables.length > 0) return true;
-  return JSON.stringify(definition).includes("{{");
+function definitionVariables(definition: TestDefinition): TestVariable[] {
+  const seen = new Map<string, TestVariable>(
+    (definition.variables ?? []).map((v) => [v.name, v]),
+  );
+  const re = /\{\{\s*(secret:)?([\w.-]+)\s*\}\}/g;
+  const json = JSON.stringify(definition);
+  for (let m = re.exec(json); m; m = re.exec(json)) {
+    const name = m[2];
+    if (seen.has(name)) continue;
+    const kind: TestVariable["kind"] = m[1] ? "secret" : name === "baseUrl" ? "url" : "data";
+    seen.set(name, { name, kind });
+  }
+  return [...seen.values()];
 }
 
 /** How many checkpoints (screenshot steps) a definition asserts — 0 ⇒ a no-op test. */
@@ -216,24 +233,29 @@ export class TestsService {
       tagsByTest.set(t.testId, list);
     }
 
-    return rows.map((r) => ({
-      id: r.id,
-      name: r.name,
-      createdAt: r.createdAt.toISOString(),
-      status: r.status as TestStatus,
-      origin: r.origin as TestOrigin,
-      needsEnvironment: needsEnvironment(r.definition as TestDefinition),
-      folderId: r.folderId,
-      folderName: r.folderName,
-      tags: tagsByTest.get(r.id) ?? [],
-      schedule: r.scheduleCron
-        ? ({
-            enabled: r.scheduleEnabled ?? false,
-            cron: r.scheduleCron,
-            nextRunAt: r.scheduleNextRunAt ? r.scheduleNextRunAt.toISOString() : null,
-          } satisfies TestScheduleSummary)
-        : null,
-    }));
+    return rows.map((r) => {
+      const variables = definitionVariables(r.definition as TestDefinition);
+      return {
+        id: r.id,
+        name: r.name,
+        createdAt: r.createdAt.toISOString(),
+        status: r.status as TestStatus,
+        origin: r.origin as TestOrigin,
+        // A recording needs an environment iff it references any variable/secret.
+        needsEnvironment: variables.length > 0,
+        variables,
+        folderId: r.folderId,
+        folderName: r.folderName,
+        tags: tagsByTest.get(r.id) ?? [],
+        schedule: r.scheduleCron
+          ? ({
+              enabled: r.scheduleEnabled ?? false,
+              cron: r.scheduleCron,
+              nextRunAt: r.scheduleNextRunAt ? r.scheduleNextRunAt.toISOString() : null,
+            } satisfies TestScheduleSummary)
+          : null,
+      };
+    });
   }
 
   /**

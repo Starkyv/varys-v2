@@ -467,7 +467,9 @@ function ScheduleCard({ testId, schedule }: { testId: string; schedule: TestSche
   const update = useUpdateTest();
 
   const initial = parseCron(schedule?.cron ?? "0 2 * * *");
-  const [enabled, setEnabled] = useState(schedule?.enabled ?? true);
+  // Off by default: a test with no schedule must start paused (an existing schedule keeps
+  // its own enabled state). Defaulting to `true` here turned scheduling on for every new test.
+  const [enabled, setEnabled] = useState(schedule?.enabled ?? false);
   const [freq, setFreq] = useState<Freq>(initial.freq);
   const [minute, setMinute] = useState(initial.minute);
   const [hour, setHour] = useState(initial.hour);

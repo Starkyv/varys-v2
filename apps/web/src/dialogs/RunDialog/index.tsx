@@ -1,4 +1,19 @@
-import { Button, cx, Info, Modal, ModalBody, ModalFooter, ModalHeader, Play, Select, Switch } from "@varys/ui";
+import type { EnvironmentView, TestVariable } from "@varys/review-contract";
+import {
+  AlertTriangle,
+  Button,
+  Check,
+  cx,
+  Info,
+  Lock,
+  Modal,
+  ModalBody,
+  ModalFooter,
+  ModalHeader,
+  Play,
+  Select,
+  Switch,
+} from "@varys/ui";
 import { useEffect, useId, useMemo, useState } from "react";
 import { useRouter } from "../../context/router";
 import { useToast } from "../../context/toast";
@@ -6,6 +21,14 @@ import { useDrafts, useEnvironments, useRunTest, useTests } from "../../queries"
 import styles from "./styles.module.scss";
 
 const NO_ENV = "__none__";
+
+/** Does the environment supply this variable? Secrets are matched by name (their values
+ *  are write-only and never returned); plain values must be a present key. This mirrors
+ *  exactly what the worker's resolver reads, so a "satisfied" check here means the run
+ *  won't fail with an "unresolved variable" for that token. */
+function isSatisfied(v: TestVariable, env: EnvironmentView): boolean {
+  return v.kind === "secret" ? env.secretNames.includes(v.name) : v.name in env.values;
+}
 
 export interface RunDialogProps {
   open: boolean;
@@ -44,10 +67,16 @@ export function RunDialog({ open, initialTestId, onClose }: RunDialogProps) {
       id: t.id,
       name: t.name,
       needsEnvironment: t.needsEnvironment,
+      variables: t.variables,
     }));
     const draft = (drafts.data ?? []).find((d) => d.id === initialTestId);
+    // Drafts aren't listed with their variables; they still need an environment
+    // (AI drafts carry {{baseUrl}}), so the env picker shows without the per-variable check.
     return draft
-      ? [{ id: draft.id, name: `${draft.name} (draft preview)`, needsEnvironment: true }, ...active]
+      ? [
+          { id: draft.id, name: `${draft.name} (draft preview)`, needsEnvironment: true, variables: [] as TestVariable[] },
+          ...active,
+        ]
       : active;
   }, [tests.data, drafts.data, initialTestId]);
 
@@ -63,7 +92,19 @@ export function RunDialog({ open, initialTestId, onClose }: RunDialogProps) {
 
   const selected = useMemo(() => candidates.find((t) => t.id === testId), [candidates, testId]);
   const needsEnv = !!selected?.needsEnvironment;
-  const disabled = !selected || (needsEnv && !envId) || runMutation.isPending;
+
+  // The chosen environment (a real one, not the "no environment" sentinel) and how it
+  // measures up against the test's declared variables — the pre-flight check that turns a
+  // mid-run "unresolved variable" failure into something visible before the run starts.
+  const selectedEnv = useMemo(
+    () => (envId && envId !== NO_ENV ? environments.data?.find((e) => e.id === envId) : undefined),
+    [environments.data, envId],
+  );
+  const requiredVars = selected?.variables ?? [];
+  const missingVars = selectedEnv ? requiredVars.filter((v) => !isSatisfied(v, selectedEnv)) : [];
+  const blockedByVars = !!selectedEnv && missingVars.length > 0;
+
+  const disabled = !selected || (needsEnv && !envId) || blockedByVars || runMutation.isPending;
 
   function selectTest(id: string) {
     setTestId(id);
@@ -74,6 +115,7 @@ export function RunDialog({ open, initialTestId, onClose }: RunDialogProps) {
   function submit() {
     if (!selected) return;
     if (needsEnv && (!envId || envId === NO_ENV)) return;
+    if (blockedByVars) return; // the chosen environment is missing a value this test needs
     const environmentId = envId && envId !== NO_ENV ? envId : undefined;
     const envName = environmentId ? environments.data?.find((e) => e.id === environmentId)?.name : null;
     runMutation.mutate(
@@ -141,6 +183,56 @@ export function RunDialog({ open, initialTestId, onClose }: RunDialogProps) {
                 <div className={styles.envEmpty}>No environments yet — add one under Environments.</div>
               )}
             </div>
+
+            {requiredVars.length > 0 && (
+              <div className={styles.varSection}>
+                <div className={styles.varHeading}>Variables this test needs</div>
+                <ul className={styles.varList}>
+                  {requiredVars.map((v) => {
+                    // null until an environment is picked (neutral); then satisfied / missing.
+                    const ok = selectedEnv ? isSatisfied(v, selectedEnv) : null;
+                    return (
+                      <li
+                        key={`${v.kind}:${v.name}`}
+                        className={cx(
+                          styles.varRow,
+                          ok === true && styles.varOk,
+                          ok === false && styles.varMissing,
+                        )}
+                      >
+                        <span className={styles.varIcon}>
+                          {ok === true ? (
+                            <Check size={14} />
+                          ) : ok === false ? (
+                            <AlertTriangle size={14} />
+                          ) : (
+                            <span className={styles.varDot} />
+                          )}
+                        </span>
+                        <span className={styles.varName}>{v.name}</span>
+                        {v.kind === "secret" && (
+                          <span className={styles.varBadge}>
+                            <Lock size={11} /> secret
+                          </span>
+                        )}
+                        {ok === false && <span className={styles.varState}>not set</span>}
+                      </li>
+                    );
+                  })}
+                </ul>
+                {blockedByVars && (
+                  <div className={styles.varWarn}>
+                    <span className={styles.varWarnIcon}>
+                      <AlertTriangle size={16} />
+                    </span>
+                    <span>
+                      “{selectedEnv?.name}” is missing {missingVars.length === 1 ? "a value" : "values"} this
+                      test needs — add {missingVars.map((v) => v.name).join(", ")} under Environments, then run.
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         ) : (
           <div className={styles.infoBox}>

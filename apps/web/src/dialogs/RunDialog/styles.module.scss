@@ -98,6 +98,112 @@
   border-radius: var(--radius-md);
 }
 
+.varSection {
+  margin-top: var(--space-12);
+  padding-top: var(--space-12);
+  border-top: 1px solid var(--color-border);
+}
+
+.varHeading {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+  margin-bottom: var(--space-8);
+}
+
+.varList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.varRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-subtle);
+}
+
+.varIcon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+}
+
+.varDot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-border-strong);
+}
+
+.varOk {
+  color: var(--color-text-strong);
+
+  .varIcon {
+    color: var(--color-success);
+  }
+}
+
+.varMissing {
+  color: var(--color-warning-fg);
+
+  .varIcon {
+    color: var(--color-warning);
+  }
+}
+
+.varName {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+}
+
+.varBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: 0 var(--space-6);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-inset);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.varState {
+  margin-left: auto;
+  font-size: var(--font-size-xs);
+  color: var(--color-warning-fg);
+}
+
+.varWarn {
+  display: flex;
+  gap: var(--space-10);
+  align-items: flex-start;
+  margin-top: var(--space-10);
+  padding: var(--space-10) var(--space-12);
+  border-radius: var(--radius-md);
+  background: var(--color-warning-soft);
+  color: var(--color-warning-fg);
+  font-size: var(--font-size-sm);
+}
+
+.varWarnIcon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  color: var(--color-warning);
+}
+
 .infoBox {
   display: flex;
   gap: var(--space-10);

@@ -108,8 +108,17 @@ describe("Tests API", () => {
     const b = await authed(app).post("/tests").send(noToken).expect(201);
 
     const listed = await authed(app).get("/tests").expect(200);
-    const items = listed.body as { id: string; needsEnvironment: boolean }[];
-    expect(items.find((i) => i.id === a.body.id)?.needsEnvironment).toBe(true);
-    expect(items.find((i) => i.id === b.body.id)?.needsEnvironment).toBe(false);
+    const items = listed.body as {
+      id: string;
+      needsEnvironment: boolean;
+      variables: { name: string; kind: string }[];
+    }[];
+    const itemA = items.find((i) => i.id === a.body.id);
+    const itemB = items.find((i) => i.id === b.body.id);
+    expect(itemA?.needsEnvironment).toBe(true);
+    expect(itemB?.needsEnvironment).toBe(false);
+    // The summary also carries the variable set the Run UI checks an environment against.
+    expect(itemA?.variables).toEqual([{ name: "baseUrl", kind: "url" }]);
+    expect(itemB?.variables).toEqual([]);
   });
 });

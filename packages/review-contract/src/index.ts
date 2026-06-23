@@ -116,6 +116,17 @@ export interface TestScheduleInput {
   keepTrace?: boolean;
 }
 
+/** A variable a test declares (name + classification), mirrored from the step
+ *  schema's `Variable`. Surfaced on the summary so the Run UI can check, per chosen
+ *  environment, which variables/secrets are satisfied vs missing BEFORE replay —
+ *  turning an "unresolved variable" mid-run failure into a pre-flight check. */
+export interface TestVariable {
+  name: string;
+  /** `url` → the entry origin (`{{baseUrl}}`); `data` → an environment value
+   *  (`{{name}}`); `secret` → a credential (`{{secret:name}}`, supplied as a secret). */
+  kind: "url" | "data" | "secret";
+}
+
 /** A saved test (recording), as listed in the Tests view. */
 export interface TestSummary {
   id: string;
@@ -130,6 +141,11 @@ export interface TestSummary {
    *  require an environment before the test can run (a no-variable test runs without
    *  one). Computed server-side from the latest version's definition. */
   needsEnvironment: boolean;
+  /** Every variable the test references (`{{token}}`s across navigate urls, typed
+   *  values, and selector-bound text) — the exact set the worker's resolver must fill
+   *  from the chosen environment. The Run picker diffs this against an environment's
+   *  values/secret names to flag missing ones up front. Empty ⇔ `needsEnvironment` false. */
+  variables: TestVariable[];
   /** The test's folder (organization metadata, relational — never part of the
    *  versioned definition). Null = Unfiled. */
   folderId: string | null;
