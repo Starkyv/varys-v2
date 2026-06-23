@@ -3,7 +3,7 @@ import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { parseTestDefinition } from "@varys/step-schema";
 import request from "supertest";
-import { authed, prepareAuth } from "./auth-harness";
+import { authed, authEmail, prepareAuth } from "./auth-harness";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
 import { startTestDb, type TestDb } from "./db-harness";
@@ -112,6 +112,7 @@ describe("Tests API", () => {
       id: string;
       needsEnvironment: boolean;
       variables: { name: string; kind: string }[];
+      createdBy: string | null;
     }[];
     const itemA = items.find((i) => i.id === a.body.id);
     const itemB = items.find((i) => i.id === b.body.id);
@@ -120,5 +121,7 @@ describe("Tests API", () => {
     // The summary also carries the variable set the Run UI checks an environment against.
     expect(itemA?.variables).toEqual([{ name: "baseUrl", kind: "url" }]);
     expect(itemB?.variables).toEqual([]);
+    // ...and attributes the test to the signed-in creator (Slice A).
+    expect(itemA?.createdBy).toBe(authEmail());
   });
 });
