@@ -51,3 +51,16 @@ export function scorePct(score: number | null | undefined, digits = 1): string {
 export function duration(ms: number): string {
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
 }
+
+/**
+ * An attribution actor (an email or a sentinel like "ai") as a compact display label:
+ * "ai" → "AI", an email → its local part ("mothil" from "mothil@datagenie.ai"). Pair
+ * with the full value in a `title=` so the whole address is still recoverable on hover.
+ * Empty/null → "" so callers can `&&`-guard rendering.
+ */
+export function formatActor(actor: string | null | undefined): string {
+  if (!actor) return "";
+  if (actor === "ai") return "AI";
+  const at = actor.indexOf("@");
+  return at > 0 ? actor.slice(0, at) : actor;
+}

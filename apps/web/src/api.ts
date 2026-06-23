@@ -9,6 +9,8 @@ import type {
   EnvCookie,
   EnvironmentView,
   FolderSummary,
+  LocatorVerifyRequest,
+  LocatorVerifyResult,
   NeedsReviewItem,
   PromoteDraftBody,
   PersistResult,
@@ -202,6 +204,8 @@ export interface UpdateTestBody {
   folderId?: string | null;
   tags?: string[];
   schedule?: TestScheduleInput | null;
+  /** Free-form note; `null`/empty clears it. Omit to leave unchanged. */
+  notes?: string | null;
 }
 
 /** Rename / (un)file a test. Throws on a non-2xx response. */
@@ -222,6 +226,18 @@ export async function deleteTest(id: string): Promise<void> {
   const res = await fetch(`${API_BASE}/tests/${id}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(`Failed to delete test (${res.status})`);
+  }
+}
+
+/** Set (or clear) a run's free-form note. Empty string clears it. Throws on a non-2xx. */
+export async function updateRunNotes(id: string, notes: string | null): Promise<void> {
+  const res = await fetch(`${API_BASE}/runs/${id}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ notes }),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to save note (${res.status})`);
   }
 }
 
@@ -263,6 +279,27 @@ export async function saveTestConfig(
     );
   }
   return (await res.json()) as SaveConfigResult;
+}
+
+/** Live-verify a candidate (unsaved) locator at one step against a chosen environment — a
+ *  transient partial replay; persists nothing. 409 = superseded by a newer verify. */
+export async function verifyLocator(
+  id: string,
+  body: LocatorVerifyRequest,
+): Promise<LocatorVerifyResult> {
+  const res = await fetch(`${API_BASE}/tests/${id}/config/verify`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(
+      res.status === 409
+        ? "Superseded by a newer verify."
+        : `Couldn’t verify the locator (${res.status})`,
+    );
+  }
+  return (await res.json()) as LocatorVerifyResult;
 }
 
 /** Fetch the distinct tags currently in use (for pickers/filters). */

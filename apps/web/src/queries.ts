@@ -1,5 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { PromoteDraftBody, TestConfigPatch, TuningInput } from "@varys/review-contract";
+import type {
+  LocatorVerifyRequest,
+  PromoteDraftBody,
+  TestConfigPatch,
+  TuningInput,
+} from "@varys/review-contract";
 import {
   approveAllInRun,
   type CreateEnvironmentBody,
@@ -44,7 +49,9 @@ import {
   type UpdateEnvironmentBody,
   type UpdateTestBody,
   updateEnvironment,
+  updateRunNotes,
   updateTest,
+  verifyLocator,
 } from "./api";
 
 /** TanStack Query owns the run read-model; the key is reused for invalidation
@@ -89,6 +96,15 @@ export function useRunView(runId: string) {
   return useQuery({
     queryKey: runQueryKey(runId),
     queryFn: () => fetchRunView(runId),
+  });
+}
+
+/** Set/clear a run's free-form note; refreshes that run's view. */
+export function useUpdateRunNotes(runId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (notes: string | null) => updateRunNotes(runId, notes),
+    onSuccess: () => qc.invalidateQueries({ queryKey: runQueryKey(runId) }),
   });
 }
 
@@ -263,6 +279,14 @@ export function useSaveTestConfig(id: string) {
       qc.invalidateQueries({ queryKey: testConfigQueryKey(id) });
       qc.invalidateQueries({ queryKey: testsQueryKey() });
     },
+  });
+}
+
+/** Live-verify a candidate locator (Slice 16.3b). A transient probe — nothing to cache;
+ *  the caller stashes the verdict per step. */
+export function useVerifyLocator(id: string) {
+  return useMutation({
+    mutationFn: (body: LocatorVerifyRequest) => verifyLocator(id, body),
   });
 }
 
