@@ -1,5 +1,6 @@
 import { Body, Controller, Delete, Get, Inject, Param, Post } from "@nestjs/common";
 import type { PromoteDraftBody } from "@varys/review-contract";
+import { type AuthUser, CurrentUser } from "../auth/current-user.decorator";
 import { TestsService } from "./tests.service";
 
 /**
@@ -25,8 +26,8 @@ export class DraftsController {
 
   /** Promote a draft into the active corpus (folder + tags + active). Web-UI only. */
   @Post(":id/promote")
-  promote(@Param("id") id: string, @Body() body: PromoteDraftBody) {
-    return this.tests.promote(id, body ?? {});
+  promote(@Param("id") id: string, @Body() body: PromoteDraftBody, @CurrentUser() user: AuthUser) {
+    return this.tests.promote(id, body ?? {}, user.email);
   }
 
   /** Discard a draft — reuses the hard-delete path (irreversible). */

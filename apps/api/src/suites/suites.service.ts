@@ -37,10 +37,11 @@ export class SuitesService {
         id: suites.id,
         name: suites.name,
         testCount: sql<number>`count(${suiteTests.testId})::int`,
+        createdBy: suites.createdBy,
       })
       .from(suites)
       .leftJoin(suiteTests, eq(suiteTests.suiteId, suites.id))
-      .groupBy(suites.id, suites.name)
+      .groupBy(suites.id, suites.name, suites.createdBy)
       .orderBy(asc(suites.name));
   }
 
@@ -48,7 +49,7 @@ export class SuitesService {
    *  context included), in the tests list's own order (newest first). */
   async getById(id: string): Promise<SuiteView> {
     const [suite] = await this.db
-      .select({ id: suites.id, name: suites.name })
+      .select({ id: suites.id, name: suites.name, createdBy: suites.createdBy })
       .from(suites)
       .where(eq(suites.id, id))
       .limit(1);
@@ -64,13 +65,19 @@ export class SuitesService {
     return { ...suite, tests: all.filter((t) => memberIds.has(t.id)) };
   }
 
-  async create(input: { name: string; testIds?: string[] }): Promise<{ id: string }> {
+  async create(
+    input: { name: string; testIds?: string[] },
+    createdBy?: string,
+  ): Promise<{ id: string }> {
     const name = input.name?.trim();
     if (!name) throw new BadRequestException("suite name cannot be empty");
     const testIds = [...new Set(input.testIds ?? [])];
     try {
       return await this.db.transaction(async (tx) => {
-        const [row] = await tx.insert(suites).values({ name }).returning({ id: suites.id });
+        const [row] = await tx
+          .insert(suites)
+          .values({ name, createdBy: createdBy ?? null })
+          .returning({ id: suites.id });
         if (testIds.length > 0) {
           await tx
             .insert(suiteTests)

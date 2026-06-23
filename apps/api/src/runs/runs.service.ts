@@ -32,10 +32,11 @@ import type {
   StepRun,
   TuningInput,
 } from "@varys/review-contract";
-import { describeStep, type Fingerprint, type TestDefinition } from "@varys/step-schema";
+import { describeStep, type TestDefinition } from "@varys/step-schema";
 import type { StorageAdapter } from "@varys/storage-adapter";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
+import { summarizeFingerprint } from "../fingerprint-summary";
 import { BOSS } from "../queue/queue.module";
 import { STORAGE } from "../storage/storage.module";
 
@@ -43,36 +44,6 @@ const ENVIRONMENT = "default";
 
 function viewportKey(vp: TestDefinition["viewport"]): string {
   return `${vp.width}x${vp.height}@${vp.deviceScaleFactor}`;
-}
-
-/** Distil a recorded fingerprint into the display-oriented summary the viewer shows
- *  for a failed locate (the "what was it looking for?" panel). */
-function summarizeFingerprint(fp: Fingerprint | undefined): FingerprintSummary | null {
-  if (!fp) return null;
-  const { id, ...restAttrs } = fp.attributes ?? {};
-  return {
-    tag: fp.tag,
-    role: fp.role ?? null,
-    accessibleName: fp.accessibleName ?? null,
-    nameFromAttr: fp.nameFromAttr ?? false,
-    // The recorded text can be long / carry volatile data — cap it for display.
-    text: fp.text ? fp.text.slice(0, 400) : null,
-    testId: fp.testId ?? null,
-    elementId: id ?? null,
-    attributes: restAttrs && Object.keys(restAttrs).length > 0 ? restAttrs : null,
-    stableClasses: fp.stableClasses?.length ? fp.stableClasses : null,
-    moduleClasses: fp.moduleClasses?.length ? fp.moduleClasses : null,
-    ancestors: fp.ancestors?.length
-      ? fp.ancestors.map((a) => {
-          let s = a.tag;
-          if (a.role) s += `[${a.role}]`;
-          if (a.id) s += `#${a.id}`;
-          else if (a.testId) s += `[data-testid="${a.testId}"]`;
-          return s;
-        })
-      : null,
-    boundingBox: fp.boundingBox ?? null,
-  };
 }
 
 /** The recorded target fingerprint per step, indexed by step position — what the
@@ -99,7 +70,14 @@ export class RunsService {
 
   async create(
     testId: string,
-    opts: { environmentId?: string; suiteRunId?: string; trace?: boolean } = {},
+    opts: {
+      environmentId?: string;
+      suiteRunId?: string;
+      trace?: boolean;
+      /** Who triggered this run (email / sentinel) and how it was triggered. */
+      triggeredBy?: string;
+      triggerSource?: "manual" | "suite" | "schedule" | "api";
+    } = {},
   ): Promise<CreatedRun> {
     const [version] = await this.db
       .select({ id: testVersions.id })
@@ -116,6 +94,8 @@ export class RunsService {
         environmentId: opts.environmentId ?? null,
         suiteRunId: opts.suiteRunId ?? null,
         trace: opts.trace ?? false,
+        triggeredBy: opts.triggeredBy ?? null,
+        triggerSource: opts.triggerSource ?? null,
         status: "queued",
       })
       .returning({ id: runs.id });
@@ -133,6 +113,9 @@ export class RunsService {
         error: runs.error,
         failedStepIndex: runs.failedStepIndex,
         traceArtifactKey: runs.traceArtifactKey,
+        triggeredBy: runs.triggeredBy,
+        triggerSource: runs.triggerSource,
+        notes: runs.notes,
         testId: testVersions.testId,
         testName: tests.name,
         definition: testVersions.definition,
@@ -167,6 +150,8 @@ export class RunsService {
         name: runResults.checkpointName,
         reviewState: runResults.reviewState,
         resolution: runResults.resolution,
+        resolvedBy: runResults.resolvedBy,
+        resolvedAt: runResults.resolvedAt,
         diffScore: runResults.diffScore,
         threshold: runResults.threshold,
         healed: runResults.healed,
@@ -262,18 +247,23 @@ export class RunsService {
       testName: row.testName,
       environment,
       runTimestamp: row.createdAt.toISOString(),
+      triggeredBy: row.triggeredBy,
+      triggerSource: row.triggerSource,
       error: row.error,
       steps,
       failedStepIndex: row.failedStepIndex ?? null,
       fingerprints: buildFingerprints(row.definition as TestDefinition),
       traceUrl: url(row.traceArtifactKey),
       timeline,
+      notes: row.notes ?? null,
       checkpoints: dedupedResults.map(
         (r): CheckpointView => ({
           name: r.name,
           reviewState: r.reviewState as ReviewState,
           captureMode: captureModes.get(r.name) ?? "element",
           resolution: r.resolution as Resolution | null,
+          resolvedBy: r.resolvedBy,
+          resolvedAt: r.resolvedAt ? r.resolvedAt.toISOString() : null,
           diffScore: r.diffScore,
           threshold: r.threshold,
           healed: r.healed,
@@ -327,6 +317,8 @@ export class RunsService {
         environmentId: runs.environmentId,
         error: runs.error,
         createdAt: runs.createdAt,
+        triggeredBy: runs.triggeredBy,
+        triggerSource: runs.triggerSource,
         testName: tests.name,
       })
       .from(runs)
@@ -357,8 +349,23 @@ export class RunsService {
         status: r.status,
         runTimestamp: r.createdAt.toISOString(),
         error: r.error,
+        triggeredBy: r.triggeredBy,
+        triggerSource: r.triggerSource,
       }),
     );
+  }
+
+  /** Set (or clear) a run's free-form note. Empty/whitespace clears it (→ null). 404 if
+   *  the run doesn't exist. Annotation only — touches nothing else about the run. */
+  async setNotes(runId: string, notes: string | null): Promise<{ ok: true }> {
+    const trimmed = (notes ?? "").trim();
+    const updated = await this.db
+      .update(runs)
+      .set({ notes: trimmed || null, updatedAt: new Date() })
+      .where(eq(runs.id, runId))
+      .returning({ id: runs.id });
+    if (updated.length === 0) throw new NotFoundException(`Run ${runId} not found`);
+    return { ok: true };
   }
 
   /**
@@ -589,7 +596,7 @@ export class RunsService {
 
     await this.db
       .update(runResults)
-      .set({ resolution: "approved" })
+      .set({ resolution: "approved", resolvedBy: approvedBy, resolvedAt: new Date() })
       .where(eq(runResults.id, result.id));
     await this.recomputeRunStatus(runId);
     return { ok: true };
@@ -619,8 +626,9 @@ export class RunsService {
     return { approved: candidates.length };
   }
 
-  /** Reject a checkpoint: record a regression; the baseline is left untouched. */
-  async reject(runId: string, checkpointName: string): Promise<{ ok: true }> {
+  /** Reject a checkpoint: record a regression; the baseline is left untouched.
+   *  `resolvedBy` is the signed-in user (audit pair with the recorded decision). */
+  async reject(runId: string, checkpointName: string, resolvedBy: string): Promise<{ ok: true }> {
     const [result] = await this.db
       .select({ id: runResults.id, resolution: runResults.resolution })
       .from(runResults)
@@ -636,7 +644,7 @@ export class RunsService {
     }
     await this.db
       .update(runResults)
-      .set({ resolution: "rejected" })
+      .set({ resolution: "rejected", resolvedBy, resolvedAt: new Date() })
       .where(eq(runResults.id, result.id));
     await this.recomputeRunStatus(runId);
     return { ok: true };

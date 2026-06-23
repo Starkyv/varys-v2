@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Inject, Param, Post } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Inject, Param, Patch, Post } from "@nestjs/common";
 import type { TuningInput } from "@varys/review-contract";
 import { type AuthUser, CurrentUser } from "../auth/current-user.decorator";
 import { RunsService } from "./runs.service";
@@ -11,10 +11,15 @@ export class RunsController {
 
   // `trace` asks for a Playwright trace to be kept (per-trigger on demand only).
   @Post()
-  create(@Body() body: { testId: string; environmentId?: string; trace?: boolean }) {
+  create(
+    @Body() body: { testId: string; environmentId?: string; trace?: boolean },
+    @CurrentUser() user: AuthUser,
+  ) {
     return this.runs.create(body.testId, {
       environmentId: body.environmentId,
       trace: body.trace,
+      triggeredBy: user.email,
+      triggerSource: "manual",
     });
   }
 
@@ -35,6 +40,12 @@ export class RunsController {
     return this.runs.getById(id);
   }
 
+  // Set/clear the run's free-form note (annotation only). `null`/empty clears it.
+  @Patch(":id")
+  setNotes(@Param("id") id: string, @Body() body: { notes?: string | null }) {
+    return this.runs.setNotes(id, body?.notes ?? null);
+  }
+
   // Delete a single run and its results/steps (irreversible). Baselines are untouched.
   @Delete(":id")
   delete(@Param("id") id: string) {
@@ -52,8 +63,8 @@ export class RunsController {
   }
 
   @Post(":id/checkpoints/:name/reject")
-  reject(@Param("id") id: string, @Param("name") name: string) {
-    return this.runs.reject(id, name);
+  reject(@Param("id") id: string, @Param("name") name: string, @CurrentUser() user: AuthUser) {
+    return this.runs.reject(id, name, user.email);
   }
 
   // Preview: re-diff the stored baseline+actual with candidate masks/threshold.

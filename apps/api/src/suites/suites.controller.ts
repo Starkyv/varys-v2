@@ -1,4 +1,5 @@
 import { Body, Controller, Delete, Get, Inject, Param, Post, Put } from "@nestjs/common";
+import { type AuthUser, CurrentUser } from "../auth/current-user.decorator";
 import { SuiteRunsService } from "../suite-runs/suite-runs.service";
 import { SuitesService, type UpdateSuiteInput } from "./suites.service";
 
@@ -21,8 +22,8 @@ export class SuitesController {
   }
 
   @Post()
-  create(@Body() body: { name: string; testIds?: string[] }) {
-    return this.suites.create(body ?? { name: "" });
+  create(@Body() body: { name: string; testIds?: string[] }, @CurrentUser() user: AuthUser) {
+    return this.suites.create(body ?? { name: "" }, user.email);
   }
 
   // Body: { name?, testIds? } — testIds is a FULL member-list replace.
@@ -43,7 +44,8 @@ export class SuitesController {
   run(
     @Param("id") id: string,
     @Body() body: { environmentIds?: string[]; trace?: boolean },
+    @CurrentUser() user: AuthUser,
   ) {
-    return this.suiteRuns.trigger(id, body?.environmentIds, body?.trace);
+    return this.suiteRuns.trigger(id, body?.environmentIds, body?.trace, user.email);
   }
 }

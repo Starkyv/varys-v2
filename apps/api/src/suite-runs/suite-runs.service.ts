@@ -66,6 +66,7 @@ export class SuiteRunsService {
     suiteId: string,
     environmentIds?: string[],
     trace?: boolean,
+    triggeredBy?: string,
   ): Promise<{ suiteRunId: string }> {
     const [suite] = await this.db
       .select({ id: suites.id, name: suites.name })
@@ -108,6 +109,8 @@ export class SuiteRunsService {
           environmentId: envId,
           suiteRunId: parent.id,
           trace,
+          triggeredBy,
+          triggerSource: "suite",
         });
       }
     }

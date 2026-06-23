@@ -1,16 +1,20 @@
-import { Body, Controller, Delete, Get, Inject, Param, Patch, Post, Put } from "@nestjs/common";
-import type { TestConfigPatch } from "@varys/review-contract";
+import { Body, Controller, Delete, Get, HttpCode, Inject, Param, Patch, Post, Put } from "@nestjs/common";
+import type { LocatorVerifyRequest, TestConfigPatch } from "@varys/review-contract";
 import { type AuthUser, CurrentUser } from "../auth/current-user.decorator";
+import { LocatorVerifyService } from "./locator-verify.service";
 import { TestsService, type UpdateTestInput } from "./tests.service";
 
 @Controller("tests")
 export class TestsController {
-  // Explicit token so DI works without emitted decorator metadata.
-  constructor(@Inject(TestsService) private readonly tests: TestsService) {}
+  // Explicit tokens so DI works without emitted decorator metadata.
+  constructor(
+    @Inject(TestsService) private readonly tests: TestsService,
+    @Inject(LocatorVerifyService) private readonly locatorVerify: LocatorVerifyService,
+  ) {}
 
   @Post()
-  create(@Body() body: unknown) {
-    return this.tests.create(body);
+  create(@Body() body: unknown, @CurrentUser() user: AuthUser) {
+    return this.tests.create(body, user.email);
   }
 
   @Get()
@@ -33,6 +37,14 @@ export class TestsController {
   @Put(":id/config")
   saveConfig(@Param("id") id: string, @Body() body: TestConfigPatch, @CurrentUser() user: AuthUser) {
     return this.tests.saveConfig(id, body, user.email);
+  }
+
+  // Live-verify a candidate (unsaved) locator at one step against a chosen environment, via
+  // a transient partial replay. Persists nothing; 409 if superseded by a newer verify.
+  @Post(":id/config/verify")
+  @HttpCode(200) // a probe — resolves nothing, persists nothing
+  verifyLocator(@Param("id") id: string, @Body() body: LocatorVerifyRequest) {
+    return this.locatorVerify.verify(id, body);
   }
 
   // Relational metadata only ({ name?, folderId? — null unfiles, tags?, schedule? });

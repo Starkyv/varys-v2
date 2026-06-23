@@ -49,6 +49,8 @@ import {
   testTags,
   testVersions,
 } from "../db/schema";
+import { applyFingerprintPatch, hasMatchableSignal } from "../fingerprint-patch";
+import { summarizeFingerprint } from "../fingerprint-summary";
 import { STORAGE } from "../storage/storage.module";
 
 /** Organization metadata only — `folderId: null` unfiles; `tags` REPLACES the whole
@@ -62,6 +64,9 @@ export interface UpdateTestInput {
   /** Set/replace the cron schedule, or `null` to clear it (Slice 8). Omit to leave
    *  unchanged. Setting a schedule never writes a new test_version. */
   schedule?: TestScheduleInput | null;
+  /** Set/replace the test's free-form note; `null`/empty clears it. Omit to leave
+   *  unchanged. Annotation only — never writes a new test_version. */
+  notes?: string | null;
 }
 
 /**
@@ -161,6 +166,7 @@ function mergeWaits(existing: Wait[] | undefined, editable: EditableWait[]): Wai
   return [...preserved, ...editable];
 }
 
+
 export interface CreatedTest {
   id: string;
   version: number;
@@ -180,11 +186,13 @@ export class TestsService {
     @Inject(STORAGE) private readonly storage: StorageAdapter,
   ) {}
 
-  async create(input: unknown): Promise<CreatedTest> {
+  /** Persist a (human) recording. `createdBy` is the uploader's email — the test's
+   *  provenance (audit pair with createdAt). */
+  async create(input: unknown, createdBy?: string): Promise<CreatedTest> {
     const definition = parseTestDefinition(input);
     const [created] = await this.db
       .insert(tests)
-      .values({ name: definition.name })
+      .values({ name: definition.name, createdBy: createdBy ?? null })
       .returning({ id: tests.id });
     await this.db
       .insert(testVersions)
@@ -205,6 +213,9 @@ export class TestsService {
         createdAt: tests.createdAt,
         status: tests.status,
         origin: tests.origin,
+        createdBy: tests.createdBy,
+        promotedBy: tests.promotedBy,
+        promotedAt: tests.promotedAt,
         folderId: tests.folderId,
         folderName: folders.name,
         definition: testVersions.definition,
@@ -241,6 +252,9 @@ export class TestsService {
         createdAt: r.createdAt.toISOString(),
         status: r.status as TestStatus,
         origin: r.origin as TestOrigin,
+        createdBy: r.createdBy,
+        promotedBy: r.promotedBy,
+        promotedAt: r.promotedAt ? r.promotedAt.toISOString() : null,
         // A recording needs an environment iff it references any variable/secret.
         needsEnvironment: variables.length > 0,
         variables,
@@ -275,6 +289,8 @@ export class TestsService {
         name: definition.name,
         status: "draft",
         origin: "ai",
+        // The author is the AI; the human who promotes it is recorded as promotedBy.
+        createdBy: "ai",
         intent: opts?.intent ?? null,
       })
       .returning({ id: tests.id });
@@ -400,7 +416,7 @@ export class TestsService {
    * per-environment gate (this does not touch baselines or write a test_version).
    * 409 if the test is already active (only a draft can be promoted).
    */
-  async promote(id: string, body: PromoteDraftBody): Promise<{ ok: true }> {
+  async promote(id: string, body: PromoteDraftBody, promotedBy?: string): Promise<{ ok: true }> {
     const tags = body.tags !== undefined ? normalizeTags(body.tags) : undefined;
     try {
       await this.db.transaction(async (tx) => {
@@ -415,7 +431,12 @@ export class TestsService {
         }
         await tx
           .update(tests)
-          .set({ status: "active", folderId: body.folderId ?? null })
+          .set({
+            status: "active",
+            folderId: body.folderId ?? null,
+            promotedBy: promotedBy ?? null,
+            promotedAt: new Date(),
+          })
           .where(eq(tests.id, id));
         if (tags !== undefined) {
           await tx.delete(testTags).where(eq(testTags.testId, id));
@@ -457,6 +478,7 @@ export class TestsService {
       patch.name = name;
     }
     if (input.folderId !== undefined) patch.folderId = input.folderId; // null = unfile
+    if (input.notes !== undefined) patch.notes = input.notes?.trim() || null; // empty clears
     const tags = input.tags !== undefined ? normalizeTags(input.tags) : undefined;
     const hasSchedule = input.schedule !== undefined;
     if (Object.keys(patch).length === 0 && tags === undefined && !hasSchedule) return { ok: true };
@@ -588,11 +610,21 @@ export class TestsService {
     const view = await this.getById(id); // latest version + definition (throws if none)
     const def = view.definition;
     const schedule = await this.readSchedule(id);
+    const [meta] = await this.db
+      .select({ notes: tests.notes })
+      .from(tests)
+      .where(eq(tests.id, id))
+      .limit(1);
+    // Variables the test references — drives the verify control's environment requirement.
+    const variables = definitionVariables(def);
     return {
       id: view.id,
       name: view.name,
       version: view.version,
       schedule,
+      notes: meta?.notes ?? null,
+      needsEnvironment: variables.length > 0,
+      variables,
       defaults: (def.defaults?.waitBefore ?? []).map(toConfigWait),
       steps: def.steps.map((s, index): TestConfigStep => ({
         index,
@@ -603,6 +635,9 @@ export class TestsService {
         checkpointName: s.type === "screenshot" ? s.name : null,
         captureMode: s.type === "screenshot" ? (s.captureMode ?? "element") : null,
         threshold: s.type === "screenshot" ? (s.threshold ?? null) : null,
+        // The editable locator — present for steps with an element target (click, type,
+        // element-mode screenshot); null for navigate and full-page / region screenshots.
+        target: "target" in s ? summarizeFingerprint(s.target) : null,
       })),
     };
   }
@@ -641,8 +676,10 @@ export class TestsService {
   }
 
   /**
-   * Apply a config patch (waits + threshold) onto the test's latest definition and
-   * write a NEW audited test_version (latest+1, `createdBy` = the editing user). Optimistic
+   * Apply a config patch (waits + threshold + step locators) onto the test's latest
+   * definition and write a NEW audited test_version (latest+1, `createdBy` = the editing
+   * user). Locator edits merge onto the step's fingerprint, preserving its other signals.
+   * Optimistic
    * concurrency: the patch's `baseVersion` must match the current latest, else 409 —
    * so a stale editor can't silently clobber a newer version. Selector waits the
    * editor can't author are preserved (it only replaces the delay/networkIdle ones).
@@ -694,6 +731,17 @@ export class TestsService {
         }
         if (p.threshold !== undefined && out.type === "screenshot") {
           out = { ...out, threshold: p.threshold };
+        }
+        // Locator edit: merge the signal patch onto the step's fingerprint. Only steps
+        // that have an element target (click / type / element-mode screenshot) carry one.
+        if (p.target !== undefined && "target" in out && out.target) {
+          const merged = applyFingerprintPatch(out.target, p.target);
+          if (!hasMatchableSignal(merged)) {
+            throw new BadRequestException(
+              "This locator has no signal left to match on — keep at least a role, accessible name, visible text, or test id.",
+            );
+          }
+          out = { ...out, target: merged };
         }
         return out;
       })
