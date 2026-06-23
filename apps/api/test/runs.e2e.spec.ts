@@ -619,4 +619,72 @@ describe("Runs API", () => {
     const after = await authed(app).get("/runs").expect(200);
     expect((after.body as Row[]).find((r) => r.runId === runId)).toBeDefined();
   });
+
+  // Slice 17.4 — a PASSING checkpoint can be promoted to a new baseline (re-anchor the
+  // golden to this run's capture); a passing checkpoint cannot be rejected; and after the
+  // re-baseline the run's derived outcome reads "baseline".
+  it("re-baselines a passing checkpoint: approve replaces the golden + deletes the old blob, reject is refused, outcome becomes baseline", async () => {
+    const definition = {
+      name: "re-baseline test",
+      viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+      steps: [
+        { type: "navigate", url: fixture.url },
+        { type: "screenshot", name: "hero", target: { tag: "div", attributes: { id: "hero" }, text: "Hero" } },
+      ],
+    };
+    const test = await authed(app).post("/tests").send(definition).expect(201);
+    const testId = test.body.id as string;
+
+    const driveToTerminal = async (runId: string) => {
+      for (let i = 0; i < 100; i++) {
+        const res = await authed(app).get(`/runs/${runId}`).expect(200);
+        if (["passed", "needs_review", "failed"].includes(res.body.status)) return res.body;
+        await sleep(200);
+      }
+      throw new Error(`run ${runId} never reached a terminal status`);
+    };
+
+    // Run 1 seeds a pending baseline; approving it makes run 1's actual the golden.
+    const run1 = await authed(app).post("/runs").send({ testId }).expect(201);
+    const body1 = await driveToTerminal(run1.body.runId);
+    expect(body1.status).toBe("needs_review");
+    expect(body1.outcome).toBe("pending-baseline"); // first run = awaiting approval, not a failure
+    await authed(app).post(`/runs/${run1.body.runId}/checkpoints/hero/approve`).expect(201);
+
+    const [golden0] = await consumerDb.db.select().from(baselines).where(eq(baselines.testId, testId));
+    const oldKey = golden0.artifactKey;
+    expect(oldKey).toBeTruthy();
+    const storage = new LocalFsAdapter(storageDir);
+    expect(await storage.get(oldKey)).toBeTruthy(); // the golden blob exists
+
+    // Run 2 compares against that golden and matches → passed.
+    const run2 = await authed(app).post("/runs").send({ testId }).expect(201);
+    const runId2 = run2.body.runId as string;
+    const body2 = await driveToTerminal(runId2);
+    expect(body2.status).toBe("passed");
+    expect(body2.outcome).toBe("passed");
+
+    // A passing checkpoint cannot be rejected.
+    await authed(app).post(`/runs/${runId2}/checkpoints/hero/reject`).expect(400);
+
+    // Re-baseline the passing checkpoint: golden becomes run 2's actual, audited.
+    await authed(app).post(`/runs/${runId2}/checkpoints/hero/approve`).expect(201);
+
+    const [golden1] = await consumerDb.db.select().from(baselines).where(eq(baselines.testId, testId));
+    expect(golden1.artifactKey).not.toBe(oldKey);
+    expect(golden1.artifactKey).toContain(runId2); // now points at run 2's actual
+    expect(golden1.approvedBy).toBe(authEmail());
+    expect(golden1.approvedAt).not.toBeNull();
+
+    // The previous golden blob is gone (destructive replace, no rollback — DESIGN §4).
+    expect(await storage.get(oldKey)).toBeFalsy();
+
+    // The run that did the re-baseline now reads as a Baseline run.
+    const afterRebaseline = await authed(app).get(`/runs/${runId2}`).expect(200);
+    expect(afterRebaseline.body.outcome).toBe("baseline");
+    const hero = (afterRebaseline.body.checkpoints as { name: string; resolution: string | null }[]).find(
+      (c) => c.name === "hero",
+    );
+    expect(hero?.resolution).toBe("approved");
+  });
 });
