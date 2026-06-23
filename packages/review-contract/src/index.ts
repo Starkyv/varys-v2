@@ -625,6 +625,9 @@ export interface RunSummary {
   environment: string;
   /** Run-level status: queued | running | passed | needs_review | failed. */
   status: string;
+  /** Derived display outcome refining `status` — `baseline` (this run set/updated goldens)
+   *  vs `verified` (a real comparison pass), etc. Computed via {@link deriveRunOutcome}. */
+  outcome: RunOutcome;
   runTimestamp: string;
   /** Why a `failed` run failed (the replay error); null otherwise. */
   error: string | null;
@@ -668,6 +671,9 @@ export interface SuiteRunChild {
   /** Environment name this child ran against ("default" when none). */
   environment: string;
   status: string;
+  /** Derived display outcome refining `status` (baseline vs verified, …), per
+   *  {@link deriveRunOutcome}. The parent aggregate + counts stay on coarse `status`. */
+  outcome: RunOutcome;
   error: string | null;
 }
 
@@ -750,6 +756,11 @@ export interface RunView {
   runId: string;
   /** Run-level status taxonomy (queued | running | passed | needs_review | failed). */
   status: string;
+  /** Derived display outcome refining `status` — distinguishes a baseline-creation/-update
+   *  run (`baseline`) from a real verification pass (`verified`), since both store
+   *  `status="passed"`. Computed server-side via {@link deriveRunOutcome}; the client only
+   *  displays it (never recomputes). */
+  outcome: RunOutcome;
   /** Test name, for display without a separate lookup. */
   testName: string;
   /** Environment name the run executed against ("default" when none was chosen). */
@@ -786,6 +797,74 @@ export interface RunView {
 }
 
 /**
+ * The derived, display-facing run outcome — a strict refinement of the stored `status`. Varys
+ * follows the **test-runner model**, with one nuance: a *first* run has no baseline to compare to,
+ * so it isn't a failure — it's **`pending-baseline`** (awaiting your approval to seed the golden).
+ * Once a baseline exists, a capture that *differs* (or a crash) is **`failed`** (red) and the only
+ * action is to set the new actual as the baseline; a real bug is left red and fixed in the app. A
+ * run that set/updated the baseline reads **`baseline`**; a clean match reads **`passed`**. Computed
+ * server-side and sent as {@link RunView.outcome} / `RunSummary.outcome`; the client only displays it.
+ */
+export type RunOutcome =
+  | "queued"
+  | "running"
+  | "passed" // had a baseline and the capture matched — a real verification pass
+  | "baseline" // this run set or updated the golden baseline (first approval or "set as baseline")
+  | "pending-baseline" // first run — no baseline yet, awaiting approval (NOT a failure)
+  | "failed"; // a baseline existed but the capture differs, or the replay crashed
+
+/** The minimal per-checkpoint shape {@link deriveRunOutcome} reads — `CheckpointView` satisfies it. */
+export interface RunOutcomeCheckpoint {
+  reviewState: ReviewState;
+  resolution: Resolution | null;
+}
+
+/**
+ * Map a run's checkpoints + coarse `status` into a {@link RunOutcome}. Pure (no IO) — the single
+ * definition every surface shares (run detail, runs list, dashboard matrix, suite report) so they
+ * can't drift. `status` and the stored status column are unchanged; this only refines display.
+ *
+ * Precedence, top → down:
+ *  1. queued / running                  → unchanged
+ *  2. execution error                   → `failed`  (a crash)
+ *  3. any unaccepted `diff` (or legacy `rejected`) → `failed`  (a baseline existed and changed)
+ *  4. any unresolved first-capture seed → `pending-baseline`  (no baseline yet — awaiting approval)
+ *  5. any checkpoint set as baseline    → `baseline`
+ *  6. otherwise (all matched)           → `passed`
+ *
+ * A diff outranks a pending seed: a real failure against an established baseline is more urgent than
+ * approving a brand-new checkpoint. A `resolution="approved"` checkpoint was promoted to the
+ * baseline (seed approval, accepted diff, or a re-baselined pass) — a baseline write.
+ */
+export function deriveRunOutcome(
+  checkpoints: readonly RunOutcomeCheckpoint[],
+  run: { status: string; error?: string | null },
+): RunOutcome {
+  if (run.status === "queued" || run.status === "running") return run.status;
+  if (run.error != null && run.error !== "") return "failed";
+
+  let failing = false;
+  let pendingSeed = false;
+  let baselineWrite = false;
+  let matched = false;
+
+  for (const c of checkpoints) {
+    if (c.resolution === "approved") baselineWrite = true; // promoted to baseline
+    else if (c.resolution === "rejected") failing = true; // legacy: a confirmed bug stays red
+    else if (c.reviewState === "diff") failing = true; // an established baseline changed
+    else if (c.reviewState === "pending-baseline") pendingSeed = true; // first capture, no baseline yet
+    else if (c.reviewState === "passed") matched = true;
+  }
+
+  if (failing) return "failed"; // a real failure outranks everything
+  if (pendingSeed) return "pending-baseline"; // first run awaiting approval (not a failure)
+  if (baselineWrite) return "baseline"; // a golden was set/updated, nothing failing
+  if (matched) return "passed";
+  // No checkpoints (or all neutral) — mirror the stored status.
+  return run.status === "passed" ? "passed" : "failed";
+}
+
+/**
  * The KPI summary strip on the run dashboard — headline figures, each with a delta
  * against the prior comparable window. Everything is computed server-side (derived
  * on read from runs/run_results/tests); the web layer only formats and labels it,
@@ -798,8 +877,10 @@ export interface DashboardSummary {
   environmentsCount: number;
   /** Tests created in the last 7 days (the total-tests delta). */
   totalTestsDelta: number;
-  /** Pass rate over the last 7 days: `passed` ÷ finished (`passed`|`needs_review`|
-   *  `failed`); `0` when there are no finished runs in the window. */
+  /** Verification pass rate over the last 7 days: `passed` ÷ verifications, where a verification
+   *  is a run whose derived outcome is `passed` or `failed`. Baseline-establishment and first-run
+   *  (`pending-baseline`) runs are EXCLUDED — they verify nothing. `0` when no verification finished
+   *  in the window. */
   passRate: number;
   /** Signed percentage-point change in pass rate vs the prior 7-day window. */
   passRateDeltaPct: number;
@@ -814,18 +895,11 @@ export interface DashboardSummary {
 }
 
 /**
- * A test × environment matrix cell's derived status. `none` = the pairing has never
- * run. Otherwise the latest run for that pairing, mapped: failed/running/passed
- * directly, and a `needs_review` run split into `needs_review` (a diff to judge) vs
- * `pending-baseline` (a first capture to approve) by its checkpoints.
+ * A test × environment matrix cell's derived status. `none` = the pairing has never run.
+ * Otherwise the latest run for that pairing, mapped via {@link deriveRunOutcome}
+ * (`passed` / `baseline` / `pending-baseline` / `failed`); `queued`/`running` collapse to `running`.
  */
-export type MatrixCellStatus =
-  | "passed"
-  | "needs_review"
-  | "pending-baseline"
-  | "failed"
-  | "running"
-  | "none";
+export type MatrixCellStatus = "passed" | "baseline" | "pending-baseline" | "failed" | "running" | "none";
 
 /** One cell of the dashboard matrix: the latest run's status for a (test, env). */
 export interface MatrixCell {
