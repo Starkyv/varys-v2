@@ -11,8 +11,14 @@ import {
   testVersions,
 } from "@varys/db";
 import { diffPng } from "@varys/diff-engine";
-import { resolve } from "@varys/locator-engine";
-import { describeStep, type Fingerprint, type TestDefinition, type Wait } from "@varys/step-schema";
+import { resolve, verify } from "@varys/locator-engine";
+import {
+  describeStep,
+  type Fingerprint,
+  type Step,
+  type TestDefinition,
+  type Wait,
+} from "@varys/step-schema";
 import type { StorageAdapter } from "@varys/storage-adapter";
 import {
   type EnvironmentProfile,
@@ -44,11 +50,15 @@ export interface ReplayDeps {
   storage: StorageAdapter;
 }
 
+// Re-exported so callers (e.g. the API's locator-verify probe) can build a profile without
+// taking a direct dependency on @varys/variable-resolver.
+export type { EnvironmentProfile } from "@varys/variable-resolver";
+
 const DEFAULT_THRESHOLD = 0.01;
 
 /** A cookie seeded onto the browser context before a run (env-scoped). Mirrors
  *  `EnvCookie` in @varys/review-contract; inlined to avoid a runner→contract dep. */
-type EnvCookie = { name: string; value: string; domain?: string; path?: string };
+export type EnvCookie = { name: string; value: string; domain?: string; path?: string };
 
 function viewportKey(vp: TestDefinition["viewport"]): string {
   return `${vp.width}x${vp.height}@${vp.deviceScaleFactor}`;
@@ -62,7 +72,7 @@ function waitLocator(page: Page, fp: Fingerprint): Locator {
   return page.locator(fp.tag);
 }
 
-async function applyWaits(page: Page, waits: Wait[] | undefined): Promise<void> {
+export async function applyWaits(page: Page, waits: Wait[] | undefined): Promise<void> {
   for (const w of waits ?? []) {
     if (w.kind === "delay") {
       await page.waitForTimeout(w.ms);
@@ -75,6 +85,67 @@ async function applyWaits(page: Page, waits: Wait[] | undefined): Promise<void> 
       });
     }
   }
+}
+
+/**
+ * Perform one token-resolved ACTION step (navigate / click / type) against the page — the
+ * shared drive primitive used by BOTH a full Run and the locator-verify probe, so "reached
+ * step N" in verify means the same drive a Run performs. Click/type apply the given default
+ * waits ahead of their own `waitBefore` (mirroring the run loop). A screenshot is not an
+ * action (no-op — it doesn't change page state). Throws when a click/type target can't be
+ * located. The step's tokens must already be resolved (via `resolveStep`).
+ */
+export async function performStepAction(
+  page: Page,
+  step: Step,
+  defaultWaits: Wait[],
+): Promise<void> {
+  if (step.type === "navigate") {
+    await page.goto(step.url, { waitUntil: "networkidle" });
+    return;
+  }
+  if (step.type === "click" || step.type === "type") {
+    await applyWaits(page, [...defaultWaits, ...(step.waitBefore ?? [])]);
+    // A prior click may have triggered an in-flight navigation; settle the document before
+    // resolving, or the fingerprint would miss against a half-loaded page. Cheap when loaded.
+    await page.waitForLoadState("domcontentloaded").catch(() => undefined);
+    const target = await resolve(page, step.target);
+    if (!target) throw new Error(`could not locate ${step.type} target`);
+    if (step.type === "type") await target.locator.fill(step.value);
+    else await target.locator.click();
+  }
+}
+
+/**
+ * Seed an environment's cookies onto a context BEFORE any navigation, so a test that needs
+ * an existing session/consent cookie starts with it set. Values resolve the same
+ * {{var}}/{{secret:NAME}} tokens steps do; domain falls back to the env's baseUrl. Shared by
+ * the Run and the verify probe so both reach the same authenticated state.
+ */
+export async function seedCookies(
+  context: BrowserContext,
+  cookies: EnvCookie[],
+  profile: EnvironmentProfile | null,
+): Promise<void> {
+  if (cookies.length === 0) return;
+  const baseUrl = profile?.values.baseUrl;
+  const toSet = cookies.map((c) => {
+    const value = profile ? resolveString(c.value, profile) : c.value;
+    const cookie: { name: string; value: string; url?: string; domain?: string; path?: string } = {
+      name: c.name,
+      value,
+    };
+    if (c.domain) {
+      cookie.domain = c.domain;
+      cookie.path = c.path ?? "/";
+    } else if (baseUrl) {
+      cookie.url = baseUrl;
+    } else {
+      throw new Error(`cookie "${c.name}" needs a domain (the environment has no baseUrl to derive one)`);
+    }
+    return cookie;
+  });
+  await context.addCookies(toSet);
 }
 
 /** Upsert config so a re-executed run (e.g. a redelivered job) overwrites its prior
@@ -199,30 +270,9 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
       tracingStarted = true;
     }
 
-    // Seed the environment's cookies onto the context BEFORE any navigation, so a test
-    // that needs an existing session/consent cookie starts with it already set. Values
-    // resolve the same {{var}}/{{secret:NAME}} tokens steps do (keep real auth tokens in
-    // a write-only secret and reference them). Domain falls back to the run's baseUrl.
-    if (envCookies.length > 0) {
-      const baseUrl = profile?.values.baseUrl;
-      const toSet = envCookies.map((c) => {
-        const value = profile ? resolveString(c.value, profile) : c.value;
-        const cookie: { name: string; value: string; url?: string; domain?: string; path?: string } = {
-          name: c.name,
-          value,
-        };
-        if (c.domain) {
-          cookie.domain = c.domain;
-          cookie.path = c.path ?? "/";
-        } else if (baseUrl) {
-          cookie.url = baseUrl;
-        } else {
-          throw new Error(`cookie "${c.name}" needs a domain (the environment has no baseUrl to derive one)`);
-        }
-        return cookie;
-      });
-      await context.addCookies(toSet);
-    }
+    // Seed the environment's cookies onto the context BEFORE any navigation (keep real auth
+    // tokens in a write-only secret and reference them via {{secret:NAME}}).
+    await seedCookies(context, envCookies, profile);
 
     const page = await context.newPage();
 
@@ -245,32 +295,18 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
       stepStartMs = Date.now();
       // Resolve this step's tokens now — an unresolved {{token}} fails THIS step.
       const step = profile ? resolveStep(raw, profile) : raw;
-      if (step.type === "navigate") {
-        await page.goto(step.url, { waitUntil: "networkidle" });
+
+      // Action steps (navigate / click / type) go through the shared drive primitive so a
+      // Run and the verify probe reach state identically. Screenshots fall through below.
+      if (step.type === "navigate" || step.type === "click" || step.type === "type") {
+        await performStepAction(page, step, resolvedDefaultWaits);
         recordStep("passed");
         continue;
       }
 
+      // Screenshot: apply the same waits the run always did (defaults + own), then settle
+      // the network before capturing the checkpoint.
       await applyWaits(page, [...resolvedDefaultWaits, ...(step.waitBefore ?? [])]);
-
-      if (step.type === "click" || step.type === "type") {
-        // A prior click may have triggered a navigation (e.g. an OAuth login redirect)
-        // that is still in flight — the recorder no longer emits explicit navigate steps
-        // for redirects, so settle the document before resolving the target, or the
-        // fingerprint would miss against a half-loaded page. Cheap when already loaded.
-        await page.waitForLoadState("domcontentloaded").catch(() => undefined);
-        const target = await resolve(page, step.target);
-        if (!target) throw new Error(`could not locate ${step.type} target`);
-        if (step.type === "type") {
-          await target.locator.fill(step.value);
-        } else {
-          await target.locator.click();
-        }
-        recordStep("passed");
-        continue;
-      }
-
-      // Smart default: settle the network before capturing the checkpoint.
       await page.waitForLoadState("networkidle").catch(() => undefined);
 
       // Capture by mode (absent ⇒ element, for back-compat). Element resolves the
@@ -480,5 +516,126 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
     }
     await context?.close();
     await browser?.close();
+  }
+}
+
+/** Thrown by `verifyLocatorAtStep` when a newer verify supersedes it mid-drive
+ *  (cooperative single-flight). The caller maps this to a "superseded" response. */
+export class LocatorVerifyAbortedError extends Error {
+  constructor() {
+    super("locator verify superseded");
+    this.name = "LocatorVerifyAbortedError";
+  }
+}
+
+export interface VerifyLocatorParams {
+  /** The test's latest definition (the steps to drive + viewport). */
+  definition: TestDefinition;
+  /** 0-based index of the step whose locator is being verified (must be targetable). */
+  stepIndex: number;
+  /** The candidate fingerprint to resolve at `stepIndex` — already merged by the caller
+   *  (its `{{tokens}}` are resolved here against `profile`, like a run would). */
+  candidate: Fingerprint;
+  /** Per-environment values/secrets for token resolution; null = env-less ("default"). */
+  profile: EnvironmentProfile | null;
+  /** Cookies seeded onto the context before the drive (env-scoped). */
+  cookies: EnvCookie[];
+  /** Cooperative cancel, checked between drive steps so a newer verify supersedes this. */
+  shouldAbort?: () => boolean;
+  /** Per-operation timeout (navigation/action). Defaults to 15s. */
+  timeoutMs?: number;
+}
+
+export interface VerifyLocatorOutcome {
+  status: "resolved" | "ambiguous" | "not-found";
+  matchedSignal: string | null;
+  healed: boolean;
+  reachedStep: number;
+  failedStepIndex: number | null;
+  failedStepLabel: string | null;
+}
+
+/**
+ * The locator-verify probe (Slice 16.3a): a transient, artifact-free PARTIAL REPLAY. Launch
+ * a short-lived browser, seed cookies, drive steps `[0..stepIndex)` with the SAME drive
+ * primitive a Run uses (`performStepAction`), then resolve the candidate locator at
+ * `stepIndex` with the SAME matcher (`@varys/locator-engine`). So "resolved here" means
+ * "resolves at Run time". Writes nothing — no run row, no results, no baselines, no
+ * artifacts, no queue job. A step the drive can't perform is reported (not thrown) so the
+ * caller can tell "wrong locator" from "broken path to the step".
+ */
+export async function verifyLocatorAtStep(params: VerifyLocatorParams): Promise<VerifyLocatorOutcome> {
+  const { definition, stepIndex, candidate, profile, cookies, shouldAbort, timeoutMs = 15_000 } = params;
+  const aborted = (): boolean => shouldAbort?.() ?? false;
+  const miss = (i: number, label: string): VerifyLocatorOutcome => ({
+    status: "not-found",
+    matchedSignal: null,
+    healed: false,
+    reachedStep: i,
+    failedStepIndex: i,
+    failedStepLabel: label,
+  });
+
+  let browser: Browser | undefined;
+  let context: BrowserContext | undefined;
+  try {
+    browser = await chromium.launch({ args: browserLaunchArgs() });
+    context = await browser.newContext({
+      viewport: { width: definition.viewport.width, height: definition.viewport.height },
+      deviceScaleFactor: definition.viewport.deviceScaleFactor,
+      reducedMotion: "reduce",
+    });
+    context.setDefaultTimeout(timeoutMs);
+    context.setDefaultNavigationTimeout(timeoutMs);
+    await seedCookies(context, cookies, profile);
+    const page = await context.newPage();
+
+    const defaultWaits = definition.defaults?.waitBefore ?? [];
+    const resolvedDefaultWaits = profile ? resolveWaits(defaultWaits, profile) : defaultWaits;
+
+    // Drive the preceding steps to reach the page state. A failure (unresolvable token,
+    // unlocatable target, navigation error) is reported as the broken step, not thrown.
+    for (let i = 0; i < stepIndex; i++) {
+      if (aborted()) throw new LocatorVerifyAbortedError();
+      const raw = definition.steps[i];
+      try {
+        const step = profile ? resolveStep(raw, profile) : raw;
+        await performStepAction(page, step, resolvedDefaultWaits); // screenshots are no-ops
+      } catch {
+        return miss(i, describeStep(raw));
+      }
+    }
+    if (aborted()) throw new LocatorVerifyAbortedError();
+
+    // At the target step: resolve the candidate's tokens, apply the same waits the run would,
+    // then run the real matcher's verify verdict.
+    const rawAtN = definition.steps[stepIndex];
+    const withCandidate = { ...rawAtN, target: candidate } as Step;
+    const resolvedN = profile ? resolveStep(withCandidate, profile) : withCandidate;
+    const resolvedTarget = ("target" in resolvedN ? resolvedN.target : undefined) ?? candidate;
+    const stepWaits = "waitBefore" in resolvedN ? (resolvedN.waitBefore ?? []) : [];
+    try {
+      await applyWaits(page, [...resolvedDefaultWaits, ...stepWaits]);
+      if (rawAtN.type === "screenshot") {
+        await page.waitForLoadState("networkidle").catch(() => undefined);
+      } else {
+        await page.waitForLoadState("domcontentloaded").catch(() => undefined);
+      }
+    } catch {
+      // A wait that can't settle is a property of the page state at the step, not the
+      // locator — fall through and let the matcher report on the candidate as-is.
+    }
+    const v = await verify(page, resolvedTarget, { timeoutMs: Math.min(timeoutMs, 5_000) });
+    return {
+      status: v.status,
+      matchedSignal: v.matchedSignal,
+      healed: v.healed,
+      reachedStep: stepIndex,
+      failedStepIndex: null,
+      failedStepLabel: null,
+    };
+  } finally {
+    await context?.close().catch(() => undefined);
+    await browser?.close().catch(() => undefined);
   }
 }

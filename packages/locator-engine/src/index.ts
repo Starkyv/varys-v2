@@ -37,11 +37,34 @@ let markerSeq = 0;
  * the deadline. Matches Playwright's actionability waiting and fixes the whole class of
  * "element rendered late after navigation."
  */
-export async function resolve(
+/** The terminal outcome of a locate attempt (Slice 16.3a). `resolved` carries the winner;
+ *  `ambiguous` is a near-tie the matcher refuses to guess between; `not-found` is no
+ *  above-floor candidate. The verify probe surfaces all three; `resolve` collapses the
+ *  last two to null (a Run hard-fails on either, identically to before). */
+export type VerifyStatus = "resolved" | "ambiguous" | "not-found";
+export interface VerifyOutcome {
+  status: VerifyStatus;
+  matchedSignal: string | null;
+  healed: boolean;
+}
+
+/** One poll cycle's result, internal to this module. */
+type PollResult =
+  | { kind: "win"; locator: Locator; matchedSignal: string; healed: boolean }
+  | { kind: "ambiguous" }
+  | { kind: "none" };
+
+/**
+ * Shared poll loop behind both `resolve` and `verify`: the author override branch + the
+ * scored in-page scan, retried on an interval up to `timeoutMs` to ride out late renders.
+ * Returns the first confident winner; otherwise reports whether the final scan was a
+ * genuine ambiguity (a tie) or simply nothing matched.
+ */
+async function poll(
   page: Page,
   fp: Fingerprint,
   opts?: { timeoutMs?: number; intervalMs?: number },
-): Promise<ResolveResult | null> {
+): Promise<PollResult> {
   const token = `loc${++markerSeq}`;
   // `scoreInPage` is serialized into the page via `.toString()`. Bundlers that keep
   // function names (esbuild's `keepNames`, used by tsx in the worker) rewrite its inner
@@ -57,22 +80,61 @@ export async function resolve(
     fp: Fingerprint;
     MARKER: string;
     token: string;
-  }) => { matchedSignal: string; healed: boolean } | null;
+  }) => { matchedSignal: string; healed: boolean } | "ambiguous" | null;
 
   const intervalMs = opts?.intervalMs ?? 200;
   const attempts = Math.max(1, Math.ceil((opts?.timeoutMs ?? 5000) / intervalMs));
+  let lastAmbiguous = false;
   for (let i = 0; i < attempts; i++) {
+    // Author override (Slice 16.2): an explicit selector wins outright when it resolves to
+    // exactly one element — used as-is. A stale / non-unique / malformed override is ignored,
+    // falling through to the scored bundle so the locator still self-heals.
+    if (fp.selectorOverride) {
+      const override = page.locator(fp.selectorOverride);
+      const count = await override.count().catch(() => -1);
+      if (count === 1) {
+        return { kind: "win", locator: override.first(), matchedSignal: "override", healed: false };
+      }
+    }
     const outcome = await page.evaluate(runInPage, { fp, MARKER, token });
-    if (outcome) {
+    if (outcome && outcome !== "ambiguous") {
       return {
+        kind: "win",
         locator: page.locator(`[${MARKER}="${token}"]`).first(),
         matchedSignal: outcome.matchedSignal,
         healed: outcome.healed,
       };
     }
+    lastAmbiguous = outcome === "ambiguous";
     if (i < attempts - 1) await page.waitForTimeout(intervalMs);
   }
-  return null;
+  return lastAmbiguous ? { kind: "ambiguous" } : { kind: "none" };
+}
+
+export async function resolve(
+  page: Page,
+  fp: Fingerprint,
+  opts?: { timeoutMs?: number; intervalMs?: number },
+): Promise<ResolveResult | null> {
+  const r = await poll(page, fp, opts);
+  return r.kind === "win"
+    ? { locator: r.locator, matchedSignal: r.matchedSignal, healed: r.healed }
+    : null;
+}
+
+/** Like `resolve`, but for the locator-editor probe (Slice 16.3a): reports the full
+ *  verdict — `resolved` (with the matched signal + healed flag), `ambiguous` (a tie), or
+ *  `not-found` — instead of collapsing the last two to null. */
+export async function verify(
+  page: Page,
+  fp: Fingerprint,
+  opts?: { timeoutMs?: number; intervalMs?: number },
+): Promise<VerifyOutcome> {
+  const r = await poll(page, fp, opts);
+  if (r.kind === "win") {
+    return { status: "resolved", matchedSignal: r.matchedSignal, healed: r.healed };
+  }
+  return { status: r.kind === "ambiguous" ? "ambiguous" : "not-found", matchedSignal: null, healed: false };
 }
 
 /**
@@ -85,7 +147,7 @@ function scoreInPage(args: {
   fp: Fingerprint;
   MARKER: string;
   token: string;
-}): { matchedSignal: string; healed: boolean } | null {
+}): { matchedSignal: string; healed: boolean } | "ambiguous" | null {
   const { fp, MARKER, token } = args;
   // biome-ignore lint/suspicious/noExplicitAny: terse DOM scoring in page scope
   type El = any;
@@ -281,8 +343,9 @@ function scoreInPage(args: {
   const hasIdentity = best.matched.some((m) => IDENTIFYING.has(m));
   // Floor: must carry a real identifying signal and a non-trivial score.
   if (!best || best.score < 25 || !hasIdentity) return null;
-  // Ambiguity: a near-tie between two different elements → refuse to guess.
-  if (scored[1] && scored[1].el !== best.el && best.score - scored[1].score < 6) return null;
+  // Ambiguity: a near-tie between two different elements → refuse to guess (the verify
+  // probe surfaces this as "ambiguous"; `resolve` still treats it as no match).
+  if (scored[1] && scored[1].el !== best.el && best.score - scored[1].score < 6) return "ambiguous";
 
   const winnerRanks = best.matched
     .filter((m) => m in RANK)

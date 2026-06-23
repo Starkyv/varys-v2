@@ -1,7 +1,7 @@
 import type { Fingerprint } from "@varys/step-schema";
 import { type Browser, chromium, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { resolve } from "./index";
+import { resolve, verify } from "./index";
 
 describe("locator resolve", () => {
   let browser: Browser;
@@ -107,5 +107,61 @@ describe("locator resolve", () => {
     await page.setContent(`<div>Same</div><div>Same</div>`);
     const ambiguous: Fingerprint = { tag: "div", accessibleName: "Same", text: "Same" };
     expect(await resolve(page, ambiguous, { timeoutMs: 300 })).toBeNull();
+  });
+
+  // Author selector override (Slice 16.2).
+  it("uses an author selectorOverride as-is when it resolves to exactly one element", async () => {
+    await page.setContent(`<button id="a">A</button><button id="b">B</button>`);
+    // The bundle (role+name) would match button B; the override pins button A instead.
+    const fpWithOverride: Fingerprint = {
+      tag: "button",
+      role: "button",
+      accessibleName: "B",
+      selectorOverride: "#a",
+    };
+    const r = await resolve(page, fpWithOverride);
+    expect(r).not.toBeNull();
+    expect(r!.matchedSignal).toBe("override");
+    expect(r!.healed).toBe(false);
+    expect(await r!.locator.textContent()).toBe("A");
+  });
+
+  it("falls through to the scored bundle when the override is stale (matches nothing)", async () => {
+    await page.setContent(`<div id="hero" data-testid="hero-card">Hero</div>`);
+    const stale: Fingerprint = { ...fp, selectorOverride: "#gone" };
+    const r = await resolve(page, stale);
+    expect(r).not.toBeNull();
+    expect(r!.matchedSignal).toBe("testId"); // bundle won, not the override
+  });
+
+  it("ignores an override that matches multiple elements (not unique → not used)", async () => {
+    await page.setContent(
+      `<div id="hero" data-testid="hero-card">Hero</div>` +
+        `<button class="dup">x</button><button class="dup">y</button>`,
+    );
+    const multi: Fingerprint = { ...fp, selectorOverride: ".dup" };
+    const r = await resolve(page, multi);
+    expect(r).not.toBeNull();
+    expect(r!.matchedSignal).toBe("testId"); // fell through; the non-unique override was skipped
+  });
+
+  // verify() — the probe verdict (Slice 16.3a). Same matcher, but ambiguous ≠ not-found.
+  it("verify reports resolved with the matched signal", async () => {
+    await page.setContent(`<div id="hero" data-testid="hero-card">Hero</div>`);
+    const v = await verify(page, fp);
+    expect(v).toMatchObject({ status: "resolved", matchedSignal: "testId", healed: false });
+  });
+
+  it("verify reports ambiguous on a near-tie", async () => {
+    await page.setContent(`<div>Same</div><div>Same</div>`);
+    const ambiguous: Fingerprint = { tag: "div", accessibleName: "Same", text: "Same" };
+    const v = await verify(page, ambiguous, { timeoutMs: 300 });
+    expect(v.status).toBe("ambiguous");
+  });
+
+  it("verify reports not-found when nothing matches", async () => {
+    await page.setContent(`<section>Different</section>`);
+    const v = await verify(page, fp, { timeoutMs: 300 });
+    expect(v.status).toBe("not-found");
   });
 });
