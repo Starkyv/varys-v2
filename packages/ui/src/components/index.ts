@@ -7,6 +7,7 @@ export * from "./Switch";
 export * from "./SegmentedControl";
 export * from "./Skeleton";
 export * from "./Spinner";
+export * from "./Image";
 export * from "./IconButton";
 export * from "./EmptyState";
 export * from "./ErrorState";

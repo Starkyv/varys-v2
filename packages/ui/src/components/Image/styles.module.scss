@@ -1,0 +1,41 @@
+/* Holds the image, its skeleton, and the broken-image fallback in one stacking context.
+ * Fills a sized parent (thumbnails, framed previews); for natural-flow images pass
+ * `loadingMinHeight` so the skeleton has height before the image arrives. */
+.wrap {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  line-height: 0; /* kill the inline descender gap under the <img> */
+  overflow: hidden;
+}
+
+.img {
+  display: block;
+  max-width: 100%;
+  opacity: 0;
+  transition: opacity var(--duration-base) var(--ease-standard);
+}
+
+.ready {
+  opacity: 1;
+}
+
+/* Skeleton placeholder — fills the frame beneath the (still-hidden) image. */
+.ph {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.broken {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  min-height: inherit;
+  color: var(--color-text-subtle);
+  background: var(--color-bg-subtle);
+}

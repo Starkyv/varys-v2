@@ -326,3 +326,13 @@ export const Puzzle = (p: IconProps) => (
     <path d="M9 4.5a1.8 1.8 0 1 1 3.6 0c0 .6.5 1 1 1H16a1 1 0 0 1 1 1v1.9c0 .5.4 1 1 1a1.8 1.8 0 1 1 0 3.6c-.6 0-1 .5-1 1V17a1 1 0 0 1-1 1h-1.9c-.5 0-1 .4-1 1a1.8 1.8 0 1 1-3.6 0c0-.6-.5-1-1-1H6a1 1 0 0 1-1-1v-1.9c0-.5-.4-1-1-1a1.8 1.8 0 1 1 0-3.6c.6 0 1-.5 1-1V6.5a1 1 0 0 1 1-1h2c.6 0 1-.4 1-1Z" />
   </IconBase>
 );
+
+/** A broken / unavailable image — the fallback when a screenshot fails to load. */
+export const ImageOff = (p: IconProps) => (
+  <IconBase {...p}>
+    <path d="M21 21H5a2 2 0 0 1-2-2V5" />
+    <path d="M7 3h12a2 2 0 0 1 2 2v12" />
+    <path d="m21 15-4-4M3 16l5-5 3 3" />
+    <path d="M3 3l18 18" />
+  </IconBase>
+);
