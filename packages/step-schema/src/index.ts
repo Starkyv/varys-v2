@@ -68,6 +68,12 @@ export const fingerprint = z.object({
    *  is far cheaper than a wrong click, so screenshots tolerate a positional `.first()`
    *  match the click path deliberately refuses. */
   cssPath: z.string().optional(),
+  /** An AUTHOR-supplied raw selector override (Slice 16.2), distinct from the recorder's
+   *  `cssPath`. When set, the matcher tries it FIRST and uses it as-is iff it resolves to
+   *  exactly one element (`matchedSignal: "override"`); a stale / non-unique / malformed
+   *  override is ignored and the scored multi-signal bundle takes over (self-heal). Edited
+   *  in the test-detail locator editor; never written by the recorder. */
+  selectorOverride: z.string().optional(),
 });
 
 export type Fingerprint = z.infer<typeof fingerprint>;

@@ -32,6 +32,17 @@ export const tests = pgTable("tests", {
   origin: text("origin").notNull().default("human"),
   /** The steering instruction that produced an AI draft (review-queue context); null otherwise. */
   intent: text("intent"),
+  /** Who created the test — the uploader's email for a human (extension) recording, or
+   *  "ai" for an AI-authored draft. Audit pair with createdAt. Null for rows created
+   *  before this column existed. */
+  createdBy: text("created_by"),
+  /** Who promoted an AI draft into the active corpus, and when — the one human gate on
+   *  AI output (ADR 0001). Null for human recordings and un-promoted drafts. */
+  promotedBy: text("promoted_by"),
+  promotedAt: timestamp("promoted_at", { withTimezone: true }),
+  /** Optional free-form note on the test (organization/annotation only — never part of
+   *  the versioned definition). Edited inline on the test-detail page. */
+  notes: text("notes"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -54,6 +65,8 @@ export const testTags = pgTable(
 export const suites = pgTable("suites", {
   id: uuid("id").defaultRandom().primaryKey(),
   name: text("name").notNull(),
+  /** Who created the suite (email). Null for rows created before this column existed. */
+  createdBy: text("created_by"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -122,6 +135,15 @@ export const runs = pgTable("runs", {
   error: text("error"),
   /** 0-based index of the step that failed (null when it failed before any step). */
   failedStepIndex: integer("failed_step_index"),
+  /** Who triggered the run (email), or "ai"/sentinel for non-human triggers. A suite
+   *  child carries the suite-launcher's email; a scheduled fire (when wired) carries the
+   *  schedule owner. Null for runs created before this column existed. */
+  triggeredBy: text("triggered_by"),
+  /** How the run was triggered: `manual` | `suite` | `schedule` | `api`. Pairs with
+   *  triggeredBy so "ran by the cron owner" is distinguishable from a manual run. */
+  triggerSource: text("trigger_source"),
+  /** Optional free-form note on the run (annotation only). Edited inline on the run-detail page. */
+  notes: text("notes"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -146,6 +168,10 @@ export const runResults = pgTable(
     threshold: doublePrecision("threshold").notNull(),
     healed: boolean("healed").notNull().default(false),
     resolution: text("resolution"),
+    /** Who recorded the approve/reject decision (email) and when — the audit pair for
+     *  `resolution`. Null while the checkpoint is still unresolved. */
+    resolvedBy: text("resolved_by"),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   // One result per checkpoint per run — lets the worker upsert so a redelivered run
@@ -315,6 +341,11 @@ ALTER TABLE tests ADD COLUMN IF NOT EXISTS folder_id uuid REFERENCES folders(id)
 ALTER TABLE tests ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'active';
 ALTER TABLE tests ADD COLUMN IF NOT EXISTS origin text NOT NULL DEFAULT 'human';
 ALTER TABLE tests ADD COLUMN IF NOT EXISTS intent text;
+-- Attribution (Slice A): who created the test, and who promoted an AI draft (+ when).
+ALTER TABLE tests ADD COLUMN IF NOT EXISTS created_by text;
+ALTER TABLE tests ADD COLUMN IF NOT EXISTS promoted_by text;
+ALTER TABLE tests ADD COLUMN IF NOT EXISTS promoted_at timestamptz;
+ALTER TABLE tests ADD COLUMN IF NOT EXISTS notes text;
 CREATE TABLE IF NOT EXISTS test_tags (
   test_id uuid NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
   tag text NOT NULL,
@@ -325,6 +356,8 @@ CREATE TABLE IF NOT EXISTS suites (
   name text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+-- Attribution (Slice A): who created the suite.
+ALTER TABLE suites ADD COLUMN IF NOT EXISTS created_by text;
 CREATE TABLE IF NOT EXISTS suite_tests (
   suite_id uuid NOT NULL REFERENCES suites(id) ON DELETE CASCADE,
   test_id uuid NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
@@ -361,6 +394,10 @@ ALTER TABLE runs ADD COLUMN IF NOT EXISTS failed_step_index integer;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS suite_run_id uuid REFERENCES suite_runs(id);
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS trace boolean NOT NULL DEFAULT false;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS trace_artifact_key text;
+-- Attribution (Slice A): who triggered the run and how (manual | suite | schedule | api).
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS triggered_by text;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS trigger_source text;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS notes text;
 CREATE TABLE IF NOT EXISTS run_results (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   run_id uuid NOT NULL REFERENCES runs(id),
@@ -375,6 +412,9 @@ CREATE TABLE IF NOT EXISTS run_results (
   resolution text,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+-- Attribution (Slice A): who recorded the approve/reject decision, and when.
+ALTER TABLE run_results ADD COLUMN IF NOT EXISTS resolved_by text;
+ALTER TABLE run_results ADD COLUMN IF NOT EXISTS resolved_at timestamptz;
 CREATE TABLE IF NOT EXISTS run_steps (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   run_id uuid NOT NULL REFERENCES runs(id),

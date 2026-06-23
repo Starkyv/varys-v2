@@ -136,6 +136,13 @@ export interface TestSummary {
   status: TestStatus;
   /** Who authored it (a promoted AI test keeps `origin: "ai"`). */
   origin: TestOrigin;
+  /** Who created the test — the uploader's email for a human recording, or "ai" for an
+   *  AI draft. Null for tests created before attribution was recorded. */
+  createdBy: string | null;
+  /** For a promoted AI draft: who promoted it into the active corpus, and when (ISO).
+   *  Null for human recordings and tests promoted before attribution was recorded. */
+  promotedBy: string | null;
+  promotedAt: string | null;
   /** True when the test references variables/secrets — it declares `variables`, or
    *  its definition still contains an unresolved `{{token}}`. The Run UI uses this to
    *  require an environment before the test can run (a no-variable test runs without
@@ -195,6 +202,57 @@ export interface TestConfigStep {
   /** Screenshot-only: the explicit per-checkpoint threshold, or null when it inherits
    *  the runner default (shown as a placeholder in the editor). */
   threshold: number | null;
+  /** The step's element locator, surfaced as editable signals — present for click, type,
+   *  and element-mode screenshot steps; null for navigate and full-page / region
+   *  screenshots (which have no element target). Edited via `TestConfigStepPatch.target`. */
+  target: FingerprintSummary | null;
+}
+
+/**
+ * The editable subset of a locator's signals (the "click string"). Each PRESENT key sets
+ * that signal; an empty string CLEARS it; an OMITTED key leaves it unchanged. Every other
+ * captured fingerprint signal (ancestors, classes, scope, bounding box, structural path) is
+ * preserved server-side — editing a locator never collapses it to a single selector.
+ */
+export interface FingerprintPatch {
+  role?: string;
+  accessibleName?: string;
+  text?: string;
+  testId?: string;
+  /** A raw selector override (CSS or Playwright selector). Set ⇒ used as-is when it
+   *  resolves uniquely; "" clears it; omitted leaves it unchanged. (Slice 16.2.) */
+  selectorOverride?: string;
+}
+
+/** Request body for the live locator-verify probe (Slice 16.3a): check a CANDIDATE
+ *  (unsaved) locator at one step against a chosen environment, via a transient partial
+ *  replay. `environmentId` is omitted/null for a no-variable test (verifies env-less). */
+export interface LocatorVerifyRequest {
+  /** 0-based index of the step whose locator is being checked. */
+  stepIndex: number;
+  /** Environment to resolve {{tokens}} against; null/omitted = env-less ("default"). */
+  environmentId?: string | null;
+  /** The candidate locator edit, merged onto the step's fingerprint before resolving. */
+  target: FingerprintPatch;
+}
+
+/** Result of the live locator-verify probe. `status` is the matcher's verdict at the step;
+ *  `reachedStep` is how far the drive got (= the requested step on full reach). When the
+ *  drive failed BEFORE the step, `failedStepIndex`/`failedStepLabel` name the broken step
+ *  (so "wrong locator" is distinguishable from "broken path to the step"). */
+export interface LocatorVerifyResult {
+  status: "resolved" | "ambiguous" | "not-found";
+  /** The signal that identified the match (e.g. `testId`, `role+name`, `override`); null
+   *  unless `status` is `resolved`. */
+  matchedSignal: string | null;
+  /** True when the match leaned on a weaker signal than the locator's strongest. */
+  healed: boolean;
+  /** How far the drive reached (the index it resolved/failed at). */
+  reachedStep: number;
+  /** The step the drive could not perform, when it failed before reaching the target; null
+   *  when the drive reached the target step. */
+  failedStepIndex: number | null;
+  failedStepLabel: string | null;
 }
 
 /** The test-config read-model — the latest version's editable surface (waits +
@@ -211,6 +269,14 @@ export interface TestConfigView {
   /** The test's cron schedule, or null when unscheduled (Slice 8). Edited in the
    *  test-detail config surface and written back via the structural `PATCH /tests/:id`. */
   schedule: TestSchedule | null;
+  /** Optional free-form note on the test, or null when none. Written via `PATCH /tests/:id`. */
+  notes: string | null;
+  /** True when the test references variables/secrets — the locator-verify control uses this
+   *  to require an environment (mirrors the Run pre-flight). (Slice 16.3b.) */
+  needsEnvironment: boolean;
+  /** Every variable the test declares — the verify env picker diffs this against an
+   *  environment's values/secret names to flag missing ones, like the Run picker. */
+  variables: TestVariable[];
 }
 
 /** A per-step edit in a config patch — keyed by `index`. Omitted fields are left as-is. */
@@ -224,6 +290,9 @@ export interface TestConfigStepPatch {
   waitBefore?: EditableWait[];
   /** Screenshot-only: set the per-checkpoint threshold (0..1). */
   threshold?: number;
+  /** Edit the step's element locator signals (click / type / element-mode screenshot).
+   *  Merged onto the existing fingerprint; other signals are preserved. */
+  target?: FingerprintPatch;
 }
 
 /** The body of `PUT /tests/:id/config`: a targeted patch the server applies onto the
@@ -448,6 +517,8 @@ export interface SuiteSummary {
   name: string;
   /** How many tests the suite currently selects. */
   testCount: number;
+  /** Who created the suite (email); null for suites created before attribution. */
+  createdBy: string | null;
 }
 
 /** A suite with its member tests (full summaries, so the UI gets folder/tags/
@@ -455,6 +526,8 @@ export interface SuiteSummary {
 export interface SuiteView {
   id: string;
   name: string;
+  /** Who created the suite (email); null for suites created before attribution. */
+  createdBy: string | null;
   tests: TestSummary[];
 }
 
@@ -502,6 +575,10 @@ export interface CheckpointView {
   captureMode: CaptureMode;
   /** The recorded decision, or null while the checkpoint still needs review. */
   resolution: Resolution | null;
+  /** Who recorded that decision (email) and when (ISO) — the audit pair for `resolution`.
+   *  Both null while the checkpoint is unresolved (or for decisions made before this). */
+  resolvedBy: string | null;
+  resolvedAt: string | null;
   /** Pixel-diff score the server computed; null on a first seed (nothing to diff). */
   diffScore: number | null;
   /** The per-checkpoint threshold the diff was judged against. */
@@ -551,6 +628,10 @@ export interface RunSummary {
   runTimestamp: string;
   /** Why a `failed` run failed (the replay error); null otherwise. */
   error: string | null;
+  /** Who triggered the run (email / "ai" sentinel), and how — `manual` | `suite` |
+   *  `schedule` | `api`. Both null for runs created before attribution was recorded. */
+  triggeredBy: string | null;
+  triggerSource: string | null;
 }
 
 /** Aggregate child-run counts for a suite run — derived on read, never stored. */
@@ -659,6 +740,9 @@ export interface FingerprintSummary {
   ancestors: string[] | null;
   /** Recorded position + size in screenshot pixels; null when not captured. */
   boundingBox: Rect | null;
+  /** An author-supplied raw selector override (Slice 16.2); null when none. Used as-is by
+   *  the matcher when it resolves to exactly one element, else the signals above take over. */
+  selectorOverride: string | null;
 }
 
 /** A run and its checkpoints, with the identifying context the reviewer needs. */
@@ -672,6 +756,10 @@ export interface RunView {
   environment: string;
   /** When the run was created, ISO 8601. */
   runTimestamp: string;
+  /** Who triggered the run (email / "ai" sentinel), and how — `manual` | `suite` |
+   *  `schedule` | `api`. Both null for runs created before attribution was recorded. */
+  triggeredBy: string | null;
+  triggerSource: string | null;
   /** Why a `failed` run failed (the replay error); null otherwise. A failed run
    *  captures no checkpoints, so this is what the viewer shows instead. */
   error: string | null;
@@ -693,6 +781,8 @@ export interface RunView {
    *  in order. Empty until the run starts executing. */
   timeline: StepRun[];
   checkpoints: CheckpointView[];
+  /** Optional free-form note on the run, or null when none. Editable from the run-detail page. */
+  notes: string | null;
 }
 
 /**
