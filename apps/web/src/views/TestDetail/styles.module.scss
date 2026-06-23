@@ -885,3 +885,54 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* ---- Recent runs (per-test history) ---------------------------------- */
+.recentRuns {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.recentRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  width: 100%;
+  padding: var(--space-8) var(--space-8);
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--duration-fast) var(--ease-standard);
+
+  @include focus-ring;
+
+  &:hover {
+    background: var(--color-bg-inset);
+  }
+}
+
+.recentEnv {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+}
+
+.recentWhen {
+  flex: 0 0 auto;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.recentEmpty {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}

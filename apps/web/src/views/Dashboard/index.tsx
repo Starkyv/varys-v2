@@ -32,7 +32,7 @@ function toKpis(s: DashboardSummary): Kpi[] {
       delta: `${Math.abs(s.passRateDeltaPct).toFixed(1)}%`,
       deltaTone: s.passRateDeltaPct < 0 ? "danger" : "success",
       deltaDir: s.passRateDeltaPct < 0 ? "down" : "up",
-      sub: "last 7 days",
+      sub: "verifications · last 7 days",
       Icon: Check,
     },
     {

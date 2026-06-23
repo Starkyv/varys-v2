@@ -7,9 +7,9 @@ import styles from "./styles.module.scss";
 
 const LEGEND = [
   { label: "Passed", tone: "success" as const },
-  { label: "Review", tone: "warning" as const },
-  { label: "Failed", tone: "danger" as const },
   { label: "Baseline", tone: "info" as const },
+  { label: "Pending", tone: "warning" as const },
+  { label: "Failed", tone: "danger" as const },
 ];
 
 const SKELETON_ROWS = ["a", "b", "c", "d", "e"];

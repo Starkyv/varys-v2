@@ -20,7 +20,7 @@ import { TONE_VARS } from "../../../../lib/status";
 import styles from "./styles.module.scss";
 
 type IconType = ComponentType<IconProps>;
-type BadgeTone = "success" | "danger" | "info";
+type BadgeTone = "success" | "danger" | "info" | "warning";
 
 /* ------------------------------------------------------------------ *
  *  Row assembly — exported so the parent can derive the right pane    *
@@ -113,12 +113,13 @@ export function defaultSelectedIndex(run: RunView, rows: TimelineRow[]): number 
  *  Per-row visual derivations                                         *
  * ------------------------------------------------------------------ */
 
-/** The state badge a checkpoint row carries (resolution overrides review state). */
+/** The state badge a checkpoint row carries (resolution overrides review state). Test-runner
+ *  model: a diff or a not-yet-set baseline reads red, since both fail the run until set. */
 export function checkpointBadge(cp: CheckpointView): { label: string; tone: BadgeTone; Icon: IconType } {
-  if (cp.resolution === "approved") return { label: "Approved", tone: "success", Icon: Check };
+  if (cp.resolution === "approved") return { label: "Baseline set", tone: "success", Icon: Check };
   if (cp.resolution === "rejected") return { label: "Rejected", tone: "danger", Icon: X };
-  if (cp.reviewState === "pending-baseline") return { label: "New baseline", tone: "info", Icon: Layers };
-  if (cp.reviewState === "diff") return { label: "Needs review", tone: "danger", Icon: Eye };
+  if (cp.reviewState === "pending-baseline") return { label: "Pending baseline", tone: "warning", Icon: Layers };
+  if (cp.reviewState === "diff") return { label: "Changed", tone: "danger", Icon: Eye };
   return { label: "Passed", tone: "success", Icon: Check };
 }
 

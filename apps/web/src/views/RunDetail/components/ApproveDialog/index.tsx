@@ -14,12 +14,16 @@ export function ApproveDialog({
   onConfirm,
   name,
   count,
+  identical,
 }: {
   open: boolean;
   onClose: () => void;
   onConfirm: () => void;
   name?: string;
   count?: number;
+  /** Single-checkpoint re-baseline of a *passing* capture that already matches the
+   *  current golden — surfaces a "nothing visibly changes" note. */
+  identical?: boolean;
 }) {
   const titleId = useId();
   const isAll = count != null;
@@ -48,6 +52,12 @@ export function ApproveDialog({
             )}
             <strong className={styles.warn}>This cannot be undone.</strong>
           </p>
+          {identical && (
+            <p className={styles.text}>
+              This capture already matches the current baseline — re-baselining just re-anchors the
+              golden to this run.
+            </p>
+          )}
           {data?.user?.email && (
             <p className={styles.actor}>Approving as {data.user.email} — this is recorded.</p>
           )}

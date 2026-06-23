@@ -41,11 +41,13 @@ import { useRouter } from "../../context/router";
 import { useRunDialog } from "../../context/run-dialog";
 import { useToast } from "../../context/toast";
 import { absoluteTime, relativeTime } from "../../lib/format";
+import { StatusBadge } from "../../lib/status";
 import { isVariableSatisfied } from "../../lib/variables";
 import {
   useEnvironments,
   useSaveTestConfig,
   useTestConfig,
+  useTestRuns,
   useUpdateTest,
   useVerifyLocator,
 } from "../../queries";
@@ -429,6 +431,8 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
             }
           />
 
+          <RecentRunsCard testId={config.id} />
+
           <Card>
             <div className={styles.cardHead}>
               <span className={styles.cardIcon}>
@@ -655,6 +659,60 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
         </Button>
       </div>
     </div>
+  );
+}
+
+/**
+ * A test's recent run history — the per-test slice of the Runs page. Each row shows the
+ * derived outcome (so a Baseline-creation run reads differently from a Verified pass),
+ * the environment, and when, and opens the run in the viewer. Polled like the Runs list.
+ */
+function RecentRunsCard({ testId }: { testId: string }) {
+  const { navigate } = useRouter();
+  const runs = useTestRuns(testId);
+  const data = (runs.data ?? []).slice(0, 6);
+
+  return (
+    <Card>
+      <div className={styles.cardHead}>
+        <span className={styles.cardIcon}>
+          <Activity size={15} />
+        </span>
+        <div className={styles.cardHeadText}>
+          <div className={styles.cardTitle}>Recent runs</div>
+          <div className={styles.cardSub}>
+            Baseline-creation runs vs verification passes for this test, newest first.
+          </div>
+        </div>
+      </div>
+      {runs.isLoading ? (
+        <div className={styles.recentRuns}>
+          <Skeleton height={30} radius="var(--radius-md)" />
+          <Skeleton height={30} radius="var(--radius-md)" />
+          <Skeleton height={30} radius="var(--radius-md)" />
+        </div>
+      ) : data.length === 0 ? (
+        <div className={styles.recentEmpty}>No runs yet — trigger this test to see its history.</div>
+      ) : (
+        <ul className={styles.recentRuns}>
+          {data.map((r) => (
+            <li key={r.runId}>
+              <button
+                type="button"
+                className={styles.recentRow}
+                onClick={() => navigate({ name: "runDetail", runId: r.runId })}
+              >
+                <StatusBadge status={r.outcome} size="sm" />
+                <span className={styles.recentEnv} title={r.environment}>
+                  {r.environment}
+                </span>
+                <span className={styles.recentWhen}>{relativeTime(r.runTimestamp)}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
   );
 }
 

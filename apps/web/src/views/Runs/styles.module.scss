@@ -4,6 +4,13 @@
   @include card-flush;
 }
 
+/* "Status" header label + its InfoTip, kept on one line. */
+.statusHead {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6);
+}
+
 .loading {
   @include card(var(--space-16));
   display: flex;

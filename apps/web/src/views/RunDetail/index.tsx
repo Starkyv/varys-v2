@@ -104,7 +104,7 @@ export function RunDetail({ runId }: { runId: string }) {
         <div className={styles.titleBlock}>
           <div className={styles.titleRow}>
             <span className={styles.testName}>{data.testName}</span>
-            <StatusBadge status={data.status} />
+            <StatusBadge status={data.outcome} />
           </div>
           <div className={styles.meta}>
             <span className={styles.env}>{data.environment}</span> · {absoluteTime(data.runTimestamp)}

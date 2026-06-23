@@ -67,8 +67,9 @@ export async function fetchNeedsReview(): Promise<NeedsReviewItem[]> {
 }
 
 /** Fetch the Runs history (every run, newest first). Throws on a non-2xx response. */
-export async function fetchRuns(): Promise<RunSummary[]> {
-  const res = await fetch(`${API_BASE}/runs`);
+export async function fetchRuns(testId?: string): Promise<RunSummary[]> {
+  const qs = testId ? `?testId=${encodeURIComponent(testId)}` : "";
+  const res = await fetch(`${API_BASE}/runs${qs}`);
   if (!res.ok) {
     throw new Error(`Failed to load runs (${res.status})`);
   }

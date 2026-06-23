@@ -12,14 +12,15 @@ import {
 import type { ReactNode } from "react";
 
 /**
- * The Varys status vocabulary → visual mapping. One source of truth for every run
- * status (`queued | running | passed | needs_review | failed`), checkpoint review
- * state (`pending-baseline | diff | passed`), and the derived suite-run / matrix
- * statuses — so a status looks identical in the dashboard, the runs table, the
- * review queue and the diff viewer.
+ * The Varys status vocabulary → visual mapping. One source of truth for the derived run
+ * outcome (`passed | baseline | failed`, test-runner model), the stored run status
+ * (`queued | running | passed | needs_review | failed`), and the checkpoint review state
+ * (`pending-baseline | diff | passed`) — so a status looks identical in the dashboard, the
+ * runs table, the review queue and the diff viewer.
  */
 export type StatusKey =
   | "passed"
+  | "baseline"
   | "needs_review"
   | "diff"
   | "pending-baseline"
@@ -35,9 +36,11 @@ interface StatusMeta {
 
 const META: Record<StatusKey, StatusMeta> = {
   passed: { tone: "success", label: "Passed" },
+  baseline: { tone: "info", label: "Baseline" },
   needs_review: { tone: "warning", label: "Needs review" },
   diff: { tone: "warning", label: "Diff" },
-  "pending-baseline": { tone: "info", label: "Pending baseline" },
+  // Awaiting your approval (amber) — distinct from an established `baseline` (info/blue).
+  "pending-baseline": { tone: "warning", label: "Pending baseline" },
   failed: { tone: "danger", label: "Failed" },
   queued: { tone: "neutral", label: "Queued" },
   running: { tone: "neutral", label: "Running" },
@@ -60,6 +63,9 @@ export function statusLabel(status: string): string {
 export function StatusIcon({ status, size = "1em" }: { status: string; size?: number | string }) {
   switch (key(status)) {
     case "passed":
+      return <Check size={size} />;
+    case "baseline":
+      // A "set the truth" check, toned info (vs passed's success).
       return <Check size={size} />;
     case "needs_review":
     case "diff":

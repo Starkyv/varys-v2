@@ -60,14 +60,14 @@ export function RecentRuns({
               className={styles.row}
               onClick={() => navigate({ name: "runDetail", runId: r.runId })}
             >
-              <span className={styles.dot} style={{ background: statusVars(r.status).base }} />
+              <span className={styles.dot} style={{ background: statusVars(r.outcome).base }} />
               <span className={styles.text}>
                 <span className={styles.name}>{r.testName}</span>
                 <span className={styles.meta}>
                   {r.environment} · {relativeTime(r.runTimestamp)}
                 </span>
               </span>
-              <StatusBadge status={r.status} />
+              <StatusBadge status={r.outcome} />
             </button>
           ))}
         </div>

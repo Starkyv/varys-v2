@@ -1,4 +1,13 @@
-import { Activity, EmptyState, ErrorState, IconButton, Skeleton, Trash } from "@varys/ui";
+import {
+  Activity,
+  EmptyState,
+  ErrorState,
+  IconButton,
+  InfoTip,
+  type InfoTipBlock,
+  Skeleton,
+  Trash,
+} from "@varys/ui";
 import { LiveIndicator } from "../../components/LiveIndicator";
 import { useConfirm } from "../../context/confirm";
 import { useRouter } from "../../context/router";
@@ -7,6 +16,25 @@ import { relativeTime } from "../../lib/format";
 import { StatusBadge } from "../../lib/status";
 import { useDeleteRun, useRuns } from "../../queries";
 import styles from "./styles.module.scss";
+
+/** What each value in the Status column means — the run-outcome taxonomy (RunOutcome),
+ *  shown in a tooltip on the column header. */
+const STATUS_LEGEND: InfoTipBlock[] = [
+  { type: "heading", text: "What each status means" },
+  {
+    type: "table",
+    head: ["Status", "Meaning"],
+    // The first column is the real status chip, so the legend matches what's in the column.
+    rows: [
+      [<StatusBadge key="q" status="queued" />, "Waiting for a worker."],
+      [<StatusBadge key="r" status="running" />, "Replaying in the browser right now."],
+      [<StatusBadge key="p" status="passed" />, "Baseline matched — a real verification."],
+      [<StatusBadge key="b" status="baseline" />, "Set or updated the golden baseline."],
+      [<StatusBadge key="pb" status="pending-baseline" />, "First run, no baseline yet — awaiting approval."],
+      [<StatusBadge key="f" status="failed" />, "Capture differs from the baseline, or the replay crashed."],
+    ],
+  },
+];
 
 export function Runs() {
   const runs = useRuns();
@@ -76,7 +104,18 @@ export function Runs() {
             <tr>
               <th className={styles.thLeft}>Test</th>
               <th>Environment</th>
-              <th>Status</th>
+              <th>
+                <span className={styles.statusHead}>
+                  Status
+                  <InfoTip
+                    label="What each run status means"
+                    placement="bottom"
+                    portal
+                    width={560}
+                    blocks={STATUS_LEGEND}
+                  />
+                </span>
+              </th>
               <th className={styles.thRight}>When</th>
               <th className={styles.thAction} aria-label="Actions" />
             </tr>
@@ -100,7 +139,7 @@ export function Runs() {
                   </td>
                   <td className={styles.env}>{r.environment}</td>
                   <td>
-                    <StatusBadge status={r.status} />
+                    <StatusBadge status={r.outcome} />
                   </td>
                   <td className={styles.when}>{relativeTime(r.runTimestamp)}</td>
                   <td className={styles.tdAction}>

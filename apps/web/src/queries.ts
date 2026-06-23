@@ -89,7 +89,17 @@ export function runsQueryKey() {
 /** The Runs history (every run). Polled so a run's status updates as the worker
  *  progresses (queued → running → terminal) without a manual refresh. */
 export function useRuns() {
-  return useQuery({ queryKey: runsQueryKey(), queryFn: fetchRuns, refetchInterval: 3000 });
+  return useQuery({ queryKey: runsQueryKey(), queryFn: () => fetchRuns(), refetchInterval: 3000 });
+}
+
+/** One test's run history (TestDetail "Recent runs"). Shares the `["runs"]` key prefix so a
+ *  triggered/deleted run invalidates it too; polled like the global list. */
+export function useTestRuns(testId: string) {
+  return useQuery({
+    queryKey: [...runsQueryKey(), { testId }] as const,
+    queryFn: () => fetchRuns(testId),
+    refetchInterval: 3000,
+  });
 }
 
 export function useRunView(runId: string) {

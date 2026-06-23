@@ -53,7 +53,7 @@ export function SuiteRunReportPanel({ id }: { id: string }) {
           >
             <span className={styles.childName}>{child.testName}</span>
             <span className={styles.childEnv}>{child.environment}</span>
-            <StatusBadge status={child.status} />
+            <StatusBadge status={child.outcome} />
           </button>
         ))}
       </div>
