@@ -11,6 +11,7 @@ import {
   ListRun,
   Pencil,
   Puzzle,
+  Sliders,
   Squares,
 } from "@varys/ui";
 import { motion } from "framer-motion";
@@ -50,6 +51,7 @@ const GROUPS: NavGroup[] = [
     label: "Configure",
     items: [
       { key: "environments", name: "Environments", Icon: Database },
+      { key: "configurations", name: "Configurations", Icon: Sliders },
       { key: "extension", name: "Browser extension", Icon: Puzzle },
     ],
   },

@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  appSettings,
   baselines,
   type Db,
   environments,
@@ -26,7 +27,7 @@ import {
   resolveString,
   resolveWaits,
 } from "@varys/variable-resolver";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import {
   type Browser,
   type BrowserContext,
@@ -55,6 +56,31 @@ export interface ReplayDeps {
 export type { EnvironmentProfile } from "@varys/variable-resolver";
 
 const DEFAULT_THRESHOLD = 0.01;
+/** Default per-pixel colour sensitivity for the diff — mirrors `pixelmatch`'s built-in default
+ *  and {@link DEFAULT_PER_PIXEL_THRESHOLD} in @varys/review-contract (inlined to avoid the dep). */
+const DEFAULT_PER_PIXEL = 0.1;
+
+/** `app_settings` keys for the global image-comparison defaults, edited on the Configurations page.
+ *  Kept in sync with the API's settings service. */
+const RATIO_KEY = "image_comparison_ratio";
+const PER_PIXEL_KEY = "image_comparison_per_pixel";
+
+/** Read the team's global image-comparison defaults from `app_settings`, falling back to the
+ *  built-in defaults when unset or unparseable. A per-checkpoint `step.threshold` still overrides
+ *  the ratio; the per-pixel value has no per-checkpoint override and always comes from here. */
+async function globalImageDefaults(db: Db): Promise<{ ratio: number; perPixel: number }> {
+  const rows = await db
+    .select({ key: appSettings.key, value: appSettings.value })
+    .from(appSettings)
+    .where(inArray(appSettings.key, [RATIO_KEY, PER_PIXEL_KEY]));
+  const byKey = new Map(rows.map((r) => [r.key, Number(r.value)]));
+  const clamp = (n: number | undefined, fallback: number) =>
+    n != null && Number.isFinite(n) && n >= 0 && n <= 1 ? n : fallback;
+  return {
+    ratio: clamp(byKey.get(RATIO_KEY), DEFAULT_THRESHOLD),
+    perPixel: clamp(byKey.get(PER_PIXEL_KEY), DEFAULT_PER_PIXEL),
+  };
+}
 
 /** A cookie seeded onto the browser context before a run (env-scoped). Mirrors
  *  `EnvCookie` in @varys/review-contract; inlined to avoid a runner→contract dep. */
@@ -173,6 +199,10 @@ const RESULT_CONFLICT = {
  */
 export async function processRun(deps: ReplayDeps, runId: string): Promise<void> {
   const { db, storage } = deps;
+
+  // Team-wide diff defaults (Configurations page). Read once per run; a per-checkpoint
+  // `step.threshold` still overrides the ratio below.
+  const imageDefaults = await globalImageDefaults(db);
 
   await db
     .update(runs)
@@ -350,7 +380,8 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
       }
       const actualKey = `runs/${runId}/${step.name}.png`;
       await storage.put(actualKey, actual);
-      const threshold = step.threshold ?? DEFAULT_THRESHOLD;
+      // Per-checkpoint override wins; else the team default; else the built-in.
+      const threshold = step.threshold ?? imageDefaults.ratio;
 
       const [baseline] = await db
         .select({ artifactKey: baselines.artifactKey })
@@ -387,6 +418,7 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
           actual,
           threshold,
           step.masks ?? [],
+          imageDefaults.perPixel,
         );
 
         if (verdict === "match") {

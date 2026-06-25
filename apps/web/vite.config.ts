@@ -14,7 +14,7 @@ export default defineConfig({
     // proxied falls through to the SPA and returns index.html — which shows up as
     // "the API returned HTML" for that endpoint. Add new prefixes here.
     proxy: Object.fromEntries(
-      ["/api/auth", "/auth-config", "/health", "/dashboard", "/runs", "/suite-runs", "/tests", "/drafts", "/authoring", "/environments", "/folders", "/tags", "/suites", "/artifacts", "/trace-viewer", "/mcp"].map((p) => [
+      ["/api/auth", "/auth-config", "/health", "/dashboard", "/runs", "/suite-runs", "/tests", "/drafts", "/authoring", "/environments", "/folders", "/tags", "/suites", "/settings", "/artifacts", "/trace-viewer", "/mcp"].map((p) => [
         p,
         { target: "http://localhost:4000", changeOrigin: true },
       ]),

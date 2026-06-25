@@ -9,6 +9,7 @@ import type {
   EnvCookie,
   EnvironmentView,
   FolderSummary,
+  ImageComparisonSettings,
   LocatorVerifyRequest,
   LocatorVerifyResult,
   NeedsReviewItem,
@@ -151,6 +152,32 @@ export async function saveAuthoringInstructions(body: {
   if (!res.ok) {
     throw new Error(`Failed to save authoring instructions (${res.status})`);
   }
+}
+
+/** Global image-comparison defaults (Configurations page) — the two thresholds applied to every
+ *  checkpoint diff. */
+export async function fetchImageComparisonSettings(): Promise<ImageComparisonSettings> {
+  const res = await fetch(`${API_BASE}/settings/image-comparison`);
+  if (!res.ok) {
+    throw new Error(`Failed to load image-comparison settings (${res.status})`);
+  }
+  return (await res.json()) as ImageComparisonSettings;
+}
+
+/** Save the image-comparison defaults. Pass `perPixel` and/or `ratio` — an omitted field is left
+ *  untouched. Returns the new effective settings (after server-side clamping to 0–1). */
+export async function saveImageComparisonSettings(
+  body: Partial<ImageComparisonSettings>,
+): Promise<ImageComparisonSettings> {
+  const res = await fetch(`${API_BASE}/settings/image-comparison`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to save image-comparison settings (${res.status})`);
+  }
+  return (await res.json()) as ImageComparisonSettings;
 }
 
 /** Whether Claude Code has recently driven the MCP server — an activity-based "connected" proxy

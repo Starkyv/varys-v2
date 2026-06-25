@@ -93,6 +93,7 @@ ingress:
     - /folders
     - /tags
     - /suites
+    - /settings
     - /artifacts
     - /trace-viewer
     - /mcp

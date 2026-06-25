@@ -1,10 +1,11 @@
 import { Module } from "@nestjs/common";
 import { QueueModule } from "../queue/queue.module";
+import { SettingsModule } from "../settings/settings.module";
 import { RunsController } from "./runs.controller";
 import { RunsService } from "./runs.service";
 
 @Module({
-  imports: [QueueModule],
+  imports: [QueueModule, SettingsModule],
   controllers: [RunsController],
   providers: [RunsService],
   // Exported so a suite-run fan-out creates children through the SAME

@@ -1,5 +1,6 @@
 import { useRouter } from "../../context/router";
 import { Author } from "../../views/Author";
+import { Configurations } from "../../views/Configurations";
 import { Dashboard } from "../../views/Dashboard";
 import { Drafts } from "../../views/Drafts";
 import { Environments } from "../../views/Environments";
@@ -36,6 +37,8 @@ export function RouteOutlet() {
       return <Environments />;
     case "extension":
       return <Extension />;
+    case "configurations":
+      return <Configurations />;
     case "runDetail":
       return <RunDetail runId={route.runId} />;
     case "testDetail":

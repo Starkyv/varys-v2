@@ -38,14 +38,18 @@ function paintRect(
 
 /**
  * Pixel-diff two PNG buffers. `threshold` is the max mismatched-pixel ratio
- * tolerated before the result is a diff. Mismatched dimensions are treated as a
- * full diff (score 1). The diff image highlights changed pixels.
+ * tolerated before the result is a diff. `pixelThreshold` (0..1) is the per-pixel
+ * colour sensitivity passed to pixelmatch — how different a single pixel's colour
+ * must be to count as changed; higher absorbs anti-aliasing and rendering noise.
+ * Mismatched dimensions are treated as a full diff (score 1). The diff image
+ * highlights changed pixels.
  */
 export function diffPng(
   baseline: Buffer,
   actual: Buffer,
   threshold: number,
   masks: Rect[] = [],
+  pixelThreshold = 0.1,
 ): DiffResult {
   const a = PNG.sync.read(baseline);
   const b = PNG.sync.read(actual);
@@ -62,7 +66,7 @@ export function diffPng(
   }
   const diff = new PNG({ width, height });
   const mismatched = pixelmatch(a.data, b.data, diff.data, width, height, {
-    threshold: 0.1,
+    threshold: pixelThreshold,
   });
   const score = mismatched / (width * height);
   const verdict = score <= threshold ? "match" : "diff";

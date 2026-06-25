@@ -28,7 +28,8 @@ export type NavKey =
   | "suiteRuns"
   | "needsReview"
   | "environments"
-  | "extension";
+  | "extension"
+  | "configurations";
 
 export type Route =
   | { name: "dashboard" }
@@ -41,6 +42,7 @@ export type Route =
   | { name: "needsReview" }
   | { name: "environments" }
   | { name: "extension" }
+  | { name: "configurations" }
   | { name: "runDetail"; runId: string }
   | { name: "testDetail"; testId: string };
 
@@ -55,6 +57,7 @@ const VIEW_PARAM: Record<NavKey, string> = {
   needsReview: "needs-review",
   environments: "environments",
   extension: "extension",
+  configurations: "configurations",
 };
 const PARAM_VIEW: Record<string, NavKey> = Object.fromEntries(
   Object.entries(VIEW_PARAM).map(([k, v]) => [v, k as NavKey]),
@@ -154,6 +157,8 @@ export function routeHeading(route: Route): { title: string; subtitle: string } 
       return { title: "Environments", subtitle: "Per-deployment variables & secrets" };
     case "extension":
       return { title: "Browser extension", subtitle: "Record tests right in Chrome" };
+    case "configurations":
+      return { title: "Configurations", subtitle: "Global defaults for how screenshots are compared" };
     case "runDetail":
       return { title: "Run detail", subtitle: "Replay timeline & diff review" };
     case "testDetail":

@@ -8,6 +8,7 @@ import { EnvironmentsModule } from "./environments/environments.module";
 import { FoldersModule } from "./folders/folders.module";
 import { HealthModule } from "./health/health.module";
 import { RunsModule } from "./runs/runs.module";
+import { SettingsModule } from "./settings/settings.module";
 import { StorageModule } from "./storage/storage.module";
 import { SuiteRunsModule } from "./suite-runs/suite-runs.module";
 import { SuitesModule } from "./suites/suites.module";
@@ -30,6 +31,7 @@ import { TestsModule } from "./tests/tests.module";
     SuiteRunsModule,
     DashboardModule,
     AuthoringModule,
+    SettingsModule,
   ],
 })
 export class AppModule {}

@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
+  ImageComparisonSettings,
   LocatorVerifyRequest,
   PromoteDraftBody,
   TestConfigPatch,
@@ -20,8 +21,10 @@ import {
   discardDraft,
   fetchAuthoringInstructions,
   fetchAuthoringSessions,
+  fetchImageComparisonSettings,
   fetchMcpStatus,
   saveAuthoringInstructions,
+  saveImageComparisonSettings,
   fetchDashboard,
   fetchDraft,
   fetchDrafts,
@@ -209,6 +212,27 @@ export function useSaveAuthoringInstructions() {
   return useMutation({
     mutationFn: (body: { base?: string; additional?: string }) => saveAuthoringInstructions(body),
     onSuccess: () => qc.invalidateQueries({ queryKey: authoringInstructionsQueryKey() }),
+  });
+}
+
+export function imageComparisonSettingsQueryKey() {
+  return ["settings", "image-comparison"] as const;
+}
+
+/** The global image-comparison defaults (Configurations page). */
+export function useImageComparisonSettings() {
+  return useQuery({
+    queryKey: imageComparisonSettingsQueryKey(),
+    queryFn: fetchImageComparisonSettings,
+  });
+}
+
+/** Save the image-comparison defaults; seeds the cache with the server's clamped response. */
+export function useSaveImageComparisonSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Partial<ImageComparisonSettings>) => saveImageComparisonSettings(body),
+    onSuccess: (next) => qc.setQueryData(imageComparisonSettingsQueryKey(), next),
   });
 }
 

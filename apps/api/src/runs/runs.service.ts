@@ -39,6 +39,7 @@ import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
 import { summarizeFingerprint } from "../fingerprint-summary";
 import { BOSS } from "../queue/queue.module";
+import { SettingsService } from "../settings/settings.service";
 import { STORAGE } from "../storage/storage.module";
 
 const ENVIRONMENT = "default";
@@ -67,6 +68,8 @@ export class RunsService {
     @Inject(DB) private readonly db: Db,
     @Inject(BOSS) private readonly boss: Boss,
     @Inject(STORAGE) private readonly storage: StorageAdapter,
+    // Supplies the team-wide per-pixel default so in-viewer re-evaluation matches the runner.
+    @Inject(SettingsService) private readonly settings: SettingsService,
   ) {}
 
   async create(
@@ -715,7 +718,14 @@ export class RunsService {
       r.actualArtifactKey,
     );
     const threshold = input.threshold ?? r.threshold;
-    const { verdict, score, diffImage } = diffPng(baseline, actual, threshold, input.masks ?? []);
+    const { perPixel } = await this.settings.getImageComparison();
+    const { verdict, score, diffImage } = diffPng(
+      baseline,
+      actual,
+      threshold,
+      input.masks ?? [],
+      perPixel,
+    );
     return {
       verdict,
       diffScore: score,
@@ -785,7 +795,8 @@ export class RunsService {
 
     // 2. Re-judge ONLY this run_result against the stored artifacts.
     const threshold = input.threshold ?? ctx.threshold;
-    const { verdict, score, diffImage } = diffPng(baseline, actual, threshold, masks);
+    const { perPixel } = await this.settings.getImageComparison();
+    const { verdict, score, diffImage } = diffPng(baseline, actual, threshold, masks, perPixel);
     if (verdict === "match") {
       await this.db
         .update(runResults)
