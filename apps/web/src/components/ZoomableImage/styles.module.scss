@@ -77,6 +77,78 @@
   overflow: auto;
 }
 
+/* Positioned host for the lightbox image so the name tag and nav arrows anchor to it. */
+.stage {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-width: min(96vw, 100%);
+  cursor: default;
+}
+
+/* Small label pill, top-left of the image — names the current screenshot. */
+.tag {
+  position: absolute;
+  top: var(--space-12);
+  left: var(--space-12);
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-8);
+  max-width: calc(100% - var(--space-24));
+  padding: 5px var(--space-10);
+  border-radius: var(--radius-full);
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  color: #fff;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--line-height-snug);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tagCount {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+/* Prev/next chevrons flanking the image. */
+.nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-standard);
+
+  @include focus-ring;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.26);
+  }
+}
+
+.navPrev {
+  left: calc(-1 * var(--space-12) - 40px);
+  transform: translateY(-50%) rotate(180deg);
+}
+
+.navNext {
+  right: calc(-1 * var(--space-12) - 40px);
+}
+
 /* Centered, viewport-bounded box for the lightbox <Image> — overrides the design
  * system wrapper's fill behaviour and centers the image (or its loading spinner). */
 .fullFrame {

@@ -66,7 +66,6 @@ export function DecisionBar({ checkpoint: cp, runId }: { checkpoint: CheckpointV
         iconLeft={<Camera size={15} />}
         disabled={decision.isPending}
         onClick={() => setConfirming(true)}
-        className={styles.approve}
       >
         {isFirst ? "Approve baseline" : "Set as baseline"}
       </Button>

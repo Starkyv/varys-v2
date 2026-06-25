@@ -29,25 +29,3 @@
   font-size: var(--font-size-xs);
   color: var(--color-text-subtle);
 }
-
-/* Reject reads as a danger-tinted secondary; approve is the success affordance. */
-.reject {
-  color: var(--color-danger-fg);
-
-  &:hover {
-    background: var(--color-danger-soft);
-  }
-}
-
-.approve {
-  background: var(--color-success);
-
-  &:hover {
-    background: var(--color-success);
-    filter: brightness(0.96);
-  }
-  &:active {
-    background: var(--color-success);
-    filter: brightness(0.92);
-  }
-}

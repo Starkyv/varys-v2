@@ -49,6 +49,17 @@ export function RunDetail({ runId }: { runId: string }) {
 
   const rows = useMemo(() => (run.data ? buildTimelineRows(run.data) : []), [run.data]);
 
+  // Run-wide image gallery, ordered checkpoint-by-checkpoint as baseline → actual, so the
+  // lightbox can traverse every screenshot in the run with the arrow keys.
+  const gallery = useMemo(() => {
+    const items: { src: string; label: string }[] = [];
+    for (const cp of run.data?.checkpoints ?? []) {
+      if (cp.baselineUrl) items.push({ src: cp.baselineUrl, label: `${cp.name} · Baseline` });
+      if (cp.actualUrl) items.push({ src: cp.actualUrl, label: `${cp.name} · Actual` });
+    }
+    return items;
+  }, [run.data]);
+
   if (run.isLoading) {
     return (
       <div>
@@ -182,6 +193,7 @@ export function RunDetail({ runId }: { runId: string }) {
                     checkpoint={selectedRow.checkpoint}
                     runId={data.runId}
                     target={data.fingerprints[selectedRow.index] ?? null}
+                    gallery={gallery}
                   />
                 ) : selectedRow ? (
                   <StepDetail

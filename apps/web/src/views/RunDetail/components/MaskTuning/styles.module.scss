@@ -25,29 +25,81 @@
   line-height: var(--line-height-snug);
 }
 
-.stage {
+/* Toolbar above the canvas: view toggle · mode toggle · zoom controls. */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  flex-wrap: wrap;
+}
+
+.spacer {
+  flex: 1 1 auto;
+}
+
+.zoomGroup {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.zoomLabel {
+  min-width: 46px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.fitBtn {
+  height: 30px;
+  padding: 0 var(--space-10);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-bg-surface);
+  border-radius: var(--radius-md);
+  font-family: var(--font-text);
+  font-size: var(--font-size-xs);
+  color: var(--color-text);
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    background: var(--color-bg-subtle);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+}
+
+/* Scroll viewport — the image canvas can be larger than this when zoomed. */
+.viewport {
   position: relative;
-  display: inline-block;
-  align-self: flex-start;
   max-width: 100%;
+  max-height: 460px;
+  overflow: auto;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  overflow: hidden;
-  max-height: 420px;
-  overflow-y: auto;
+  background: var(--color-bg-subtle);
+  overscroll-behavior: contain;
+}
+
+/* The scaled content; width is set inline to `${zoom * 100}%` of the viewport. */
+.canvas {
+  position: relative;
+  display: block;
 }
 
 .img {
   display: block;
   width: 100%;
   height: auto;
-  opacity: 0;
   transition: opacity var(--duration-base) var(--ease-standard);
 }
 
 /* Hold the capture hidden until fully decoded so it never paints half-drawn. */
-.imgReady {
-  opacity: 1;
+.imgHidden {
+  opacity: 0;
 }
 
 /* In-flow placeholder while the capture loads — gives the (otherwise 0-tall) stage
@@ -61,8 +113,20 @@
 .drawLayer {
   position: absolute;
   inset: 0;
-  cursor: crosshair;
   touch-action: none;
+}
+
+/* Cursor reflects what a drag will do, per the Draw/Move mode. */
+.drawCursor {
+  cursor: crosshair;
+}
+
+.panCursor {
+  cursor: grab;
+
+  &:active {
+    cursor: grabbing;
+  }
 }
 
 .mask {
@@ -150,14 +214,6 @@
 
 .diff {
   color: var(--color-danger-fg);
-}
-
-.previewImage {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-  max-height: 320px;
-  overflow-y: auto;
 }
 
 @media (max-width: 640px) {

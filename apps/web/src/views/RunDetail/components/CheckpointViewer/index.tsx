@@ -27,11 +27,14 @@ export function CheckpointViewer({
   checkpoint: cp,
   runId,
   target,
+  gallery,
 }: {
   checkpoint: CheckpointView;
   runId: string;
   /** The recorded element fingerprint this checkpoint's screenshot was located by. */
   target?: FingerprintSummary | null;
+  /** Run-wide ordered images, so the lightbox can step across every checkpoint. */
+  gallery?: { src: string; label: string }[];
 }) {
   const [mode, setMode] = useState<DiffMode>("side-by-side");
   const [swipe, setSwipe] = useState(50);
@@ -68,7 +71,7 @@ export function CheckpointViewer({
         )}
       </header>
 
-      <DiffStage checkpoint={cp} mode={mode} swipe={swipe} onion={onion} />
+      <DiffStage checkpoint={cp} mode={mode} swipe={swipe} onion={onion} gallery={gallery} />
 
       {mode === "swipe" && hasBaseline && (
         <div className={styles.sliderRow}>
