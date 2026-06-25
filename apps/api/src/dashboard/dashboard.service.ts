@@ -295,7 +295,7 @@ export class DashboardService {
   }
 
   /** Verification pass rate (`passed` ÷ verifications) over [from, to), where a verification is a
-   *  run whose outcome is `passed` or `failed`. Baseline-establishment and first-run
+   *  run whose outcome is `passed`, `failed`, or `regression`. Baseline-establishment and first-run
    *  ("pending baseline") runs are excluded — they don't verify anything. 0 when no verification
    *  finished in the window. */
   private rate(
@@ -304,7 +304,12 @@ export class DashboardService {
     to: Date,
   ): number {
     const verifications = rows.filter(
-      (r) => r.createdAt >= from && r.createdAt < to && (r.outcome === "passed" || r.outcome === "failed"),
+      (r) =>
+        r.createdAt >= from &&
+        r.createdAt < to &&
+        // A regression is a verification that failed (the capture differed) — count it as a
+        // non-passing verification, same as the pre-split `failed` did.
+        (r.outcome === "passed" || r.outcome === "failed" || r.outcome === "regression"),
     );
     if (verifications.length === 0) return 0;
     const passed = verifications.filter((r) => r.outcome === "passed").length;

@@ -27,14 +27,14 @@ describe("deriveRunOutcome", () => {
     { row: "1 — all passed, none resolved", checkpoints: [cp("passed"), cp("passed")], run: { status: "passed" }, expected: "passed" },
     { row: "2 — all pending-baseline, unresolved (first run, no baseline yet)", checkpoints: [cp("pending-baseline"), cp("pending-baseline")], run: { status: "needs_review" }, expected: "pending-baseline" },
     { row: "3 — all pending-baseline, set as baseline", checkpoints: [cp("pending-baseline", "approved"), cp("pending-baseline", "approved")], run: { status: "passed" }, expected: "baseline" },
-    { row: "4 — diff, not accepted (red)", checkpoints: [cp("diff")], run: { status: "needs_review" }, expected: "failed" },
+    { row: "4 — diff, not accepted (regression)", checkpoints: [cp("diff")], run: { status: "needs_review" }, expected: "regression" },
     { row: "5 — diff set as baseline", checkpoints: [cp("diff", "approved")], run: { status: "passed" }, expected: "baseline" },
-    { row: "6 — diff rejected (legacy confirmed bug)", checkpoints: [cp("diff", "rejected")], run: { status: "failed", error: null }, expected: "failed" },
+    { row: "6 — diff rejected (confirmed regression)", checkpoints: [cp("diff", "rejected")], run: { status: "failed", error: null }, expected: "regression" },
     { row: "7 — passed re-baselined, rest matched", checkpoints: [cp("passed", "approved"), cp("passed")], run: { status: "passed" }, expected: "baseline" },
     { row: "8 — mix: passed (matched) + seed set as baseline", checkpoints: [cp("passed"), cp("pending-baseline", "approved")], run: { status: "passed" }, expected: "baseline" },
-    { row: "9 — pending seed + unaccepted diff (diff outranks)", checkpoints: [cp("pending-baseline"), cp("diff")], run: { status: "needs_review" }, expected: "failed" },
+    { row: "9 — pending seed + unaccepted diff (diff outranks)", checkpoints: [cp("pending-baseline"), cp("diff")], run: { status: "needs_review" }, expected: "regression" },
     { row: "10 — one seed approved, another still unapproved", checkpoints: [cp("pending-baseline", "approved"), cp("pending-baseline")], run: { status: "needs_review" }, expected: "pending-baseline" },
-    { row: "11 — diff rejected + a diff still unaccepted", checkpoints: [cp("diff", "rejected"), cp("diff")], run: { status: "needs_review" }, expected: "failed" },
+    { row: "11 — diff rejected + a diff still unaccepted", checkpoints: [cp("diff", "rejected"), cp("diff")], run: { status: "needs_review" }, expected: "regression" },
     { row: "12 — execution error, no checkpoints", checkpoints: [], run: { status: "failed", error: "navigation timeout" }, expected: "failed" },
     { row: "13 — crash after partial checkpoints", checkpoints: [cp("passed"), cp("pending-baseline", "approved")], run: { status: "failed", error: "boom" }, expected: "failed" },
     { row: "14 — re-run after baselining → all match", checkpoints: [cp("passed"), cp("passed")], run: { status: "passed" }, expected: "passed" },
@@ -51,9 +51,9 @@ describe("deriveRunOutcome", () => {
     expect(deriveRunOutcome([cp("passed")], { status: "running" })).toBe("running");
   });
 
-  it("any red checkpoint fails the run even when another was set as baseline", () => {
-    // failing outranks a baseline write
-    expect(deriveRunOutcome([cp("diff", "approved"), cp("diff")], { status: "needs_review" })).toBe("failed");
+  it("any red checkpoint marks the run a regression even when another was set as baseline", () => {
+    // a visual difference outranks a baseline write
+    expect(deriveRunOutcome([cp("diff", "approved"), cp("diff")], { status: "needs_review" })).toBe("regression");
   });
 
   it("baseline wins over a clean pass when nothing is red", () => {

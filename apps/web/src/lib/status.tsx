@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   Badge,
   Check,
   Clock,
@@ -13,7 +14,7 @@ import type { ReactNode } from "react";
 
 /**
  * The Varys status vocabulary → visual mapping. One source of truth for the derived run
- * outcome (`passed | baseline | failed`, test-runner model), the stored run status
+ * outcome (`passed | baseline | pending-baseline | regression | failed`), the stored run status
  * (`queued | running | passed | needs_review | failed`), and the checkpoint review state
  * (`pending-baseline | diff | passed`) — so a status looks identical in the dashboard, the
  * runs table, the review queue and the diff viewer.
@@ -24,6 +25,7 @@ export type StatusKey =
   | "needs_review"
   | "diff"
   | "pending-baseline"
+  | "regression"
   | "failed"
   | "queued"
   | "running"
@@ -41,6 +43,9 @@ const META: Record<StatusKey, StatusMeta> = {
   diff: { tone: "warning", label: "Diff" },
   // Awaiting your approval (amber) — distinct from an established `baseline` (info/blue).
   "pending-baseline": { tone: "warning", label: "Pending baseline" },
+  // Both red. `regression` = a baseline existed and the capture differs (a visual change);
+  // `failed` = the replay couldn't run (element not found / crash).
+  regression: { tone: "danger", label: "Regression" },
   failed: { tone: "danger", label: "Failed" },
   queued: { tone: "neutral", label: "Queued" },
   running: { tone: "neutral", label: "Running" },
@@ -72,6 +77,9 @@ export function StatusIcon({ status, size = "1em" }: { status: string; size?: nu
       return <Eye size={size} />;
     case "pending-baseline":
       return <Layers size={size} />;
+    case "regression":
+      // A visual difference (red) — distinct from a hard execution failure's ✕.
+      return <AlertTriangle size={size} />;
     case "failed":
       return <X size={size} />;
     case "queued":

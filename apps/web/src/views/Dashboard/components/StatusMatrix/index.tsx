@@ -9,6 +9,7 @@ const LEGEND = [
   { label: "Passed", tone: "success" as const },
   { label: "Baseline", tone: "info" as const },
   { label: "Pending", tone: "warning" as const },
+  { label: "Regression", tone: "danger" as const },
   { label: "Failed", tone: "danger" as const },
 ];
 

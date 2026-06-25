@@ -31,7 +31,8 @@ const STATUS_LEGEND: InfoTipBlock[] = [
       [<StatusBadge key="p" status="passed" />, "Baseline matched — a real verification."],
       [<StatusBadge key="b" status="baseline" />, "Set or updated the golden baseline."],
       [<StatusBadge key="pb" status="pending-baseline" />, "First run, no baseline yet — awaiting approval."],
-      [<StatusBadge key="f" status="failed" />, "Capture differs from the baseline, or the replay crashed."],
+      [<StatusBadge key="reg" status="regression" />, "A baseline existed and the new capture differs — a visual change."],
+      [<StatusBadge key="f" status="failed" />, "The test couldn’t run — an element wasn’t found, or the replay crashed."],
     ],
   },
 ];

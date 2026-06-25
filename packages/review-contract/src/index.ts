@@ -388,6 +388,35 @@ export interface AuthoringInstructionsView {
 }
 
 /**
+ * Global image-comparison defaults, edited on the Configurations page and applied to every
+ * checkpoint diff (a single test can still override the per-checkpoint threshold). The two knobs
+ * run in sequence: `perPixel` decides which pixels count as changed; `ratio` decides how many of
+ * those changed pixels are tolerated before the checkpoint is flagged. Both are fractions in
+ * [0, 1]. Persisted in `app_settings`; a missing value falls back to the defaults below.
+ * Produced/consumed by `GET`/`PUT /settings/image-comparison`.
+ */
+export interface ImageComparisonSettings {
+  /** How different a single pixel's colour must be to count as changed, as a fraction of the
+   *  maximum colour distance (0 = exact match required, 1 = ignore colour entirely). */
+  perPixel: number;
+  /** The share of changed pixels a checkpoint may contain before it's flagged (0 = any change
+   *  fails). The rest of Varys calls this simply "the threshold". */
+  ratio: number;
+}
+
+/** Default per-pixel colour sensitivity — the long-standing hardcoded `pixelmatch` value. */
+export const DEFAULT_PER_PIXEL_THRESHOLD = 0.1;
+/** Default allowed-change ratio — 1% of pixels may differ before a checkpoint is flagged. */
+export const DEFAULT_RATIO_THRESHOLD = 0.01;
+
+/** The effective defaults when nothing is stored — the shape `GET /settings/image-comparison`
+ *  returns on a fresh install. */
+export const DEFAULT_IMAGE_COMPARISON_SETTINGS: ImageComparisonSettings = {
+  perPixel: DEFAULT_PER_PIXEL_THRESHOLD,
+  ratio: DEFAULT_RATIO_THRESHOLD,
+};
+
+/**
  * One active Authoring Session, as listed for the live-preview picker
  * (`GET /authoring/sessions`, Slice 15 — Author with AI). An Authoring Session is the live
  * server-side browser Claude drives; this is just enough to identify and choose one to watch.
@@ -811,7 +840,8 @@ export type RunOutcome =
   | "passed" // had a baseline and the capture matched — a real verification pass
   | "baseline" // this run set or updated the golden baseline (first approval or "set as baseline")
   | "pending-baseline" // first run — no baseline yet, awaiting approval (NOT a failure)
-  | "failed"; // a baseline existed but the capture differs, or the replay crashed
+  | "regression" // a baseline existed but the capture differs — a visual difference (incl. a rejected diff)
+  | "failed"; // the replay crashed or an element couldn't be located — an execution failure
 
 /** The minimal per-checkpoint shape {@link deriveRunOutcome} reads — `CheckpointView` satisfies it. */
 export interface RunOutcomeCheckpoint {
@@ -856,11 +886,12 @@ export function deriveRunOutcome(
     else if (c.reviewState === "passed") matched = true;
   }
 
-  if (failing) return "failed"; // a real failure outranks everything
+  if (failing) return "regression"; // a visual difference (changed baseline or rejected diff) outranks the rest
   if (pendingSeed) return "pending-baseline"; // first run awaiting approval (not a failure)
   if (baselineWrite) return "baseline"; // a golden was set/updated, nothing failing
   if (matched) return "passed";
-  // No checkpoints (or all neutral) — mirror the stored status.
+  // No checkpoints (or all neutral) — mirror the stored status. A non-passing run here is
+  // an execution failure (it captured nothing to compare), so `failed`, not `regression`.
   return run.status === "passed" ? "passed" : "failed";
 }
 
@@ -897,9 +928,17 @@ export interface DashboardSummary {
 /**
  * A test × environment matrix cell's derived status. `none` = the pairing has never run.
  * Otherwise the latest run for that pairing, mapped via {@link deriveRunOutcome}
- * (`passed` / `baseline` / `pending-baseline` / `failed`); `queued`/`running` collapse to `running`.
+ * (`passed` / `baseline` / `pending-baseline` / `regression` / `failed`); `queued`/`running`
+ * collapse to `running`.
  */
-export type MatrixCellStatus = "passed" | "baseline" | "pending-baseline" | "failed" | "running" | "none";
+export type MatrixCellStatus =
+  | "passed"
+  | "baseline"
+  | "pending-baseline"
+  | "regression"
+  | "failed"
+  | "running"
+  | "none";
 
 /** One cell of the dashboard matrix: the latest run's status for a (test, env). */
 export interface MatrixCell {
