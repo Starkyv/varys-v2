@@ -4,8 +4,10 @@ import type {
   EnvironmentView,
   FingerprintPatch,
   LocatorVerifyResult,
+  NewStepInput,
   TestConfigPatch,
   TestConfigStep,
+  TestConfigStepInsert,
   TestConfigStepPatch,
   TestConfigView,
   TestSchedule,
@@ -28,14 +30,16 @@ import {
   MousePointer,
   Pencil,
   Play,
+  Plus,
   Select,
   SegmentedControl,
+  type SegmentedOption,
   Skeleton,
   Sliders,
   Switch,
   Trash,
 } from "@varys/ui";
-import { useState } from "react";
+import { type KeyboardEvent as ReactKeyboardEvent, useRef, useState } from "react";
 import { NotesCard } from "../../components/NotesCard";
 import { useRouter } from "../../context/router";
 import { useRunDialog } from "../../context/run-dialog";
@@ -112,6 +116,36 @@ const STEP_ICON: Record<TestConfigStep["type"], typeof Eye> = {
   type: Pencil,
   screenshot: Eye,
 };
+
+/** A manually-added step held in the editor until Save, anchored to an existing step. */
+type StagedInsert = {
+  tempId: string;
+  atIndex: number;
+  position: "above" | "below";
+  step: NewStepInput;
+};
+
+/** Icon per manually-addable step type (kept consistent between the picker and the staged row). */
+const NEW_STEP_ICON: Record<NewStepInput["type"], typeof Eye> = {
+  navigate: ExternalLink,
+  screenshot: Eye,
+  click: MousePointer,
+  type: Pencil,
+};
+
+/** Human label for a staged insert row (mirrors the run timeline's vocabulary). */
+function newStepLabel(step: NewStepInput): string {
+  switch (step.type) {
+    case "navigate":
+      return `Navigate to ${step.url}`;
+    case "screenshot":
+      return `Checkpoint “${step.name}” · full page`;
+    case "click":
+      return `Click ${step.selector}`;
+    default:
+      return step.value ? `Type “${step.value}” into ${step.selector}` : `Type into ${step.selector}`;
+  }
+}
 
 /** The four scheduling cadences the editor offers; "custom" exposes the raw cron. */
 type Freq = "hourly" | "daily" | "weekly" | "custom";
@@ -296,6 +330,76 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
     });
   }
 
+  // Manually added steps, staged until Save (Navigate or full-page Checkpoint). Each is anchored
+  // to an existing step's original index + side; the entry navigation (index 0) takes no "above".
+  const [inserts, setInserts] = useState<StagedInsert[]>([]);
+  // Which gap's add-form is open, and the in-progress field values for it.
+  const [draft, setDraft] = useState<{ atIndex: number; position: "above" | "below" } | null>(null);
+  const [draftType, setDraftType] = useState<NewStepInput["type"]>("screenshot");
+  const [draftUrl, setDraftUrl] = useState("");
+  const [draftName, setDraftName] = useState("");
+  const [draftSelector, setDraftSelector] = useState("");
+  const [draftValue, setDraftValue] = useState("");
+  const insertId = useRef(0);
+
+  function openInsert(atIndex: number, position: "above" | "below") {
+    setDraft({ atIndex, position });
+    setDraftType("screenshot");
+    setDraftUrl("");
+    setDraftName("");
+    setDraftSelector("");
+    setDraftValue("");
+  }
+  function cancelInsert() {
+    setDraft(null);
+  }
+  function removeInsert(tempId: string) {
+    setInserts((prev) => prev.filter((x) => x.tempId !== tempId));
+  }
+
+  // Checkpoint names must be unique (they're the baseline key) — gather the names already in use
+  // (recorded + staged) so the add-form can reject a duplicate before it's saved.
+  const existingNames = new Set(
+    config.steps.filter((s) => s.type === "screenshot" && s.checkpointName).map((s) => s.checkpointName as string),
+  );
+  const stagedNames = inserts
+    .filter((x) => x.step.type === "screenshot")
+    .map((x) => (x.step as Extract<NewStepInput, { type: "screenshot" }>).name);
+  const allNames = new Set<string>([...existingNames, ...stagedNames]);
+
+  const draftNameTrim = draftName.trim();
+  const draftUrlTrim = draftUrl.trim();
+  const draftSelectorTrim = draftSelector.trim();
+  const draftNameError =
+    draftType !== "screenshot"
+      ? null
+      : draftNameTrim === ""
+        ? "Enter a checkpoint name."
+        : allNames.has(draftNameTrim)
+          ? "That checkpoint name is already used."
+          : null;
+  const draftValid =
+    draftType === "screenshot"
+      ? draftNameError === null
+      : draftType === "navigate"
+        ? draftUrlTrim !== ""
+        : draftSelectorTrim !== ""; // click / type — selector required (value may be empty)
+
+  function addInsert() {
+    if (!draft || !draftValid) return;
+    let step: NewStepInput;
+    if (draftType === "navigate") step = { type: "navigate", url: draftUrlTrim };
+    else if (draftType === "screenshot") step = { type: "screenshot", name: draftNameTrim };
+    else if (draftType === "click") step = { type: "click", selector: draftSelectorTrim };
+    else step = { type: "type", selector: draftSelectorTrim, value: draftValue };
+    insertId.current += 1;
+    setInserts((prev) => [
+      ...prev,
+      { tempId: `i${insertId.current}`, atIndex: draft.atIndex, position: draft.position, step },
+    ]);
+    setDraft(null);
+  }
+
   function setStepWait(i: number, next: EditableWait[]) {
     setStepWaits((prev) => prev.map((w, idx) => (idx === i ? next : w)));
   }
@@ -348,10 +452,15 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
       steps.push(p);
     });
 
-    if (!defaultsChanged && steps.length === 0) return null;
+    if (!defaultsChanged && steps.length === 0 && inserts.length === 0) return null;
     const patch: TestConfigPatch = { baseVersion: config.version };
     if (defaultsChanged) patch.defaults = defaultWaits;
     if (steps.length > 0) patch.steps = steps;
+    if (inserts.length > 0) {
+      patch.inserts = inserts.map(
+        ({ atIndex, position, step }): TestConfigStepInsert => ({ atIndex, position, step }),
+      );
+    }
     return patch;
   }
 
@@ -367,6 +476,139 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
       onError: (e) => toast(e instanceof Error ? e.message : "Save failed"),
     });
   }
+
+  // --- manual "add step" render helpers (staged inserts; see openInsert/addInsert above) ---
+  const insertsAbove = (index: number) =>
+    inserts.filter((x) => x.atIndex === index && x.position === "above");
+  const insertsBelow = (index: number) =>
+    inserts.filter((x) => x.atIndex === index && x.position === "below");
+
+  const renderPending = (list: StagedInsert[]) =>
+    list.map((ins) => {
+      const Icon = NEW_STEP_ICON[ins.step.type];
+      return (
+        <div key={ins.tempId} className={styles.pendingStep}>
+          <span className={styles.stepIcon}>
+            <Icon size={14} />
+          </span>
+          <span className={styles.pendingLabel}>{newStepLabel(ins.step)}</span>
+          <Badge tone="success" size="sm">
+            Added
+          </Badge>
+          <span className={styles.stepHeadSpacer} />
+          <IconButton
+            variant="ghost"
+            size="sm"
+            icon={<Trash size={14} />}
+            label="Remove added step"
+            onClick={() => removeInsert(ins.tempId)}
+          />
+        </div>
+      );
+    });
+
+  const stepTypeOptions: SegmentedOption<NewStepInput["type"]>[] = [
+    { value: "screenshot", label: "Checkpoint", icon: <Eye size={14} /> },
+    { value: "navigate", label: "Navigate", icon: <ExternalLink size={14} /> },
+    { value: "click", label: "Click", icon: <MousePointer size={14} /> },
+    { value: "type", label: "Type", icon: <Pencil size={14} /> },
+  ];
+
+  const renderZone = (atIndex: number, position: "above" | "below") => {
+    const open = draft?.atIndex === atIndex && draft.position === position;
+    if (!open) {
+      return (
+        <div className={styles.insertZone}>
+          <button
+            type="button"
+            className={styles.insertPlus}
+            onClick={() => openInsert(atIndex, position)}
+            aria-label="Add a step here"
+          >
+            <Plus size={14} />
+            <span className={styles.insertPlusText}>Add step</span>
+          </button>
+        </div>
+      );
+    }
+    const onFieldKey = (e: ReactKeyboardEvent) => {
+      if (e.key === "Enter" && draftValid) addInsert();
+      if (e.key === "Escape") cancelInsert();
+    };
+    return (
+      <div className={styles.insertForm}>
+        <SegmentedControl
+          ariaLabel="New step type"
+          size="sm"
+          options={stepTypeOptions}
+          value={draftType}
+          onValueChange={setDraftType}
+        />
+        {draftType === "screenshot" && (
+          <Input
+            // biome-ignore lint/a11y/noAutofocus: opening the inline form should focus its field.
+            autoFocus
+            inputSize="sm"
+            value={draftName}
+            invalid={draftNameError !== null && draftName.trim() !== ""}
+            placeholder="Checkpoint name (e.g. Dashboard)"
+            aria-label="Checkpoint name"
+            className={styles.insertField}
+            onChange={(e) => setDraftName(e.target.value)}
+            onKeyDown={onFieldKey}
+          />
+        )}
+        {draftType === "navigate" && (
+          <Input
+            // biome-ignore lint/a11y/noAutofocus: opening the inline form should focus its field.
+            autoFocus
+            inputSize="sm"
+            mono
+            value={draftUrl}
+            placeholder="https://…  or  {{baseUrl}}/path"
+            aria-label="Navigation URL"
+            className={styles.insertField}
+            onChange={(e) => setDraftUrl(e.target.value)}
+            onKeyDown={onFieldKey}
+          />
+        )}
+        {(draftType === "click" || draftType === "type") && (
+          <Input
+            // biome-ignore lint/a11y/noAutofocus: opening the inline form should focus its field.
+            autoFocus
+            inputSize="sm"
+            mono
+            value={draftSelector}
+            placeholder="CSS or Playwright selector — e.g. #submit  or  text=Save"
+            aria-label="Element selector"
+            className={styles.insertField}
+            onChange={(e) => setDraftSelector(e.target.value)}
+            onKeyDown={onFieldKey}
+          />
+        )}
+        {draftType === "type" && (
+          <Input
+            inputSize="sm"
+            value={draftValue}
+            placeholder="Text to type (supports {{token}})"
+            aria-label="Text to type"
+            className={styles.insertField}
+            onChange={(e) => setDraftValue(e.target.value)}
+            onKeyDown={onFieldKey}
+          />
+        )}
+        <Button variant="primary" size="sm" disabled={!draftValid} onClick={addInsert}>
+          Add
+        </Button>
+        <Button variant="ghost" size="sm" onClick={cancelInsert}>
+          Cancel
+        </Button>
+        {draftNameError && draftName.trim() !== "" && (
+          <span className={styles.insertError}>{draftNameError}</span>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className={styles.page}>
@@ -502,10 +744,12 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
             const isRemoved = removed.has(s.index);
             const canRemove = s.index !== 0; // the entry navigation is structural
             return (
-              <div
-                key={s.index}
-                className={`${styles.step} ${isLast ? styles.stepLast : ""} ${isRemoved ? styles.stepRemoved : ""}`}
-              >
+              <div key={s.index} className={styles.stepWrap}>
+                {renderPending(insertsAbove(s.index))}
+                {s.index !== 0 && renderZone(s.index, "above")}
+                <div
+                  className={`${styles.step} ${isLast ? styles.stepLast : ""} ${isRemoved ? styles.stepRemoved : ""}`}
+                >
                 <div className={styles.stepRail}>
                   <span className={styles.stepNum}>{i + 1}</span>
                 </div>
@@ -638,6 +882,9 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
                     </>
                   )}
                 </div>
+                </div>
+                {isLast && renderZone(s.index, "below")}
+                {renderPending(insertsBelow(s.index))}
               </div>
             );
           })}
@@ -649,9 +896,13 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
       <div className={styles.saveBar}>
         <span className={styles.saveHint}>
           {patch
-            ? removed.size > 0
-              ? `Saving writes a new version, removing ${removed.size} step${removed.size === 1 ? "" : "s"} — it applies on the next run.`
-              : "Saving writes a new test version — it applies on the next run."
+            ? inserts.length > 0
+              ? `Saving writes a new version, adding ${inserts.length} step${inserts.length === 1 ? "" : "s"}${
+                  removed.size > 0 ? ` and removing ${removed.size}` : ""
+                } — it applies on the next run.`
+              : removed.size > 0
+                ? `Saving writes a new version, removing ${removed.size} step${removed.size === 1 ? "" : "s"} — it applies on the next run.`
+                : "Saving writes a new test version — it applies on the next run."
             : "No changes yet."}
         </span>
         <Button variant="primary" loading={save.isPending} disabled={!canSave} onClick={onSave}>

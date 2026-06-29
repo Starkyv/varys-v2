@@ -295,6 +295,26 @@ export interface TestConfigStepPatch {
   target?: FingerprintPatch;
 }
 
+/** A manually-added step (test-detail "add step").
+ *  - `navigate` (URL) and full-page `screenshot` (checkpoint name) need no recorded element.
+ *  - `click`/`type` are authored by a raw CSS/Playwright `selector`, stored as the locator's
+ *    `selectorOverride`. Unlike a recorded fingerprint there's no multi-signal bundle to fall
+ *    back on, so a stale selector fails the step (no self-heal) — prefer recording for these. */
+export type NewStepInput =
+  | { type: "navigate"; url: string }
+  | { type: "screenshot"; name: string }
+  | { type: "click"; selector: string }
+  | { type: "type"; selector: string; value: string };
+
+/** An insertion in a config patch: place a new step relative to an existing step, addressed by
+ *  its ORIGINAL 0-based index in the opened definition. Inserting `above` the entry navigation
+ *  (index 0) is rejected server-side — replay must start by navigating. */
+export interface TestConfigStepInsert {
+  atIndex: number;
+  position: "above" | "below";
+  step: NewStepInput;
+}
+
 /** The body of `PUT /tests/:id/config`: a targeted patch the server applies onto the
  *  latest definition, writing a new audited test version. */
 export interface TestConfigPatch {
@@ -304,6 +324,9 @@ export interface TestConfigPatch {
   defaults?: EditableWait[];
   /** Per-step edits. Omit to leave all steps as-is. */
   steps?: TestConfigStepPatch[];
+  /** Steps to insert, each anchored to an existing step's original index. Applied after
+   *  removals/edits. Omit when nothing is being added. */
+  inserts?: TestConfigStepInsert[];
 }
 
 /** Result of a config save: the version number of the newly written test_version. */

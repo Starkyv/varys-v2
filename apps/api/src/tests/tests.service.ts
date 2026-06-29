@@ -12,6 +12,7 @@ import type {
   DraftSummary,
   DraftView,
   EditableWait,
+  NewStepInput,
   PromoteDraftBody,
   TestConfigPatch,
   TestConfigStep,
@@ -128,6 +129,30 @@ function screenshotSteps(definition: TestDefinition): Extract<Step, { type: "scr
   return definition.steps.filter(
     (s): s is Extract<Step, { type: "screenshot" }> => s.type === "screenshot",
   );
+}
+
+/** Build a step from a manual `add step` input (test-detail). `navigate`/`screenshot` carry only
+ *  plain data; `click`/`type` are authored by a raw selector, synthesized into a minimal locator
+ *  whose `selectorOverride` the matcher tries first (no recorded fingerprint to fall back on).
+ *  Trims and rejects empties here; the assembled definition is re-validated by the schema before
+ *  it's stored. */
+function buildNewStep(input: NewStepInput): Step {
+  if (input.type === "navigate") {
+    const url = (input.url ?? "").trim();
+    if (!url) throw new BadRequestException("A navigation step needs a URL.");
+    return { type: "navigate", url };
+  }
+  if (input.type === "screenshot") {
+    const name = (input.name ?? "").trim();
+    if (!name) throw new BadRequestException("A checkpoint needs a name.");
+    return { type: "screenshot", name, captureMode: "fullpage" };
+  }
+  // click / type — a hand-authored locator: empty tag (unknown) + the raw selector as override.
+  const selector = (input.selector ?? "").trim();
+  if (!selector) throw new BadRequestException("This step needs a CSS or Playwright selector.");
+  const target = { tag: "", selectorOverride: selector };
+  if (input.type === "click") return { type: "click", target };
+  return { type: "type", target, value: input.value ?? "" };
 }
 
 /** Deterministic storage key for a draft checkpoint's authoring-preview screenshot. */
@@ -720,32 +745,66 @@ export class TestsService {
       throw new BadRequestException("The entry navigation step can't be removed.");
     }
 
-    const nextSteps = def.steps
-      .map((s, index) => {
-        const p = stepPatch.get(index);
-        // Removals are applied in the filter below; navigate has no waits/threshold.
-        if (!p || p.remove || s.type === "navigate") return s;
-        let out = s;
-        if (p.waitBefore !== undefined) {
-          out = { ...out, waitBefore: mergeWaits(out.waitBefore, p.waitBefore) };
+    const editedSteps = def.steps.map((s, index) => {
+      const p = stepPatch.get(index);
+      // Removals are applied in the interleave below; navigate has no waits/threshold.
+      if (!p || p.remove || s.type === "navigate") return s;
+      let out = s;
+      if (p.waitBefore !== undefined) {
+        out = { ...out, waitBefore: mergeWaits(out.waitBefore, p.waitBefore) };
+      }
+      if (p.threshold !== undefined && out.type === "screenshot") {
+        out = { ...out, threshold: p.threshold };
+      }
+      // Locator edit: merge the signal patch onto the step's fingerprint. Only steps
+      // that have an element target (click / type / element-mode screenshot) carry one.
+      if (p.target !== undefined && "target" in out && out.target) {
+        const merged = applyFingerprintPatch(out.target, p.target);
+        if (!hasMatchableSignal(merged)) {
+          throw new BadRequestException(
+            "This locator has no signal left to match on — keep at least a role, accessible name, visible text, or test id.",
+          );
         }
-        if (p.threshold !== undefined && out.type === "screenshot") {
-          out = { ...out, threshold: p.threshold };
-        }
-        // Locator edit: merge the signal patch onto the step's fingerprint. Only steps
-        // that have an element target (click / type / element-mode screenshot) carry one.
-        if (p.target !== undefined && "target" in out && out.target) {
-          const merged = applyFingerprintPatch(out.target, p.target);
-          if (!hasMatchableSignal(merged)) {
-            throw new BadRequestException(
-              "This locator has no signal left to match on — keep at least a role, accessible name, visible text, or test id.",
-            );
-          }
-          out = { ...out, target: merged };
-        }
-        return out;
-      })
-      .filter((_s, index) => !removed.has(index));
+        out = { ...out, target: merged };
+      }
+      return out;
+    });
+
+    // Manual inserts (test-detail "add step"). Anchored to ORIGINAL indices and built/validated
+    // here; the entry navigation can never have a step inserted above it (replay starts there).
+    const inserts = patch.inserts ?? [];
+    const above = new Map<number, Step[]>();
+    const below = new Map<number, Step[]>();
+    for (const ins of inserts) {
+      if (ins.position === "above" && ins.atIndex === 0) {
+        throw new BadRequestException("A step can't be inserted above the entry navigation.");
+      }
+      const bucket = ins.position === "above" ? above : below;
+      const arr = bucket.get(ins.atIndex) ?? [];
+      arr.push(buildNewStep(ins.step));
+      bucket.set(ins.atIndex, arr);
+    }
+
+    // Walk the original steps, interleaving inserts and dropping removals — so an insert keeps
+    // its place relative to the step it was anchored to even as other steps are removed.
+    const nextSteps: Step[] = [];
+    editedSteps.forEach((s, index) => {
+      for (const ins of above.get(index) ?? []) nextSteps.push(ins);
+      if (!removed.has(index)) nextSteps.push(s);
+      for (const ins of below.get(index) ?? []) nextSteps.push(ins);
+    });
+
+    // Checkpoint names are the baseline key, so they must be unique. Only enforced when steps are
+    // added (a pre-existing definition is left untouched by waits/threshold/locator saves).
+    if (inserts.length > 0) {
+      const names = nextSteps
+        .filter((s): s is Extract<Step, { type: "screenshot" }> => s.type === "screenshot")
+        .map((s) => s.name);
+      const dup = names.find((n, i) => names.indexOf(n) !== i);
+      if (dup) {
+        throw new BadRequestException(`Checkpoint name "${dup}" is already used — names must be unique.`);
+      }
+    }
 
     const nextDefinition = {
       ...def,

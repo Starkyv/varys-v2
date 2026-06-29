@@ -255,6 +255,105 @@
   }
 }
 
+/* --- manual "add step" — hover insert zones, inline form, staged rows --- */
+
+/* Wraps each step plus its insert affordances; the gap matches the inter-step spacing. */
+.stepWrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-10);
+}
+
+/* A zero-height slot living in a gap; the pill floats in it (no layout shift on reveal). */
+.insertZone {
+  position: relative;
+  height: 0;
+}
+
+.insertPlus {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  height: 24px;
+  padding: 0 var(--space-10);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-full);
+  background: var(--color-bg-surface);
+  color: var(--color-text-muted);
+  font-family: var(--font-text);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard),
+    background var(--duration-fast) var(--ease-standard);
+}
+
+/* Reveal on hovering the step group, or when the pill itself is focused (keyboard). */
+.stepWrap:hover .insertPlus,
+.insertPlus:focus-visible {
+  opacity: 1;
+}
+
+.insertPlus:hover {
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
+/* The inline add-step form (replaces the zone while open). */
+.insertForm {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+  padding: var(--space-10) var(--space-12);
+  border: 1px dashed var(--color-primary);
+  border-radius: var(--radius-lg);
+  background: var(--color-primary-soft);
+}
+
+.insertField {
+  flex: 1 1 220px;
+  min-width: 150px;
+}
+
+.insertError {
+  flex-basis: 100%;
+  font-size: var(--font-size-xs);
+  color: var(--color-danger);
+}
+
+/* A staged (not-yet-saved) added step. */
+.pendingStep {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  padding: var(--space-12) var(--space-16);
+  border: 1px dashed var(--color-success);
+  border-radius: var(--radius-lg);
+  background: var(--color-success-soft);
+}
+
+.pendingLabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-strong);
+}
+
 .stepIcon {
   flex: 0 0 auto;
   display: inline-flex;
