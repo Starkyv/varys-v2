@@ -206,6 +206,13 @@ export interface TestConfigStep {
    *  and element-mode screenshot steps; null for navigate and full-page / region
    *  screenshots (which have no element target). Edited via `TestConfigStepPatch.target`. */
   target: FingerprintSummary | null;
+  /** Screenshot-only: the diff-ignore mask regions (screenshot-pixel space). Empty for
+   *  non-screenshot steps. Edited on Test Detail by drawing on `baselineUrl`. */
+  masks: Rect[];
+  /** Screenshot-only: a baseline image to draw masks on (the checkpoint's current golden —
+   *  default environment preferred, else any). Null when no baseline has been approved yet,
+   *  or for non-screenshot steps. */
+  baselineUrl: string | null;
 }
 
 /**
@@ -290,6 +297,8 @@ export interface TestConfigStepPatch {
   waitBefore?: EditableWait[];
   /** Screenshot-only: set the per-checkpoint threshold (0..1). */
   threshold?: number;
+  /** Screenshot-only: replace this checkpoint's diff-ignore mask regions (full list). */
+  masks?: Rect[];
   /** Edit the step's element locator signals (click / type / element-mode screenshot).
    *  Merged onto the existing fingerprint; other signals are preserved. */
   target?: FingerprintPatch;

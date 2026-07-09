@@ -14,6 +14,7 @@ import type {
   EditableWait,
   NewStepInput,
   PromoteDraftBody,
+  Rect,
   TestConfigPatch,
   TestConfigStep,
   TestConfigView,
@@ -642,6 +643,25 @@ export class TestsService {
       .limit(1);
     // Variables the test references — drives the verify control's environment requirement.
     const variables = definitionVariables(def);
+    // A baseline image per checkpoint to draw masks on (default environment preferred, else any).
+    const baselineRows = await this.db
+      .select({
+        name: baselines.checkpointName,
+        environment: baselines.environment,
+        key: baselines.artifactKey,
+      })
+      .from(baselines)
+      .where(eq(baselines.testId, id));
+    const baselineKeyByName = new Map<string, string>();
+    for (const b of baselineRows) {
+      if (!baselineKeyByName.has(b.name) || b.environment === "default") {
+        baselineKeyByName.set(b.name, b.key);
+      }
+    }
+    const baselineUrl = (name: string | null): string | null => {
+      const key = name ? baselineKeyByName.get(name) : undefined;
+      return key ? this.storage.getUrl(key) : null;
+    };
     return {
       id: view.id,
       name: view.name,
@@ -663,6 +683,9 @@ export class TestsService {
         // The editable locator — present for steps with an element target (click, type,
         // element-mode screenshot); null for navigate and full-page / region screenshots.
         target: "target" in s ? summarizeFingerprint(s.target) : null,
+        // Mask regions + a baseline to draw them on (screenshot steps only).
+        masks: s.type === "screenshot" ? ((s.masks ?? []) as Rect[]) : [],
+        baselineUrl: s.type === "screenshot" ? baselineUrl(s.name) : null,
       })),
     };
   }
@@ -755,6 +778,9 @@ export class TestsService {
       }
       if (p.threshold !== undefined && out.type === "screenshot") {
         out = { ...out, threshold: p.threshold };
+      }
+      if (p.masks !== undefined && out.type === "screenshot") {
+        out = { ...out, masks: p.masks };
       }
       // Locator edit: merge the signal patch onto the step's fingerprint. Only steps
       // that have an element target (click / type / element-mode screenshot) carry one.

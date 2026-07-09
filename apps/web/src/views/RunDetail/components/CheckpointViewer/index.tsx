@@ -7,6 +7,7 @@ import {
   OnionSkin,
   SegmentedControl,
   type SegmentedOption,
+  Sliders,
   SwipeView,
 } from "@varys/ui";
 import { useState } from "react";
@@ -39,6 +40,9 @@ export function CheckpointViewer({
   const [mode, setMode] = useState<DiffMode>("side-by-side");
   const [swipe, setSwipe] = useState(50);
   const [onion, setOnion] = useState(50);
+  // A passing checkpoint has no diff, so the mask editor lives behind a toggle (kept available so
+  // masks stay editable after they've resolved the diff). A failing one shows it expanded inline.
+  const [showMaskEditor, setShowMaskEditor] = useState(false);
 
   const isPending = cp.reviewState === "pending-baseline";
   const hasBaseline = !isPending && cp.baselineUrl != null;
@@ -103,7 +107,29 @@ export function CheckpointViewer({
           )}
         </div>
 
-        {hasBaseline && cp.diffUrl && <MaskTuning checkpoint={cp} runId={runId} />}
+        {hasBaseline &&
+          (cp.diffUrl ? (
+            // Failing / over threshold — the editor is part of the review, shown inline.
+            <MaskTuning checkpoint={cp} runId={runId} />
+          ) : (
+            // Passing — masks stay editable, but behind a toggle so the clean view stays clean.
+            <div className={styles.maskEdit}>
+              <button
+                type="button"
+                className={styles.maskEditToggle}
+                aria-expanded={showMaskEditor}
+                onClick={() => setShowMaskEditor((v) => !v)}
+              >
+                <Sliders size={14} />
+                {showMaskEditor
+                  ? "Hide mask editor"
+                  : cp.masks.length > 0
+                    ? `Edit masks · ${cp.masks.length} set`
+                    : "Add masks"}
+              </button>
+              {showMaskEditor && <MaskTuning checkpoint={cp} runId={runId} />}
+            </div>
+          ))}
 
         <DecisionBar checkpoint={cp} runId={runId} />
 

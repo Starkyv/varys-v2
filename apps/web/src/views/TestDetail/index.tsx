@@ -5,6 +5,7 @@ import type {
   FingerprintPatch,
   LocatorVerifyResult,
   NewStepInput,
+  Rect,
   TestConfigPatch,
   TestConfigStep,
   TestConfigStepInsert,
@@ -18,6 +19,7 @@ import {
   ArrowLeft,
   Badge,
   Button,
+  Camera,
   Card,
   Check,
   Clock,
@@ -25,6 +27,7 @@ import {
   ExternalLink,
   Eye,
   IconButton,
+  ImageOff,
   Input,
   Lock,
   MousePointer,
@@ -41,6 +44,7 @@ import {
 } from "@varys/ui";
 import { type KeyboardEvent as ReactKeyboardEvent, useRef, useState } from "react";
 import { NotesCard } from "../../components/NotesCard";
+import { BaselineMaskCanvas } from "./components/BaselineMaskCanvas";
 import { useRouter } from "../../context/router";
 import { useRunDialog } from "../../context/run-dialog";
 import { useToast } from "../../context/toast";
@@ -248,6 +252,16 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
     return m;
   });
 
+  // Per-checkpoint mask regions, seeded from the read-model; edited by drawing on the baseline.
+  const initialMasksByIndex: Record<number, Rect[]> = {};
+  for (const s of config.steps) {
+    if (s.type === "screenshot") initialMasksByIndex[s.index] = s.masks;
+  }
+  const [masksByIndex, setMasksByIndex] = useState<Record<number, Rect[]>>(initialMasksByIndex);
+  function setStepMasks(index: number, next: Rect[]) {
+    setMasksByIndex((prev) => ({ ...prev, [index]: next }));
+  }
+
   // Per-step editable locator signals, seeded from the read-model. Only steps with an
   // element target (click / type / element-mode screenshot) get an entry.
   const initialTargets: Record<number, LocatorDraft> = {};
@@ -431,6 +445,9 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
       const cur = (thresholds[s.index] ?? "").trim();
       const thresholdChanged =
         s.type === "screenshot" && cur !== "" && cur !== initialThreshold(s) && !thresholdInvalid(s);
+      const masksChanged =
+        s.type === "screenshot" &&
+        JSON.stringify(masksByIndex[s.index] ?? []) !== JSON.stringify(initialMasksByIndex[s.index] ?? []);
 
       // Locator: send only the signals that actually changed ("" = clear that signal).
       let targetPatch: FingerprintPatch | undefined;
@@ -444,10 +461,11 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
         if (Object.keys(fp).length > 0) targetPatch = fp;
       }
 
-      if (!waitsChanged && !thresholdChanged && !targetPatch) return;
+      if (!waitsChanged && !thresholdChanged && !masksChanged && !targetPatch) return;
       const p: TestConfigStepPatch = { index: s.index };
       if (waitsChanged) p.waitBefore = stepWaits[i];
       if (thresholdChanged) p.threshold = Number(cur);
+      if (masksChanged) p.masks = masksByIndex[s.index] ?? [];
       if (targetPatch) p.target = targetPatch;
       steps.push(p);
     });
@@ -743,6 +761,7 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
             const isLast = i === config.steps.length - 1;
             const isRemoved = removed.has(s.index);
             const canRemove = s.index !== 0; // the entry navigation is structural
+            const maskCount = s.type === "screenshot" ? (masksByIndex[s.index]?.length ?? 0) : 0;
             return (
               <div key={s.index} className={styles.stepWrap}>
                 {renderPending(insertsAbove(s.index))}
@@ -877,6 +896,50 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
                               ? "Enter a value between 0 and 1"
                               : "max mismatched-pixel ratio · blank = default 0.01"}
                           </span>
+                        </div>
+                      )}
+
+                      {s.type === "screenshot" && (
+                        <div className={styles.baselineBlock}>
+                          <div className={styles.baselineHead}>
+                            <Camera size={13} />
+                            <span className={styles.baselineTitle}>Baseline &amp; masks</span>
+                            {maskCount > 0 && (
+                              <span className={styles.baselineCount}>
+                                {maskCount} mask{maskCount === 1 ? "" : "s"}
+                              </span>
+                            )}
+                          </div>
+                          {s.baselineUrl ? (
+                            <>
+                              <p className={styles.baselineHelp}>
+                                The current golden image for this checkpoint. Drag on it to mask a
+                                volatile region — masked areas are ignored when comparing. Masks apply
+                                on the next run.
+                              </p>
+                              <BaselineMaskCanvas
+                                src={s.baselineUrl}
+                                masks={masksByIndex[s.index] ?? []}
+                                onChange={(next) => setStepMasks(s.index, next)}
+                              />
+                            </>
+                          ) : (
+                            <div className={styles.maskEmpty}>
+                              <span className={styles.maskEmptyIcon}>
+                                <ImageOff size={20} />
+                              </span>
+                              <div className={styles.maskEmptyText}>
+                                <strong>No baseline yet.</strong> Run this test and approve a baseline
+                                for “{s.checkpointName}” — it’ll appear here, and you can draw mask
+                                regions directly on it.
+                              </div>
+                              {maskCount > 0 && (
+                                <Button variant="secondary" size="sm" onClick={() => setStepMasks(s.index, [])}>
+                                  Clear {maskCount} mask{maskCount === 1 ? "" : "s"}
+                                </Button>
+                              )}
+                            </div>
+                          )}
                         </div>
                       )}
                     </>

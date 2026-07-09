@@ -1035,3 +1035,80 @@
   font-size: var(--font-size-sm);
   color: var(--color-text-muted);
 }
+
+/* --- per-checkpoint baseline + mask editor (Test Detail) --- */
+.baselineBlock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  padding: var(--space-12);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-subtle);
+}
+
+.baselineHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  color: var(--color-text-subtle);
+}
+
+.baselineTitle {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text);
+}
+
+.baselineCount {
+  margin-left: auto;
+  padding: 2px var(--space-8);
+  border-radius: var(--radius-full);
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  font-variant-numeric: tabular-nums;
+}
+
+.baselineHelp {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-normal);
+  color: var(--color-text-subtle);
+}
+
+.maskEmpty {
+  display: flex;
+  align-items: center;
+  gap: var(--space-10);
+  padding: var(--space-12);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-surface);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+  color: var(--color-text-muted);
+}
+
+.maskEmptyIcon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-inset);
+  color: var(--color-text-subtle);
+}
+
+.maskEmptyText {
+  flex: 1;
+  min-width: 0;
+
+  strong {
+    color: var(--color-text);
+    font-weight: var(--font-weight-semibold);
+  }
+}
