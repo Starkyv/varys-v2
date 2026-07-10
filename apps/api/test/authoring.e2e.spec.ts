@@ -74,11 +74,12 @@ describe("Authoring → MCP → Draft", () => {
       startUrl: fixture.url,
       name: "smoke test",
       intent: "verify the page loads",
+      mode: "interactive",
     });
     expect(opened.sessionId).toEqual(expect.any(String));
     expect(typeof opened.url).toBe("string");
 
-    const finished = await callTool("finish_session", { sessionId: opened.sessionId });
+    const finished = await callTool("finish_session", { sessionId: opened.sessionId, confirm: true });
     expect(finished.testId).toEqual(expect.any(String));
     expect(finished.checkpointCount).toBe(0);
     expect(finished.warning).toMatch(/no checkpoints/i);
@@ -103,6 +104,7 @@ describe("Authoring → MCP → Draft", () => {
       startUrl: fixture.url,
       name: "login flow",
       intent: "log in and reach the welcome state",
+      mode: "interactive",
     });
     const sid: string = opened.sessionId;
     const nodes: Array<{ ref: string; tag: string; name: string; role: string }> = opened.nodes;
@@ -131,7 +133,7 @@ describe("Authoring → MCP → Draft", () => {
     const cp = await callTool("checkpoint", { sessionId: sid, name: "welcome", mode: "fullpage" });
     expect(cp.recorded).toMatchObject({ type: "screenshot", checkpoint: "welcome" });
 
-    const finished = await callTool("finish_session", { sessionId: sid });
+    const finished = await callTool("finish_session", { sessionId: sid, confirm: true });
     expect(finished.checkpointCount).toBe(1);
     expect(finished.warning).toBeNull();
 

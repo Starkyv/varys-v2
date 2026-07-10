@@ -610,6 +610,24 @@ export interface EnvCookie {
 }
 
 /**
+ * A localStorage entry seeded into the browser BEFORE a run, so a test that needs an
+ * existing token/flag stored in `window.localStorage` (e.g. an auth JWT or a "seen the
+ * onboarding" flag) starts with it already present. `value` supports the same `{{var}}` /
+ * `{{secret:NAME}}` tokens cookies and steps do — keep a real token in a write-only secret
+ * and reference it here rather than pasting it in plain.
+ */
+export interface EnvLocalStorageItem {
+  /** localStorage key. */
+  key: string;
+  /** localStorage value; may contain `{{var}}` / `{{secret:NAME}}` tokens (resolved at run). */
+  value: string;
+  /** Origin (e.g. `https://app.example.com`) this entry is scoped to. localStorage is
+   *  per-origin, so the entry is only written when the page is on this origin. Defaults to
+   *  the run's `baseUrl` origin when omitted. */
+  origin?: string;
+}
+
+/**
  * An environment as the API returns it (list + get). Secret VALUES are never
  * returned — only their names — so a leaked screen or response can't expose them.
  * The same shape the env management UI renders and the Run picker lists.
@@ -625,6 +643,10 @@ export interface EnvironmentView {
    *  Definitions are returned plain; put sensitive values in a secret and reference it
    *  via `{{secret:NAME}}` in the cookie value. */
   cookies: EnvCookie[];
+  /** localStorage entries seeded into the browser before each run against this environment.
+   *  Definitions are returned plain; put sensitive values in a secret and reference it
+   *  via `{{secret:NAME}}` in the entry value. */
+  localStorage: EnvLocalStorageItem[];
 }
 
 /** One checkpoint within a run, as the reviewer sees it. */

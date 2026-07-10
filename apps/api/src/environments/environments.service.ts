@@ -1,6 +1,6 @@
 import { Inject, Injectable, NotFoundException } from "@nestjs/common";
 import { environments } from "@varys/db";
-import type { EnvCookie } from "@varys/review-contract";
+import type { EnvCookie, EnvLocalStorageItem } from "@varys/review-contract";
 import { asc, eq } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
 
@@ -9,13 +9,14 @@ export interface CreateEnvironmentInput {
   values?: Record<string, string>;
   secrets?: Record<string, string>;
   cookies?: EnvCookie[];
+  localStorage?: EnvLocalStorageItem[];
 }
 
 /**
- * Update body. `values` and `cookies` (when present) REPLACE the whole list (full-map
- * replace is fine for MVP — PRD §B). Secrets are a delta, never echoed: `secrets`
- * sets/overwrites named secrets, `removeSecrets` clears named ones. Omitted fields are
- * left untouched.
+ * Update body. `values`, `cookies`, and `localStorage` (when present) REPLACE the whole
+ * list (full-map replace is fine for MVP — PRD §B). Secrets are a delta, never echoed:
+ * `secrets` sets/overwrites named secrets, `removeSecrets` clears named ones. Omitted
+ * fields are left untouched.
  */
 export interface UpdateEnvironmentInput {
   name?: string;
@@ -23,6 +24,7 @@ export interface UpdateEnvironmentInput {
   secrets?: Record<string, string>;
   removeSecrets?: string[];
   cookies?: EnvCookie[];
+  localStorage?: EnvLocalStorageItem[];
 }
 
 export interface EnvironmentView {
@@ -32,6 +34,7 @@ export interface EnvironmentView {
   /** Secret NAMES only — values are never returned. */
   secretNames: string[];
   cookies: EnvCookie[];
+  localStorage: EnvLocalStorageItem[];
 }
 
 @Injectable()
@@ -46,6 +49,7 @@ export class EnvironmentsService {
         values: input.values ?? {},
         secrets: input.secrets ?? {},
         cookies: input.cookies ?? [],
+        localStorage: input.localStorage ?? [],
       })
       .returning({ id: environments.id });
     return { id: env.id };
@@ -58,6 +62,7 @@ export class EnvironmentsService {
         values: environments.values,
         secrets: environments.secrets,
         cookies: environments.cookies,
+        localStorage: environments.localStorage,
       })
       .from(environments)
       .where(eq(environments.id, id))
@@ -70,6 +75,7 @@ export class EnvironmentsService {
       values: (row.values ?? {}) as Record<string, string>,
       secretNames: Object.keys((row.secrets ?? {}) as Record<string, string>),
       cookies: (row.cookies ?? []) as EnvCookie[],
+      localStorage: (row.localStorage ?? []) as EnvLocalStorageItem[],
     };
   }
 
@@ -82,6 +88,7 @@ export class EnvironmentsService {
         values: environments.values,
         secrets: environments.secrets,
         cookies: environments.cookies,
+        localStorage: environments.localStorage,
       })
       .from(environments)
       .orderBy(asc(environments.createdAt));
@@ -92,6 +99,7 @@ export class EnvironmentsService {
       values: (row.values ?? {}) as Record<string, string>,
       secretNames: Object.keys((row.secrets ?? {}) as Record<string, string>),
       cookies: (row.cookies ?? []) as EnvCookie[],
+      localStorage: (row.localStorage ?? []) as EnvLocalStorageItem[],
     }));
   }
 
@@ -112,6 +120,7 @@ export class EnvironmentsService {
     if (input.name !== undefined) patch.name = input.name;
     if (input.values !== undefined) patch.values = input.values; // full-map replace
     if (input.cookies !== undefined) patch.cookies = input.cookies; // full-list replace
+    if (input.localStorage !== undefined) patch.localStorage = input.localStorage; // full-list replace
 
     // Secret delta: only rewrite the secrets jsonb when the caller sent one.
     if (input.secrets !== undefined || input.removeSecrets !== undefined) {

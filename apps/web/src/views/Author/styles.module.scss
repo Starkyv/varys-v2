@@ -549,6 +549,29 @@
   color: var(--color-primary);
 }
 
+.modeShortcut {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+
+.modeShortcutLabel {
+  flex: 0 0 auto;
+  text-transform: uppercase;
+  letter-spacing: var(--letter-spacing-wide);
+  font-weight: var(--font-weight-semibold);
+}
+
+.modeShortcutCode {
+  font-family: var(--font-mono);
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+}
+
 /* --- checkpoints note --- */
 .connectNote {
   position: relative;

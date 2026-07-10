@@ -86,6 +86,10 @@ async function globalImageDefaults(db: Db): Promise<{ ratio: number; perPixel: n
  *  `EnvCookie` in @varys/review-contract; inlined to avoid a runner→contract dep. */
 export type EnvCookie = { name: string; value: string; domain?: string; path?: string };
 
+/** A localStorage entry seeded into the browser before a run (env-scoped). Mirrors
+ *  `EnvLocalStorageItem` in @varys/review-contract; inlined to avoid a runner→contract dep. */
+export type EnvLocalStorageItem = { key: string; value: string; origin?: string };
+
 function viewportKey(vp: TestDefinition["viewport"]): string {
   return `${vp.width}x${vp.height}@${vp.deviceScaleFactor}`;
 }
@@ -172,6 +176,54 @@ export async function seedCookies(
     return cookie;
   });
   await context.addCookies(toSet);
+}
+
+/** Derive an origin (scheme://host[:port]) from a URL-ish string, or null when it can't be parsed. */
+function toOrigin(url: string | undefined): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Seed an environment's localStorage entries into the browser BEFORE any navigation, so a test
+ * that needs an existing token/flag in `window.localStorage` starts with it set. localStorage is
+ * per-origin, so each entry is written only when the page is on its `origin` (explicit, else the
+ * env's baseUrl origin); an entry with no resolvable origin is written on every origin visited.
+ * Values resolve the same {{var}}/{{secret:NAME}} tokens cookies and steps do. Shared by the Run
+ * and the verify probe so both reach the same authenticated state.
+ *
+ * The seed runs via an init script whose SOURCE is a plain string (not a serialized function):
+ * a serialized function would be rewritten by esbuild's keepNames (used by tsx in the worker) to
+ * call a `__name` helper that doesn't exist in the page. The data is embedded as a JSON literal —
+ * safe because it's injected as a script body via CDP, not into HTML.
+ */
+export async function seedLocalStorage(
+  context: BrowserContext,
+  items: EnvLocalStorageItem[],
+  profile: EnvironmentProfile | null,
+): Promise<void> {
+  if (items.length === 0) return;
+  const baseOrigin = toOrigin(profile?.values.baseUrl);
+  const resolved = items.map((it) => ({
+    key: it.key,
+    value: profile ? resolveString(it.value, profile) : it.value,
+    origin: it.origin ? (toOrigin(it.origin) ?? it.origin) : baseOrigin,
+  }));
+  const content = `(function () {
+  try {
+    var seed = ${JSON.stringify(resolved)};
+    for (var i = 0; i < seed.length; i++) {
+      var item = seed[i];
+      if (item.origin && window.location.origin !== item.origin) continue;
+      try { window.localStorage.setItem(item.key, item.value); } catch (e) {}
+    }
+  } catch (e) {}
+})();`;
+  await context.addInitScript({ content });
 }
 
 /** Upsert config so a re-executed run (e.g. a redelivered job) overwrites its prior
@@ -263,6 +315,7 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
     let environment = "default";
     let profile: EnvironmentProfile | null = null;
     let envCookies: EnvCookie[] = [];
+    let envLocalStorage: EnvLocalStorageItem[] = [];
     if (row.environmentId) {
       const [env] = await db
         .select({
@@ -270,6 +323,7 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
           values: environments.values,
           secrets: environments.secrets,
           cookies: environments.cookies,
+          localStorage: environments.localStorage,
         })
         .from(environments)
         .where(eq(environments.id, row.environmentId))
@@ -281,6 +335,7 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
       };
       environment = env.name;
       envCookies = (env.cookies ?? []) as EnvCookie[];
+      envLocalStorage = (env.localStorage ?? []) as EnvLocalStorageItem[];
     }
     const vpKey = viewportKey(recorded.viewport);
 
@@ -300,9 +355,10 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
       tracingStarted = true;
     }
 
-    // Seed the environment's cookies onto the context BEFORE any navigation (keep real auth
-    // tokens in a write-only secret and reference them via {{secret:NAME}}).
+    // Seed the environment's cookies + localStorage onto the context BEFORE any navigation
+    // (keep real auth tokens in a write-only secret and reference them via {{secret:NAME}}).
     await seedCookies(context, envCookies, profile);
+    await seedLocalStorage(context, envLocalStorage, profile);
 
     const page = await context.newPage();
 
@@ -572,6 +628,8 @@ export interface VerifyLocatorParams {
   profile: EnvironmentProfile | null;
   /** Cookies seeded onto the context before the drive (env-scoped). */
   cookies: EnvCookie[];
+  /** localStorage entries seeded into the browser before the drive (env-scoped). */
+  localStorage: EnvLocalStorageItem[];
   /** Cooperative cancel, checked between drive steps so a newer verify supersedes this. */
   shouldAbort?: () => boolean;
   /** Per-operation timeout (navigation/action). Defaults to 15s. */
@@ -597,7 +655,7 @@ export interface VerifyLocatorOutcome {
  * caller can tell "wrong locator" from "broken path to the step".
  */
 export async function verifyLocatorAtStep(params: VerifyLocatorParams): Promise<VerifyLocatorOutcome> {
-  const { definition, stepIndex, candidate, profile, cookies, shouldAbort, timeoutMs = 15_000 } = params;
+  const { definition, stepIndex, candidate, profile, cookies, localStorage, shouldAbort, timeoutMs = 15_000 } = params;
   const aborted = (): boolean => shouldAbort?.() ?? false;
   const miss = (i: number, label: string): VerifyLocatorOutcome => ({
     status: "not-found",
@@ -620,6 +678,7 @@ export async function verifyLocatorAtStep(params: VerifyLocatorParams): Promise<
     context.setDefaultTimeout(timeoutMs);
     context.setDefaultNavigationTimeout(timeoutMs);
     await seedCookies(context, cookies, profile);
+    await seedLocalStorage(context, localStorage, profile);
     const page = await context.newPage();
 
     const defaultWaits = definition.defaults?.waitBefore ?? [];

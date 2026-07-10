@@ -1,4 +1,4 @@
-import type { EnvCookie, EnvironmentView } from "@varys/review-contract";
+import type { EnvCookie, EnvLocalStorageItem, EnvironmentView } from "@varys/review-contract";
 import { Button, Database, Input, Lock, Trash } from "@varys/ui";
 import { useState } from "react";
 import { useConfirm } from "../../../../context/confirm";
@@ -15,6 +15,7 @@ export function EnvEditor({ env, onDeleted }: { env: EnvironmentView; onDeleted:
   const [name, setName] = useState(env.name);
   const [values, setValues] = useState<Record<string, string>>({ ...env.values });
   const [cookies, setCookies] = useState<EnvCookie[]>(env.cookies ?? []);
+  const [localItems, setLocalItems] = useState<EnvLocalStorageItem[]>(env.localStorage ?? []);
   const [newVarKey, setNewVarKey] = useState("");
   const [newVarVal, setNewVarVal] = useState("");
   const [newSecretName, setNewSecretName] = useState("");
@@ -22,12 +23,15 @@ export function EnvEditor({ env, onDeleted }: { env: EnvironmentView; onDeleted:
   const [newCookieName, setNewCookieName] = useState("");
   const [newCookieVal, setNewCookieVal] = useState("");
   const [newCookieDomain, setNewCookieDomain] = useState("");
+  const [newLocalKey, setNewLocalKey] = useState("");
+  const [newLocalVal, setNewLocalVal] = useState("");
+  const [newLocalOrigin, setNewLocalOrigin] = useState("");
 
   const onError = (e: unknown) => toast(e instanceof Error ? e.message : "Update failed");
 
   function save() {
     update.mutate(
-      { id: env.id, body: { name: name.trim() || env.name, values, cookies } },
+      { id: env.id, body: { name: name.trim() || env.name, values, cookies, localStorage: localItems } },
       { onSuccess: () => toast("Environment saved"), onError },
     );
   }
@@ -49,6 +53,25 @@ export function EnvEditor({ env, onDeleted }: { env: EnvironmentView; onDeleted:
 
   function removeCookie(cookieName: string) {
     setCookies((cs) => cs.filter((c) => c.name !== cookieName));
+  }
+
+  function patchLocalItem(itemKey: string, patch: Partial<EnvLocalStorageItem>) {
+    setLocalItems((items) => items.map((it) => (it.key === itemKey ? { ...it, ...patch } : it)));
+  }
+
+  function addLocalItem() {
+    const k = newLocalKey.trim();
+    if (!k) return;
+    const item: EnvLocalStorageItem = { key: k, value: newLocalVal };
+    if (newLocalOrigin.trim()) item.origin = newLocalOrigin.trim();
+    setLocalItems((items) => [...items.filter((it) => it.key !== k), item]);
+    setNewLocalKey("");
+    setNewLocalVal("");
+    setNewLocalOrigin("");
+  }
+
+  function removeLocalItem(itemKey: string) {
+    setLocalItems((items) => items.filter((it) => it.key !== itemKey));
   }
 
   function addVariable() {
@@ -218,7 +241,49 @@ export function EnvEditor({ env, onDeleted }: { env: EnvironmentView; onDeleted:
             Add cookie
           </Button>
         </div>
-        <p className={styles.cookieNote}>Cookies are saved with the environment — click Save to apply.</p>
+
+        <div className={styles.secretsHead}>
+          <span className={styles.sectionTitle}>Local storage</span>
+          <span className={styles.secretsHint}>set before each run · value supports {"{{secret:NAME}}"}</span>
+        </div>
+        <div className={styles.rows}>
+          {localItems.map((it) => (
+            <div key={it.key} className={styles.varRow}>
+              <span className={styles.varKey}>{it.key}</span>
+              <Input
+                className={styles.cookieField}
+                mono
+                inputSize="sm"
+                value={it.value}
+                placeholder="value or {{secret:NAME}}"
+                onChange={(e) => patchLocalItem(it.key, { value: e.target.value })}
+                aria-label={`${it.key} value`}
+              />
+              <Input
+                className={styles.cookieField}
+                mono
+                inputSize="sm"
+                value={it.origin ?? ""}
+                placeholder="origin (defaults to baseUrl)"
+                onChange={(e) => patchLocalItem(it.key, { origin: e.target.value.trim() || undefined })}
+                aria-label={`${it.key} origin`}
+              />
+              <button type="button" className={styles.remove} aria-label={`Remove ${it.key}`} onClick={() => removeLocalItem(it.key)}>
+                <Trash size={14} />
+              </button>
+            </div>
+          ))}
+          {localItems.length === 0 && <div className={styles.none}>No local storage entries yet.</div>}
+        </div>
+        <div className={styles.addRow}>
+          <input className={styles.addKey} placeholder="key" value={newLocalKey} onChange={(e) => setNewLocalKey(e.target.value)} />
+          <input className={styles.addVal} placeholder="value or {{secret:NAME}}" value={newLocalVal} onChange={(e) => setNewLocalVal(e.target.value)} />
+          <input className={styles.addVal} placeholder="origin (optional)" value={newLocalOrigin} onChange={(e) => setNewLocalOrigin(e.target.value)} />
+          <Button variant="secondary" size="sm" onClick={addLocalItem} disabled={!newLocalKey.trim()}>
+            Add entry
+          </Button>
+        </div>
+        <p className={styles.cookieNote}>Cookies &amp; local storage are saved with the environment — click Save to apply.</p>
       </div>
     </div>
   );

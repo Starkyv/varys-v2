@@ -7,6 +7,7 @@ import type {
   DraftSummary,
   DraftView,
   EnvCookie,
+  EnvLocalStorageItem,
   EnvironmentView,
   FolderSummary,
   ImageComparisonSettings,
@@ -496,6 +497,7 @@ export interface CreateEnvironmentBody {
   values?: Record<string, string>;
   secrets?: Record<string, string>;
   cookies?: EnvCookie[];
+  localStorage?: EnvLocalStorageItem[];
 }
 
 /** Create an environment. Returns the new id. Throws on a non-2xx response. */
@@ -520,6 +522,8 @@ export interface UpdateEnvironmentBody {
   removeSecrets?: string[];
   /** Full-list replace of the env's pre-run cookies. */
   cookies?: EnvCookie[];
+  /** Full-list replace of the env's pre-run localStorage entries. */
+  localStorage?: EnvLocalStorageItem[];
 }
 
 /** Update an environment. Returns the redacted view (secret names only). Throws on

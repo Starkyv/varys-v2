@@ -13,6 +13,7 @@ Each environment holds:
   <Card title="Variables" description="Values that differ per place — most importantly the web address of your app." />
   <Card title="Secrets" description="Passwords and tokens. They're stored write-only — once saved, the value is never shown again." />
   <Card title="Cookies" description="Set automatically before each run — handy for skipping login, for example." />
+  <Card title="Local storage" description="Key/value entries set in the browser before each run — another way to skip login when your app keeps its session there." />
 </Cards>
 
 ## Why it matters
@@ -23,6 +24,6 @@ environment also keeps its own approved baselines, since staging and production 
 different.
 
 <Callout type="info">
-  Put any sensitive value (like an auth cookie) in a **secret**, then reference it from a cookie
-  or variable — so it's never stored in plain text.
+  Put any sensitive value (like an auth cookie or token) in a **secret**, then reference it from a
+  cookie, local storage entry, or variable — so it's never stored in plain text.
 </Callout>

@@ -234,6 +234,9 @@ export const environments = pgTable("environments", {
   /** Cookies seeded onto the browser context before each run against this env
    *  (array of { name, value, domain?, path? }). Values may carry `{{secret:NAME}}`. */
   cookies: jsonb("cookies").notNull().default([]),
+  /** localStorage entries seeded into the browser before each run against this env
+   *  (array of { key, value, origin? }). Values may carry `{{secret:NAME}}`. */
+  localStorage: jsonb("local_storage").notNull().default([]),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -447,6 +450,8 @@ CREATE TABLE IF NOT EXISTS environments (
 );
 -- Bring an existing environments table (created before cookies) up to date.
 ALTER TABLE environments ADD COLUMN IF NOT EXISTS cookies jsonb NOT NULL DEFAULT '[]'::jsonb;
+-- Bring an existing environments table (created before localStorage) up to date.
+ALTER TABLE environments ADD COLUMN IF NOT EXISTS local_storage jsonb NOT NULL DEFAULT '[]'::jsonb;
 -- Per-checkpoint authoring preview screenshots (Slice 14 — Claude/MCP authoring).
 CREATE TABLE IF NOT EXISTS draft_previews (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

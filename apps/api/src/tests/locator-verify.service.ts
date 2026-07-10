@@ -10,6 +10,7 @@ import type { LocatorVerifyRequest, LocatorVerifyResult } from "@varys/review-co
 import {
   type EnvCookie,
   type EnvironmentProfile,
+  type EnvLocalStorageItem,
   LocatorVerifyAbortedError,
   verifyLocatorAtStep,
 } from "@varys/runner";
@@ -52,15 +53,18 @@ export class LocatorVerifyService {
     // The candidate is the saved fingerprint with the unsaved edit merged in.
     const candidate = applyFingerprintPatch(baseFp, req.target);
 
-    // Resolve the environment (for {{token}} resolution + cookies); env-less when omitted.
+    // Resolve the environment (for {{token}} resolution + cookies + localStorage); env-less
+    // when omitted.
     let profile: EnvironmentProfile | null = null;
     let cookies: EnvCookie[] = [];
+    let localStorage: EnvLocalStorageItem[] = [];
     if (req.environmentId) {
       const [env] = await this.db
         .select({
           values: environments.values,
           secrets: environments.secrets,
           cookies: environments.cookies,
+          localStorage: environments.localStorage,
         })
         .from(environments)
         .where(eq(environments.id, req.environmentId))
@@ -71,6 +75,7 @@ export class LocatorVerifyService {
         secrets: (env.secrets ?? {}) as Record<string, string>,
       };
       cookies = (env.cookies ?? []) as EnvCookie[];
+      localStorage = (env.localStorage ?? []) as EnvLocalStorageItem[];
     }
 
     // Supersede any in-flight verify for this test, then register ourselves.
@@ -86,6 +91,7 @@ export class LocatorVerifyService {
         candidate,
         profile,
         cookies,
+        localStorage,
         shouldAbort: () => token.aborted,
       });
     } catch (err) {

@@ -110,7 +110,8 @@ export interface OpenSessionInput {
   startUrl: string;
   name?: string;
   intent?: string;
-  /** How Claude will drive this session (default "interactive"). See AuthoringMode. */
+  /** How Claude will drive this session. REQUIRED — no default; open() rejects a missing or
+   *  invalid mode so the choice is always explicit, never inferred. See AuthoringMode. */
   mode?: AuthoringMode;
   viewport?: Partial<Viewport>;
 }
@@ -131,8 +132,8 @@ export interface OpenSessionResult {
  *  discipline (only on an explicit request) holds in BOTH modes — see authoring-instructions. */
 function modeGuidance(mode: AuthoringMode): string {
   return mode === "batch"
-    ? "Batch mode: execute the whole plan to completion without pausing for confirmation between steps. Take a checkpoint ONLY where the plan explicitly asks for one (e.g. 'screenshot', 'capture', 'snapshot', 'checkpoint', 'verify this screen') — never add one on your own. When the plan is done, call finish_session."
-    : "Step-by-step mode: perform ONLY the single action just requested, then stop and report what you did and what the page now shows. Do not run ahead to later steps. Take a checkpoint only when explicitly told to, and call finish_session only when the user says they're done.";
+    ? "Batch mode: execute the whole plan to completion without pausing for confirmation between steps. Take a checkpoint ONLY where the plan explicitly asks for one (e.g. 'screenshot', 'capture', 'snapshot', 'checkpoint', 'verify this screen') — never add one on your own. When every step in the plan is done, call finish_session to save the draft."
+    : "Step-by-step mode: perform ONLY the single action just requested, then stop and report what you did and what the page now shows. Do not run ahead to later steps. Take a checkpoint only when explicitly told to. NEVER end the session on your own: it ends ONLY when the user explicitly tells you to finish or save it (e.g. \"finish the session\", \"we're done\", \"save it\"). When they do, call finish_session with confirm: true — the server refuses finish_session on an interactive session without that confirmation.";
 }
 
 export interface FinishResult {
@@ -247,6 +248,11 @@ export class AuthoringSessionService {
   async open(input: OpenSessionInput): Promise<OpenSessionResult> {
     const startUrl = (input.startUrl ?? "").trim();
     if (!startUrl) throw new BadRequestException("startUrl is required");
+    if (input.mode !== "interactive" && input.mode !== "batch") {
+      throw new BadRequestException(
+        'open_session requires an explicit mode: "interactive" (you carry out one user instruction at a time and end only when the user says so) or "batch" (you run a plan/instructions file end-to-end, then finish). Do not default — if the user did not make the mode clear, ask them which they want before opening the session.',
+      );
+    }
     const viewport: Viewport = { ...DEFAULT_VIEWPORT, ...input.viewport };
 
     const browser = await chromium.launch({ headless: true, args: browserLaunchArgs() });
@@ -268,7 +274,7 @@ export class AuthoringSessionService {
     rec.push(buildEntryNavigate(href, new URL(href).origin));
 
     const sessionId = randomUUID();
-    const mode: AuthoringMode = input.mode === "batch" ? "batch" : "interactive";
+    const mode: AuthoringMode = input.mode;
     this.sessions.set(sessionId, {
       browser,
       context,
@@ -445,8 +451,20 @@ export class AuthoringSessionService {
     return { ok: true, recorded: { type: "screenshot", checkpoint: name }, snapshot: await this.snapshot(s, false) };
   }
 
-  async finish(sessionId: string): Promise<FinishResult> {
+  /**
+   * End the session and persist the draft. Deterministic per-mode discipline: an INTERACTIVE
+   * session may be finished ONLY on the user's explicit instruction — the caller passes
+   * `confirm: true` to attest that, and the server refuses otherwise, so the model can never
+   * wrap up an interactive session on its own. A BATCH session runs its plan to completion and
+   * finishes freely (no confirm needed).
+   */
+  async finish(sessionId: string, opts?: { confirm?: boolean }): Promise<FinishResult> {
     const s = this.require(sessionId);
+    if (s.mode === "interactive" && !opts?.confirm) {
+      throw new BadRequestException(
+        "This is an interactive session — it ends ONLY when the user explicitly tells you to finish or save it. Do not finish on your own. Once the user says so, call finish_session again with confirm: true.",
+      );
+    }
     const definition = s.rec.getDefinition(s.name, s.viewport);
     const checkpointCount = s.rec.checkpointCount();
     const previews = [...s.previews].map(([checkpointName, bytes]) => ({ checkpointName, bytes }));

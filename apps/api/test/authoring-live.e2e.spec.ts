@@ -73,6 +73,7 @@ describe("Authoring → live frames", () => {
       startUrl: fixture.url,
       name: "live preview flow",
       intent: "drive a login and assert frames",
+      mode: "interactive",
     });
     const sid: string = opened.sessionId;
     const nodes: Array<{ ref: string; tag: string; name: string }> = opened.nodes;
@@ -97,7 +98,7 @@ describe("Authoring → live frames", () => {
     await callTool("checkpoint", { sessionId: sid, name: "welcome", mode: "fullpage" });
 
     // finish tears the session down and must NOT add a frame.
-    const finished = await callTool("finish_session", { sessionId: sid });
+    const finished = await callTool("finish_session", { sessionId: sid, confirm: true });
     sub.unsubscribe();
     subD.unsubscribe();
     // Finishing persists a Draft and emits the hand-off event the web uses to link to review.

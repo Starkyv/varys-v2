@@ -194,8 +194,9 @@ function ConnectState() {
           <div className={styles.connectTitle}>No active authoring session</div>
         </div>
         <p className={styles.connectDesc}>
-          Connect your Claude Code to Varys, then describe the flow in plain language. Claude drives
-          a real browser on the server — every step and checkpoint streams in here.
+          Connect your Claude Code to Varys, then describe the flow in plain language — and name the
+          mode you want, since Claude won’t guess it. Claude drives a real browser on the server —
+          every step and checkpoint streams in here.
         </p>
       </div>
 
@@ -248,14 +249,24 @@ function ConnectState() {
             </div>
             <div className={styles.modeDesc}>
               One instruction at a time. Claude does a single action, then stops and reports what
-              changed — you stay in control.
+              changed. The session stays open until you explicitly tell it to finish — it never wraps
+              up on its own.
             </div>
             <div className={styles.modeExample}>
-              <ExampleLine>Open the dashboard, log in as a standard user</ExampleLine>
+              <ExampleLine>
+                Open the dashboard in <strong>interactive</strong> mode, log in as a standard user
+              </ExampleLine>
               <ExampleLine>
                 Click <strong>Reports</strong>
               </ExampleLine>
               <ExampleLine>Screenshot the revenue chart as a checkpoint</ExampleLine>
+              <ExampleLine>
+                When you’re done: <strong>finish the session</strong>
+              </ExampleLine>
+            </div>
+            <div className={styles.modeShortcut}>
+              <span className={styles.modeShortcutLabel}>Shortcut</span>
+              <code className={styles.modeShortcutCode}>{"/varys-interactive <url>"}</code>
             </div>
           </div>
 
@@ -274,14 +285,18 @@ function ConnectState() {
               </div>
             </div>
             <div className={styles.modeDesc}>
-              Hand Claude a whole plan. It executes the file start to finish, captures every
-              checkpoint, and finishes the draft on its own.
+              Point Claude at a plan file. It runs every step start to finish without pausing,
+              captures the checkpoints the plan asks for, and finishes the draft on its own.
             </div>
             <div className={styles.modeExample}>
               <ExampleLine>
                 Author a Varys test from <strong>./plans/reports.md</strong> in <strong>batch</strong>{" "}
                 mode
               </ExampleLine>
+            </div>
+            <div className={styles.modeShortcut}>
+              <span className={styles.modeShortcutLabel}>Shortcut</span>
+              <code className={styles.modeShortcutCode}>{"/varys-batch <plan-file>"}</code>
             </div>
           </div>
         </div>

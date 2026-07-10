@@ -186,10 +186,10 @@ export class McpController {
               type: "string",
               enum: ["interactive", "batch"],
               description:
-                "How you'll drive this session. Rule: use 'batch' ONLY when the user explicitly says 'batch' or points you at a plan/instructions file to run; otherwise use 'interactive' (the default), and when unsure pick 'interactive'. 'interactive': the user gives one instruction at a time — do that one action, then stop and wait. 'batch': run the whole plan/file end-to-end, then finish_session. In BOTH modes, checkpoint only when explicitly asked.",
+                "REQUIRED — how you'll drive this session; there is no default, so you must set it. Rule: use 'batch' ONLY when the user explicitly says 'batch' or points you at a plan/instructions file to run; use 'interactive' when the user is directing you one step at a time. Do NOT guess — if it is genuinely unclear which the user wants, ask them before opening the session. 'interactive': the user gives one instruction at a time — do that one action, then stop and wait; NEVER finish on your own — the session ends only when the user explicitly tells you to, and then you call finish_session with confirm: true. 'batch': run the whole plan/file end-to-end without pausing, then call finish_session. In BOTH modes, checkpoint only when explicitly asked.",
             },
           },
-          required: ["startUrl"],
+          required: ["startUrl", "mode"],
         },
         handler: (args) =>
           a.open({
@@ -371,13 +371,20 @@ export class McpController {
       {
         name: "finish_session",
         description:
-          "Finish the session: assemble the recorded steps into a draft test and end the session. Returns the draft testId and a warning if it has no checkpoints. Finishing with zero checkpoints IS allowed (the draft just carries that warning) — do NOT invent a checkpoint to avoid the warning; only the user/plan decides what to assert. A human reviews and promotes the draft in the Varys web app.",
+          "Finish the session: assemble the recorded steps into a draft test and end the session. Returns the draft testId and a warning if it has no checkpoints. Finishing with zero checkpoints IS allowed (the draft just carries that warning) — do NOT invent a checkpoint to avoid the warning; only the user/plan decides what to assert. INTERACTIVE sessions end ONLY on the user's explicit instruction: do not call this until the user tells you to finish or save, and then pass confirm: true — the server refuses an interactive finish without it. BATCH sessions finish when the plan's steps are done; confirm is not required. A human reviews and promotes the draft in the Varys web app.",
         inputSchema: {
           type: "object",
-          properties: { sessionId: { type: "string" } },
+          properties: {
+            sessionId: { type: "string" },
+            confirm: {
+              type: "boolean",
+              description:
+                "Set true ONLY when the user has explicitly told you to finish/save the session. Required to finish an INTERACTIVE session; ignored in batch.",
+            },
+          },
           required: ["sessionId"],
         },
-        handler: (args) => a.finish(String(args.sessionId ?? "")),
+        handler: (args) => a.finish(String(args.sessionId ?? ""), { confirm: Boolean(args.confirm) }),
       },
     ];
   }
