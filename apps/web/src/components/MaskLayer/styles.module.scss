@@ -1,0 +1,107 @@
+/* The absolute interactive overlay sitting over a (zoomable) image. Sized to the image by the
+ * parent's canvas; masks are positioned by percentage so they track the image at any zoom. */
+.drawLayer {
+  position: absolute;
+  inset: 0;
+  touch-action: none;
+}
+
+/* Cursor over EMPTY space reflects what a drag there will do (draw vs pan). */
+.drawCursor {
+  cursor: crosshair;
+}
+
+.panCursor {
+  cursor: grab;
+
+  &:active {
+    cursor: grabbing;
+  }
+}
+
+/* A committed mask — the body is grab-to-move. */
+.mask {
+  position: absolute;
+  background: rgba(83, 71, 206, 0.22);
+  border: 1.5px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  cursor: move;
+}
+
+/* Resize handles at the 8 compass points. Positioned just outside the border so they're
+ * grabbable even on a thin mask; each carries the matching directional resize cursor. */
+.handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background: var(--color-primary);
+  border: 1.5px solid #fff;
+  border-radius: 2px;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.25);
+}
+
+.handle_nw {
+  left: -6px;
+  top: -6px;
+  cursor: nwse-resize;
+}
+.handle_n {
+  left: calc(50% - 5px);
+  top: -6px;
+  cursor: ns-resize;
+}
+.handle_ne {
+  right: -6px;
+  top: -6px;
+  cursor: nesw-resize;
+}
+.handle_e {
+  right: -6px;
+  top: calc(50% - 5px);
+  cursor: ew-resize;
+}
+.handle_se {
+  right: -6px;
+  bottom: -6px;
+  cursor: nwse-resize;
+}
+.handle_s {
+  left: calc(50% - 5px);
+  bottom: -6px;
+  cursor: ns-resize;
+}
+.handle_sw {
+  left: -6px;
+  bottom: -6px;
+  cursor: nesw-resize;
+}
+.handle_w {
+  left: -6px;
+  top: calc(50% - 5px);
+  cursor: ew-resize;
+}
+
+/* Sits ABOVE the top-right corner so it clears the `ne` resize handle at the corner itself. */
+.maskRemove {
+  position: absolute;
+  top: -26px;
+  right: -6px;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: var(--color-primary);
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 1;
+}
+
+/* The rectangle being drawn (before it's committed on release). */
+.draft {
+  position: absolute;
+  background: rgba(240, 45, 184, 0.2);
+  border: 1.5px dashed #f02db8;
+  border-radius: var(--radius-sm);
+}

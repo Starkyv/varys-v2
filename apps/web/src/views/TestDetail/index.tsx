@@ -914,8 +914,9 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
                             <>
                               <p className={styles.baselineHelp}>
                                 The current golden image for this checkpoint. Drag on it to mask a
-                                volatile region — masked areas are ignored when comparing. Masks apply
-                                on the next run.
+                                volatile region; drag a mask to move it, or its handles to resize.
+                                Masked areas are ignored when comparing, and changes apply on the
+                                next run.
                               </p>
                               <BaselineMaskCanvas
                                 src={s.baselineUrl}

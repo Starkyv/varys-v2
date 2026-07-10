@@ -110,54 +110,6 @@
   height: 280px;
 }
 
-.drawLayer {
-  position: absolute;
-  inset: 0;
-  touch-action: none;
-}
-
-/* Cursor reflects what a drag will do, per the Draw/Move mode. */
-.drawCursor {
-  cursor: crosshair;
-}
-
-.panCursor {
-  cursor: grab;
-
-  &:active {
-    cursor: grabbing;
-  }
-}
-
-.mask {
-  position: absolute;
-  background: rgba(83, 71, 206, 0.22);
-  border: 1.5px solid var(--color-primary);
-  border-radius: var(--radius-sm);
-}
-
-.maskRemove {
-  position: absolute;
-  top: -10px;
-  right: -10px;
-  width: 20px;
-  height: 20px;
-  border: none;
-  border-radius: var(--radius-full);
-  background: var(--color-primary);
-  color: #fff;
-  font-size: 13px;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.draft {
-  position: absolute;
-  background: rgba(240, 45, 184, 0.2);
-  border: 1.5px dashed #f02db8;
-  border-radius: var(--radius-sm);
-}
-
 .controls {
   display: grid;
   grid-template-columns: 1fr 1fr;
