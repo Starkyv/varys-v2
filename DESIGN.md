@@ -67,19 +67,29 @@ isn't high-frequency telemetry).
   Load-bearing for black-box targets, which have an irreducible flakiness floor.
 
 ### Environment-agnostic variables
-Governing principle: **structure is static, data is variable, ask only about the ambiguous
-middle (typed values).**
+Governing principle: **structure is static; the web address and credentials are the only
+auto-parameterized values; typed form inputs default to test-scoped literals and are promoted to
+per-environment variables only on request.**
 
 | Tier | Examples | Behavior |
 |---|---|---|
 | Always variable (auto) | navigation origin → `{{baseUrl}}`; `type=password` → `{{secret}}` | system decides |
 | Always static | URL path segments, clicks/hovers/scrolls, waits, DOM-structural selector parts | system decides |
-| Ambiguous | typed input values; selectors keyed off visible text | **inline one-tap confirm** with heuristic default |
+| Ambiguous (typed inputs) | typed input values; selectors keyed off visible text | **default static (literal)**; one-tap confirm to promote |
 
-Heuristic default: data-shaped value (entity/dataset name, GUID, date, long id, free-text) →
-suggest **Variable**; short/enumerable UI value → suggest **Static**. **Selector guard:** warn
-if the chosen locator depends on env-specific visible text; bind it to the variable or drop to
-a structural locator. Variable *values* live in per-environment profiles, not in the test.
+Default: a typed value is a **literal baked into the test** — test-scoped and versioned, so one
+test's form data never leaks into the shared per-environment namespace (a common footgun: two
+tests typing into a field called `email` collided on one shared env value). Promote a field to a
+**Variable** (data that genuinely differs per environment) or a **Secret** (a credential) via the
+one-tap confirm or an explicit `kind`; `type=password` always auto-promotes to `{{secret}}`.
+**Selector guard** fires only for a *promoted* variable — a literal is environment-stable, so there
+is nothing to guard; when a locator leans on a promoted variable's visible text, bind it to the
+`{{variable}}` or drop to a structural locator. Variable/secret *values* live in per-environment
+profiles, never in the test.
+
+> Revised from the original Slice-4 heuristic (data-shaped typed values auto-suggested
+> **Variable**). That over-parameterized ordinary fixture data into the shared env namespace;
+> the default is now **Static**, with variables/secrets opt-in.
 
 ### Wait conditions
 Composable **per-step primitives**: `fixed delay (ms)` · `network-idle` ·

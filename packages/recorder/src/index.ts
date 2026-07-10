@@ -9,28 +9,25 @@ import type { Fingerprint, Rect, Step, TestDefinition, Variable, Viewport, Wait 
  */
 
 /**
- * The "ambiguous middle" heuristic (DESIGN §2): is a typed value environment-specific
- * data (→ a variable) or a UI constant (→ a literal)? Pure + unit-tested. Data-shaped
- * values — GUIDs, dates, multi-word / free text, long ids — default to **variable**; a
- * short single token defaults to **static**. The extension's one-tap confirm can
- * override the default; this is just the sensible starting point.
+ * The "ambiguous middle" default (DESIGN §2): should a typed form value become a
+ * per-environment `{{variable}}` or a literal baked into the test?
+ *
+ * Default: **static (literal)**. A typed value is test-specific fixture data — it belongs to the
+ * test (versioned, isolated), NOT the shared per-environment namespace, so one test's form data
+ * never leaks across every test that runs against the same environment. Promotion to a
+ * `{{variable}}` (data that differs per environment) or a `{{secret}}` (credential) is OPT-IN: the
+ * author declares it via the extension's one-tap confirm or an explicit `kind` (see `buildType`),
+ * and `type=password` still always becomes a secret. Kept as a named export (rather than inlined)
+ * so the confirm UI and `buildType` share one source of truth for the default.
+ *
+ * (Originally a heuristic that auto-suggested **Variable** for data-shaped values — GUIDs, dates,
+ * multi-word / free text, long ids. That over-parameterized ordinary fixture data; the default is
+ * now Static.)
  *
  * Self-contained (no external refs) so it survives being injected into a page via
  * `.toString()` alongside `startRecorder`.
  */
-export function classifyTypedValue(value: string): "variable" | "static" {
-  const v = value.trim();
-  if (v === "") return "static";
-  // GUID/UUID.
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)) return "variable";
-  // ISO-ish date / datetime.
-  if (/^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}|$)/.test(v)) return "variable";
-  // Multi-word / free text (a dataset or entity name like "Q3 sales").
-  if (/\s/.test(v)) return "variable";
-  // A long digit run reads as an id, not an enum.
-  if (/^\d{4,}$/.test(v)) return "variable";
-  // A long token reads as data / free text rather than a UI constant.
-  if (v.length > 16) return "variable";
+export function classifyTypedValue(_value: string): "variable" | "static" {
   return "static";
 }
 

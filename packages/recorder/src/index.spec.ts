@@ -259,9 +259,10 @@ describe("recorder", () => {
     expect(shots.find((s) => s.name === "clean")?.masks).toBeUndefined();
   });
 
-  // Slice 6 — a data-shaped typed value is parameterized as a {{variable}} and the
-  // emitted definition declares the test's variables (origin url + the data var).
-  it("parameterizes a data-shaped typed value and declares variables", async () => {
+  // A typed value defaults to a test-scoped LITERAL (DESIGN §2): even a data-shaped value
+  // stays baked into the test, and the definition declares no data variable for it — only the
+  // auto-parameterized baseUrl. Promotion to a {{variable}} is opt-in (extension confirm / kind).
+  it("keeps a typed value literal by default (variables are opt-in), declaring only baseUrl", async () => {
     const page = await browser.newPage();
     await page.goto(fixture.url);
     await page.evaluate((src) => {
@@ -270,7 +271,7 @@ describe("recorder", () => {
 
     await page.evaluate(() => {
       const u = document.querySelector("#username") as HTMLInputElement;
-      u.value = "Q3 sales report"; // multi-word ⇒ data-shaped ⇒ variable
+      u.value = "Q3 sales report"; // multi-word, but not auto-promoted — stays literal
       u.dispatchEvent(new Event("change", { bubbles: true }));
     });
 
@@ -286,25 +287,21 @@ describe("recorder", () => {
 
     expect(() => parseTestDefinition(def)).not.toThrow();
     const typed = def.steps.find((s) => s.type === "type") as { value: string };
-    expect(typed.value).toBe("{{username}}");
-    expect(def.variables).toEqual(
-      expect.arrayContaining([
-        { name: "baseUrl", kind: "url" },
-        { name: "username", kind: "data" },
-      ]),
-    );
+    expect(typed.value).toBe("Q3 sales report");
+    // No data variable declared for the typed value; only the navigation origin is parameterized.
+    expect(def.variables).toEqual([{ name: "baseUrl", kind: "url" }]);
   });
 });
 
 describe("classifyTypedValue", () => {
-  it("defaults short, single-token / enumerable values to static", () => {
-    for (const v of ["alice", "Submit", "active", "", "ab12", "USD"]) {
-      expect(classifyTypedValue(v)).toBe("static");
-    }
-  });
-
-  it("defaults data-shaped values to variable", () => {
+  it("defaults every typed value to static (a literal baked into the test) — promotion is opt-in", () => {
     for (const v of [
+      "alice",
+      "Submit",
+      "active",
+      "",
+      "ab12",
+      "USD",
       "Q3 sales", // multi-word
       "hello world report", // free text
       "2026-06-12", // date
@@ -312,7 +309,7 @@ describe("classifyTypedValue", () => {
       "1234567", // long id
       "a-very-long-identifier-value", // long token
     ]) {
-      expect(classifyTypedValue(v)).toBe("variable");
+      expect(classifyTypedValue(v)).toBe("static");
     }
   });
 });
@@ -417,12 +414,12 @@ describe("shared core — step factories", () => {
     );
   });
 
-  it("buildType honors the agent's declared kind, with the heuristic as fallback", () => {
-    // Declared variable overrides the static heuristic for a short token.
+  it("buildType honors the agent's declared kind, defaulting to a literal", () => {
+    // Declared variable promotes a value that would otherwise stay a literal.
     expect(valueOf(buildType(fp, { id: "account", value: "alice" }, { kind: "variable" }))).toBe(
       "{{account}}",
     );
-    // Declared static overrides the variable heuristic for a data-shaped value.
+    // Declared static keeps a data-shaped value literal (same as the default).
     expect(valueOf(buildType(fp, { id: "account", value: "Q3 sales" }, { kind: "static" }))).toBe(
       "Q3 sales",
     );
@@ -430,8 +427,8 @@ describe("shared core — step factories", () => {
     expect(valueOf(buildType(fp, { id: "token", value: "abc" }, { kind: "secret" }))).toBe(
       "{{secret:token}}",
     );
-    // No declared kind ⇒ heuristic: data-shaped ⇒ variable, short token ⇒ literal.
-    expect(valueOf(buildType(fp, { id: "account", value: "Q3 sales" }))).toBe("{{account}}");
+    // No declared kind ⇒ default static ⇒ literal, whatever the value shape.
+    expect(valueOf(buildType(fp, { id: "account", value: "Q3 sales" }))).toBe("Q3 sales");
     expect(valueOf(buildType(fp, { id: "account", value: "alice" }))).toBe("alice");
   });
 
@@ -448,7 +445,11 @@ describe("createRecording accumulator", () => {
   it("accumulates steps, derives variables, and counts steps + checkpoints", () => {
     const rec = createRecording();
     rec.push(buildEntryNavigate("https://app.example.com/", "https://app.example.com"));
-    rec.push(buildType({ tag: "input", attributes: { id: "u" } }, { id: "username", value: "Q3 sales" }));
+    // Explicit `kind: "variable"` — typed values are literals by default now (DESIGN §2), so a
+    // data variable is opt-in; this exercises variable derivation from the resulting token.
+    rec.push(
+      buildType({ tag: "input", attributes: { id: "u" } }, { id: "username", value: "Q3 sales" }, { kind: "variable" }),
+    );
     rec.push(buildType({ tag: "input" }, { type: "password", id: "password", value: "hunter2" }));
     rec.push(buildClick(fp));
     rec.checkpoint("after-login", { mode: "fullpage" });

@@ -27,7 +27,7 @@ Core authoring rules:
 - Checkpoints are the test's only visual assertions, and you take one ONLY when the instruction explicitly asks for it — "take a screenshot", "capture", "snapshot", "checkpoint", or "check/verify this screen". Do NOT add a checkpoint on your own initiative: not after every step, not to "make the test assert something", not because a screen looks important. If the user/plan never asks for one, finish with zero checkpoints — finish_session will note the draft asserts nothing, which is fine; a human can add one in review. Never invent a checkpoint just to avoid that warning.
 - When you ARE asked for a checkpoint, call the checkpoint tool (use 'fullpage' for "this whole screen renders", 'element' for a specific component). Never satisfy a screenshot/capture request with observe(screenshot=true): that screenshot is for YOUR perception only and records nothing in the test.
 - Give checkpoints stable, meaningful names — the name is part of the baseline key.
-- Tokenize environment-specific or sensitive typed values ('variable' / 'secret') so the test stays portable across environments.`;
+- Typed values default to LITERALS baked into the test — they're test-scoped (versioned with the test), NOT shared across everything that runs against the environment. Keep ordinary form / fixture data literal. Only pass kind 'variable' when a value genuinely differs per environment, or 'secret' for a credential (a password field is always a secret automatically).`;
 
 /**
  * Operator-supplied instructions from env (inline wins over file); null when none set.
