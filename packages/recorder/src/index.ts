@@ -2,123 +2,21 @@ import type { Fingerprint, Rect, Step, TestDefinition, Variable, Viewport, Wait 
 
 /**
  * `@varys/recorder` is split so its entry (`index.ts`) is the **DOM-free shared core**
- * — pure step factories + the accumulator + the variable/selector heuristics — that the
+ * — pure step factories + the accumulator — that the
  * server-side MCP authoring layer can import without a DOM lib (ADR 0001). The browser
  * DOM-listener driver (`startRecorder`, `CaptureFn`, `CheckpointSpec`, `RecordedSession`)
  * lives in `./dom`, which the Chrome extension imports.
  */
 
 /**
- * The "ambiguous middle" default (DESIGN §2): should a typed form value become a
- * per-environment `{{variable}}` or a literal baked into the test?
- *
- * Default: **static (literal)**. A typed value is test-specific fixture data — it belongs to the
- * test (versioned, isolated), NOT the shared per-environment namespace, so one test's form data
- * never leaks across every test that runs against the same environment. Promotion to a
- * `{{variable}}` (data that differs per environment) or a `{{secret}}` (credential) is OPT-IN: the
- * author declares it via the extension's one-tap confirm or an explicit `kind` (see `buildType`),
- * and `type=password` still always becomes a secret. Kept as a named export (rather than inlined)
- * so the confirm UI and `buildType` share one source of truth for the default.
- *
- * (Originally a heuristic that auto-suggested **Variable** for data-shaped values — GUIDs, dates,
- * multi-word / free text, long ids. That over-parameterized ordinary fixture data; the default is
- * now Static.)
- *
- * Self-contained (no external refs) so it survives being injected into a page via
- * `.toString()` alongside `startRecorder`.
- */
-export function classifyTypedValue(_value: string): "variable" | "static" {
-  return "static";
-}
-
-/** A token-safe variable name for a field — its id or name, else "value". */
-export function variableNameFor(field: { id?: string; name?: string }): string {
-  const base = (field.id || field.name || "value").replace(/[^\w.-]/g, "");
-  return base || "value";
-}
-
-/** How a typed value is classified — supplied by the extension's confirm; defaults
- *  to the pure heuristic. "variable" tokenizes the value, "static" keeps it literal. */
-export type ClassifyTyped = (value: string) => "variable" | "static";
-
-/**
- * The variables a definition declares, derived from the `{{tokens}}` in its steps —
- * the single source of truth so the recorder's `getDefinition` and the extension's
- * save path agree (the background store keeps only steps). `{{secret:x}}` → secret;
- * `{{baseUrl}}` → url; any other `{{x}}` → data. Declared once per name, first-seen
- * order. Self-contained for page injection.
+ * The variables a definition declares. The only token left is `{{baseUrl}}` (the entry URL's
+ * origin) — there are no data variables or secrets anymore; every typed value is a literal.
+ * Kept as the single source of truth so the recorder's `getDefinition` and the extension's save
+ * path agree. Self-contained for page injection.
  */
 export function variablesFromSteps(steps: Step[]): Variable[] {
-  const seen = new Map<string, Variable>();
-  const re = /\{\{\s*(secret:)?([\w.-]+)\s*\}\}/g;
-  const scan = (text: string) => {
-    let m = re.exec(text);
-    while (m) {
-      const name = m[2];
-      const kind: Variable["kind"] = m[1] ? "secret" : name === "baseUrl" ? "url" : "data";
-      if (!seen.has(name)) seen.set(name, { name, kind });
-      m = re.exec(text);
-    }
-  };
-  for (const s of steps) {
-    if (s.type === "navigate") scan(s.url);
-    else if (s.type === "type") scan(s.value);
-  }
-  return [...seen.values()];
-}
-
-/** A variable's name + the concrete value the author entered for it — what the
- *  selector guard compares a locator's visible-text signals against. */
-export interface KnownVariable {
-  name: string;
-  value: string;
-}
-
-/** What the selector guard found: the offending signal and the variable to bind to. */
-export interface SelectorGuardHit {
-  signal: "text" | "accessibleName";
-  value: string;
-  variable: string;
-}
-
-/**
- * Selector guard (pure): does this locator lean on environment-specific visible text?
- * Returns the matched signal + variable when the fingerprint's `text` or
- * `accessibleName` equals a known variable's value (so the locator would silently
- * break in another environment), else null. Structural signals (testId / role /
- * attributes / tag / DOM) never trip it.
- */
-export function selectorDependsOnVariable(
-  fp: Fingerprint,
-  variables: KnownVariable[],
-): SelectorGuardHit | null {
-  for (const signal of ["text", "accessibleName"] as const) {
-    const v = fp[signal];
-    if (v === undefined || v === "") continue;
-    const hit = variables.find((kv) => kv.value !== "" && kv.value === v);
-    if (hit) return { signal, value: v, variable: hit.name };
-  }
-  return null;
-}
-
-/**
- * Apply the author's chosen remedy to a guarded fingerprint:
- *  - "bind"       → replace the offending text signal with the `{{variable}}` token
- *                   (resolved per-environment at replay);
- *  - "structural" → drop both visible-text signals, leaving the structural ones.
- */
-export function applySelectorRemedy(
-  fp: Fingerprint,
-  remedy: "bind" | "structural",
-  hit: SelectorGuardHit,
-): Fingerprint {
-  if (remedy === "bind") {
-    return { ...fp, [hit.signal]: `{{${hit.variable}}}` };
-  }
-  const out = { ...fp };
-  delete out.text;
-  delete out.accessibleName;
-  return out;
+  const usesBaseUrl = steps.some((s) => s.type === "navigate" && /\{\{\s*baseUrl\s*\}\}/.test(s.url));
+  return usesBaseUrl ? [{ name: "baseUrl", kind: "url" }] : [];
 }
 
 /** Longest exact text / accessible name the ranked matcher trusts as a durable
@@ -183,41 +81,14 @@ export function sanitizeEntryUrl(href: string, origin: string): string {
  * identical in schema and quality by construction (ADR 0001). The factories are
  * self-contained, so they also survive `.toString()` injection on the human path. */
 
-/** The value-classification inputs `buildType` needs — read off a live `<input>` by the
- *  human driver, or via `page.evaluate` by the agent driver. Carries no DOM reference. */
-export interface TypedField {
-  type?: string;
-  id?: string;
-  name?: string;
-  value: string;
-}
-
-/** How the agent declares a typed value's nature (the analog of the human's one-tap
- *  confirm). Omitted ⇒ fall back to the `classify` heuristic. */
-export type TypedKind = "variable" | "static" | "secret";
-
 /** A click step from an already-captured fingerprint. */
 export function buildClick(target: Fingerprint): Step {
   return { type: "click", target };
 }
 
-/** A type step, applying the secret/variable/literal policy. A `type=password` field —
- *  or an explicitly-declared `secret` kind — always tokenizes to `{{secret:NAME}}` (the
- *  live value never enters the recording). Otherwise the declared kind, or the heuristic
- *  fallback, decides `{{variable}}` vs a literal. */
-export function buildType(
-  target: Fingerprint,
-  field: TypedField,
-  opts?: { kind?: TypedKind; classify?: ClassifyTyped },
-): Step {
-  const isPassword = field.type === "password";
-  if (isPassword || (opts && opts.kind === "secret")) {
-    const name = field.id || field.name || (isPassword ? "password" : "secret");
-    return { type: "type", target, value: `{{secret:${name}}}` };
-  }
-  const classify = (opts && opts.classify) || classifyTypedValue;
-  const kind = (opts && opts.kind) || classify(field.value);
-  const value = kind === "variable" ? `{{${variableNameFor(field)}}}` : field.value;
+/** A type step. The value is recorded literally — there are no variables or secrets, so even a
+ *  password is stored as typed (everything is a literal on the test). */
+export function buildType(target: Fingerprint, value: string): Step {
   return { type: "type", target, value };
 }
 

@@ -6,23 +6,19 @@ import { DB, type Db } from "../db/db.module";
 
 export interface CreateEnvironmentInput {
   name: string;
-  values?: Record<string, string>;
-  secrets?: Record<string, string>;
+  baseUrl?: string;
   cookies?: EnvCookie[];
   localStorage?: EnvLocalStorageItem[];
 }
 
 /**
- * Update body. `values`, `cookies`, and `localStorage` (when present) REPLACE the whole
- * list (full-map replace is fine for MVP — PRD §B). Secrets are a delta, never echoed:
- * `secrets` sets/overwrites named secrets, `removeSecrets` clears named ones. Omitted
- * fields are left untouched.
+ * Update body. Any present field REPLACES the current value (full replace is fine for MVP).
+ * Omitted fields are left untouched. An environment is just a run target now: base URL +
+ * cookies + localStorage.
  */
 export interface UpdateEnvironmentInput {
   name?: string;
-  values?: Record<string, string>;
-  secrets?: Record<string, string>;
-  removeSecrets?: string[];
+  baseUrl?: string;
   cookies?: EnvCookie[];
   localStorage?: EnvLocalStorageItem[];
 }
@@ -30,9 +26,7 @@ export interface UpdateEnvironmentInput {
 export interface EnvironmentView {
   id: string;
   name: string;
-  values: Record<string, string>;
-  /** Secret NAMES only — values are never returned. */
-  secretNames: string[];
+  baseUrl: string;
   cookies: EnvCookie[];
   localStorage: EnvLocalStorageItem[];
 }
@@ -46,8 +40,7 @@ export class EnvironmentsService {
       .insert(environments)
       .values({
         name: input.name,
-        values: input.values ?? {},
-        secrets: input.secrets ?? {},
+        baseUrl: input.baseUrl ?? "",
         cookies: input.cookies ?? [],
         localStorage: input.localStorage ?? [],
       })
@@ -59,8 +52,7 @@ export class EnvironmentsService {
     const [row] = await this.db
       .select({
         name: environments.name,
-        values: environments.values,
-        secrets: environments.secrets,
+        baseUrl: environments.baseUrl,
         cookies: environments.cookies,
         localStorage: environments.localStorage,
       })
@@ -72,21 +64,19 @@ export class EnvironmentsService {
     return {
       id,
       name: row.name,
-      values: (row.values ?? {}) as Record<string, string>,
-      secretNames: Object.keys((row.secrets ?? {}) as Record<string, string>),
+      baseUrl: row.baseUrl ?? "",
       cookies: (row.cookies ?? []) as EnvCookie[],
       localStorage: (row.localStorage ?? []) as EnvLocalStorageItem[],
     };
   }
 
-  /** List every environment (creation order). Secret values are never returned — names only. */
+  /** List every environment (creation order). */
   async list(): Promise<EnvironmentView[]> {
     const rows = await this.db
       .select({
         id: environments.id,
         name: environments.name,
-        values: environments.values,
-        secrets: environments.secrets,
+        baseUrl: environments.baseUrl,
         cookies: environments.cookies,
         localStorage: environments.localStorage,
       })
@@ -96,21 +86,19 @@ export class EnvironmentsService {
     return rows.map((row) => ({
       id: row.id,
       name: row.name,
-      values: (row.values ?? {}) as Record<string, string>,
-      secretNames: Object.keys((row.secrets ?? {}) as Record<string, string>),
+      baseUrl: row.baseUrl ?? "",
       cookies: (row.cookies ?? []) as EnvCookie[],
       localStorage: (row.localStorage ?? []) as EnvLocalStorageItem[],
     }));
   }
 
   /**
-   * Update an environment: rename, replace `values`, and apply a secret delta (set
-   * named secrets, clear `removeSecrets`). Returns the redacted view (names only);
-   * secret values are never echoed. Throws if the environment doesn't exist.
+   * Update an environment: rename, and replace baseUrl / cookies / localStorage. Any present
+   * field is written; omitted ones are left untouched. Throws if the environment doesn't exist.
    */
   async update(id: string, input: UpdateEnvironmentInput): Promise<EnvironmentView> {
     const [row] = await this.db
-      .select({ secrets: environments.secrets })
+      .select({ id: environments.id })
       .from(environments)
       .where(eq(environments.id, id))
       .limit(1);
@@ -118,17 +106,9 @@ export class EnvironmentsService {
 
     const patch: Partial<typeof environments.$inferInsert> = {};
     if (input.name !== undefined) patch.name = input.name;
-    if (input.values !== undefined) patch.values = input.values; // full-map replace
+    if (input.baseUrl !== undefined) patch.baseUrl = input.baseUrl;
     if (input.cookies !== undefined) patch.cookies = input.cookies; // full-list replace
     if (input.localStorage !== undefined) patch.localStorage = input.localStorage; // full-list replace
-
-    // Secret delta: only rewrite the secrets jsonb when the caller sent one.
-    if (input.secrets !== undefined || input.removeSecrets !== undefined) {
-      const nextSecrets = { ...((row.secrets ?? {}) as Record<string, string>) };
-      for (const [k, v] of Object.entries(input.secrets ?? {})) nextSecrets[k] = v;
-      for (const k of input.removeSecrets ?? []) delete nextSecrets[k];
-      patch.secrets = nextSecrets;
-    }
 
     if (Object.keys(patch).length > 0) {
       await this.db.update(environments).set(patch).where(eq(environments.id, id));

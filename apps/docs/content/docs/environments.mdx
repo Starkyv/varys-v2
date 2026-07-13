@@ -10,20 +10,18 @@ against.
 Each environment holds:
 
 <Cards>
-  <Card title="Variables" description="Values that differ per place — most importantly the web address of your app." />
-  <Card title="Secrets" description="Passwords and tokens. They're stored write-only — once saved, the value is never shown again." />
+  <Card title="Base URL" description="The web address this environment points at — the one thing that differs between staging, production, and local." />
   <Card title="Cookies" description="Set automatically before each run — handy for skipping login, for example." />
   <Card title="Local storage" description="Key/value entries set in the browser before each run — another way to skip login when your app keeps its session there." />
 </Cards>
 
 ## Why it matters
 
-Because tests keep the web address and passwords out of themselves, the *same* test works
-everywhere — it just borrows the right values from whichever environment you run it against. Each
-environment also keeps its own approved baselines, since staging and production legitimately look
-different.
+A test records its steps once. The only thing that changes between places is the **base URL**, so
+that's all the environment supplies (along with any cookies or local storage needed to start
+signed in). Everything else you typed while recording stays in the test as-is. Each environment
+also keeps its own approved baselines, since staging and production legitimately look different.
 
 <Callout type="info">
-  Put any sensitive value (like an auth cookie or token) in a **secret**, then reference it from a
-  cookie, local storage entry, or variable — so it's never stored in plain text.
+  Pick the environment when you run a test — the run uses its base URL, cookies, and local storage.
 </Callout>

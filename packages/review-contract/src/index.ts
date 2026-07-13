@@ -116,16 +116,6 @@ export interface TestScheduleInput {
   keepTrace?: boolean;
 }
 
-/** A variable a test declares (name + classification), mirrored from the step
- *  schema's `Variable`. Surfaced on the summary so the Run UI can check, per chosen
- *  environment, which variables/secrets are satisfied vs missing BEFORE replay —
- *  turning an "unresolved variable" mid-run failure into a pre-flight check. */
-export interface TestVariable {
-  name: string;
-  /** `url` → the entry origin (`{{baseUrl}}`); `data` → an environment value
-   *  (`{{name}}`); `secret` → a credential (`{{secret:name}}`, supplied as a secret). */
-  kind: "url" | "data" | "secret";
-}
 
 /** A saved test (recording), as listed in the Tests view. */
 export interface TestSummary {
@@ -143,16 +133,10 @@ export interface TestSummary {
    *  Null for human recordings and tests promoted before attribution was recorded. */
   promotedBy: string | null;
   promotedAt: string | null;
-  /** True when the test references variables/secrets — it declares `variables`, or
-   *  its definition still contains an unresolved `{{token}}`. The Run UI uses this to
-   *  require an environment before the test can run (a no-variable test runs without
-   *  one). Computed server-side from the latest version's definition. */
+  /** True when the test uses `{{baseUrl}}` — so it needs an environment (which supplies
+   *  the base URL + cookies + localStorage) before it can run. Computed server-side from
+   *  the latest version's definition. */
   needsEnvironment: boolean;
-  /** Every variable the test references (`{{token}}`s across navigate urls, typed
-   *  values, and selector-bound text) — the exact set the worker's resolver must fill
-   *  from the chosen environment. The Run picker diffs this against an environment's
-   *  values/secret names to flag missing ones up front. Empty ⇔ `needsEnvironment` false. */
-  variables: TestVariable[];
   /** The test's folder (organization metadata, relational — never part of the
    *  versioned definition). Null = Unfiled. */
   folderId: string | null;
@@ -278,12 +262,9 @@ export interface TestConfigView {
   schedule: TestSchedule | null;
   /** Optional free-form note on the test, or null when none. Written via `PATCH /tests/:id`. */
   notes: string | null;
-  /** True when the test references variables/secrets — the locator-verify control uses this
-   *  to require an environment (mirrors the Run pre-flight). (Slice 16.3b.) */
+  /** True when the test uses `{{baseUrl}}` — the locator-verify control uses this to require
+   *  an environment (which supplies the base URL + cookies + localStorage). */
   needsEnvironment: boolean;
-  /** Every variable the test declares — the verify env picker diffs this against an
-   *  environment's values/secret names to flag missing ones, like the Run picker. */
-  variables: TestVariable[];
 }
 
 /** A per-step edit in a config patch — keyed by `index`. Omitted fields are left as-is. */
@@ -601,9 +582,9 @@ export interface SuiteView {
 export interface EnvCookie {
   /** Cookie name. */
   name: string;
-  /** Cookie value; may contain `{{var}}` / `{{secret:NAME}}` tokens (resolved at run). */
+  /** Cookie value (literal). */
   value: string;
-  /** Cookie domain. Defaults to the run's `baseUrl` host when omitted. */
+  /** Cookie domain. Defaults to the environment's `baseUrl` host when omitted. */
   domain?: string;
   /** Cookie path. Defaults to `/`. */
   path?: string;
@@ -612,40 +593,33 @@ export interface EnvCookie {
 /**
  * A localStorage entry seeded into the browser BEFORE a run, so a test that needs an
  * existing token/flag stored in `window.localStorage` (e.g. an auth JWT or a "seen the
- * onboarding" flag) starts with it already present. `value` supports the same `{{var}}` /
- * `{{secret:NAME}}` tokens cookies and steps do — keep a real token in a write-only secret
- * and reference it here rather than pasting it in plain.
+ * onboarding" flag) starts with it already present.
  */
 export interface EnvLocalStorageItem {
   /** localStorage key. */
   key: string;
-  /** localStorage value; may contain `{{var}}` / `{{secret:NAME}}` tokens (resolved at run). */
+  /** localStorage value (literal). */
   value: string;
   /** Origin (e.g. `https://app.example.com`) this entry is scoped to. localStorage is
    *  per-origin, so the entry is only written when the page is on this origin. Defaults to
-   *  the run's `baseUrl` origin when omitted. */
+   *  the environment's `baseUrl` origin when omitted. */
   origin?: string;
 }
 
 /**
- * An environment as the API returns it (list + get). Secret VALUES are never
- * returned — only their names — so a leaked screen or response can't expose them.
+ * An environment as the API returns it (list + get). An environment is just a run target:
+ * the base URL the test's `{{baseUrl}}` resolves to, plus cookies + localStorage seeded
+ * before the run. No variables, no secrets — everything else lives on the test as literals.
  * The same shape the env management UI renders and the Run picker lists.
  */
 export interface EnvironmentView {
   id: string;
   name: string;
-  /** Plain variable values (e.g. `baseUrl`), resolved into `{{tokens}}` at replay. */
-  values: Record<string, string>;
-  /** Names of the environment's secrets — values are write-only and never returned. */
-  secretNames: string[];
-  /** Cookies seeded onto the browser context before each run against this environment.
-   *  Definitions are returned plain; put sensitive values in a secret and reference it
-   *  via `{{secret:NAME}}` in the cookie value. */
+  /** The base URL this environment runs against — substituted for `{{baseUrl}}` at replay. */
+  baseUrl: string;
+  /** Cookies seeded onto the browser context before each run against this environment. */
   cookies: EnvCookie[];
-  /** localStorage entries seeded into the browser before each run against this environment.
-   *  Definitions are returned plain; put sensitive values in a secret and reference it
-   *  via `{{secret:NAME}}` in the entry value. */
+  /** localStorage entries seeded into the browser before each run against this environment. */
   localStorage: EnvLocalStorageItem[];
 }
 

@@ -66,7 +66,7 @@ describe("Suite runs API", () => {
   const mkEnv = async (name: string): Promise<string> => {
     const res = await authed(app)
       .post("/environments")
-      .send({ name, values: { baseUrl: `http://${name}.local` } })
+      .send({ name, baseUrl: `http://${name}.local` })
       .expect(201);
     return res.body.id as string;
   };

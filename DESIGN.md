@@ -66,30 +66,31 @@ isn't high-frequency telemetry).
   (record which signal won); **no candidate clears the floor → hard-fail + surface for repair.**
   Load-bearing for black-box targets, which have an irreducible flakiness floor.
 
-### Environment-agnostic variables
-Governing principle: **structure is static; the web address and credentials are the only
-auto-parameterized values; typed form inputs default to test-scoped literals and are promoted to
-per-environment variables only on request.**
+### Environment model (base URL only)
+Governing principle: **everything a test needs is a literal on the test; the only environment-scoped
+value is the base URL (`{{baseUrl}}`). There are no variables and no secrets.**
+
+An **environment** is just a run target: `{ name, baseUrl, cookies[], localStorage[] }`. At replay
+the resolver substitutes the single `{{baseUrl}}` token (the recorded entry URL's origin) with the
+chosen environment's base URL; cookies + localStorage are seeded before the run for auth. Everything
+else — typed form values, clicked/typed credentials, selector text — is stored **verbatim on the
+test** (versioned with it).
 
 | Tier | Examples | Behavior |
 |---|---|---|
-| Always variable (auto) | navigation origin → `{{baseUrl}}`; `type=password` → `{{secret}}` | system decides |
-| Always static | URL path segments, clicks/hovers/scrolls, waits, DOM-structural selector parts | system decides |
-| Ambiguous (typed inputs) | typed input values; selectors keyed off visible text | **default static (literal)**; one-tap confirm to promote |
+| Auto-parameterized | navigation origin → `{{baseUrl}}` | system decides |
+| Literal (on the test) | typed input values (incl. passwords), URL path segments, clicks/hovers/scrolls, waits, selectors | system decides |
+| Environment-scoped | base URL, cookies, localStorage | picked at run time |
 
-Default: a typed value is a **literal baked into the test** — test-scoped and versioned, so one
-test's form data never leaks into the shared per-environment namespace (a common footgun: two
-tests typing into a field called `email` collided on one shared env value). Promote a field to a
-**Variable** (data that genuinely differs per environment) or a **Secret** (a credential) via the
-one-tap confirm or an explicit `kind`; `type=password` always auto-promotes to `{{secret}}`.
-**Selector guard** fires only for a *promoted* variable — a literal is environment-stable, so there
-is nothing to guard; when a locator leans on a promoted variable's visible text, bind it to the
-`{{variable}}` or drop to a structural locator. Variable/secret *values* live in per-environment
-profiles, never in the test.
+A test "needs an environment" iff it uses `{{baseUrl}}` — the Run/verify picker requires one so the
+base URL resolves. Per-environment approved baselines are unchanged (staging and production
+legitimately look different).
 
-> Revised from the original Slice-4 heuristic (data-shaped typed values auto-suggested
-> **Variable**). That over-parameterized ordinary fixture data into the shared env namespace;
-> the default is now **Static**, with variables/secrets opt-in.
+> Revised from the original variable/secret model (Slices 4 & 6: a static-vs-variable classifier,
+> `{{data}}`/`{{secret:…}}` tokens, a per-env values/secrets vault, and a selector guard that bound
+> locators to variable values). All of that is removed — typed values are literals, the only token
+> is `{{baseUrl}}`, and the environment holds just base URL + cookies + localStorage. Trade-off:
+> a typed password is now stored in plain text on the test (accepted for simplicity).
 
 ### Wait conditions
 Composable **per-step primitives**: `fixed delay (ms)` · `network-idle` ·
@@ -105,11 +106,10 @@ sub-regions are masked in the same gesture** (feeds diff masking).
 ### App-under-test authentication
 - **Login recorded as steps**, run **fresh once per run** (session reused across that run's
   steps to avoid lockout/rate-limits). **No MFA** in scope.
-- Credentials → **per-environment encrypted secret vault** (envelope encryption/KMS),
-  decrypted only inside the runner — never in the client, UI, or logs.
-- Because the tool screen-records + captures network, secrets are scrubbed everywhere:
-  password input regions **redacted in video**; `Authorization` headers, cookies, and
-  auth-endpoint bodies **scrubbed from network capture**; variables surface as `{{secret:…}}`.
+- Two options: record the login steps with **literal credentials** (stored on the test), or skip
+  login by seeding the environment's **cookies / localStorage** before the run.
+- Credentials are stored in plain text (no secret vault) — accepted for simplicity (see the
+  Environment model above and Accepted risks).
 
 ---
 

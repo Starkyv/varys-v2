@@ -50,7 +50,6 @@ import { useRunDialog } from "../../context/run-dialog";
 import { useToast } from "../../context/toast";
 import { absoluteTime, relativeTime } from "../../lib/format";
 import { StatusBadge } from "../../lib/status";
-import { isVariableSatisfied } from "../../lib/variables";
 import {
   useEnvironments,
   useSaveTestConfig,
@@ -300,14 +299,8 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
   const selectedEnv: EnvironmentView | undefined = verifyEnvId
     ? envList.find((e) => e.id === verifyEnvId)
     : undefined;
-  const missingVars =
-    config.needsEnvironment && selectedEnv
-      ? config.variables.filter((v) => !isVariableSatisfied(v, selectedEnv))
-      : [];
-  // Can't verify until a needed environment is chosen and satisfies the test's variables.
-  const canVerify =
-    (!config.needsEnvironment || (!!selectedEnv && missingVars.length === 0)) &&
-    verifyingStep === null;
+  // Can't verify until a needed environment is chosen (it supplies {{baseUrl}} + cookies/localStorage).
+  const canVerify = (!config.needsEnvironment || !!selectedEnv) && verifyingStep === null;
 
   function onVerify(stepIndex: number) {
     const td = targets[stepIndex];
@@ -743,11 +736,6 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
                 placeholder="Select an environment"
                 options={envList.map((e) => ({ value: e.id, label: e.name }))}
               />
-              {selectedEnv && missingVars.length > 0 && (
-                <span className={styles.verifyBarWarn}>
-                  <AlertTriangle size={12} /> missing {missingVars.map((v) => v.name).join(", ")}
-                </span>
-              )}
             </>
           )}
           <span className={styles.verifyNote}>

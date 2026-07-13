@@ -24,7 +24,6 @@ import type {
   TestScheduleSummary,
   TestStatus,
   TestSummary,
-  TestVariable,
 } from "@varys/review-contract";
 import {
   describeStep,
@@ -105,19 +104,10 @@ function normalizeTags(tags: string[]): string[] {
  * declared `variables` existed. `{{secret:x}}` → secret; `{{baseUrl}}` → url; else data.
  * Deduped by name, first-seen order.
  */
-function definitionVariables(definition: TestDefinition): TestVariable[] {
-  const seen = new Map<string, TestVariable>(
-    (definition.variables ?? []).map((v) => [v.name, v]),
-  );
-  const re = /\{\{\s*(secret:)?([\w.-]+)\s*\}\}/g;
-  const json = JSON.stringify(definition);
-  for (let m = re.exec(json); m; m = re.exec(json)) {
-    const name = m[2];
-    if (seen.has(name)) continue;
-    const kind: TestVariable["kind"] = m[1] ? "secret" : name === "baseUrl" ? "url" : "data";
-    seen.set(name, { name, kind });
-  }
-  return [...seen.values()];
+/** Whether a definition uses `{{baseUrl}}` (the only token left) — so it needs an environment
+ *  to supply the base URL + cookies + localStorage before it can run. */
+function usesBaseUrl(definition: TestDefinition): boolean {
+  return /\{\{\s*baseUrl\s*\}\}/.test(JSON.stringify(definition));
 }
 
 /** How many checkpoints (screenshot steps) a definition asserts — 0 ⇒ a no-op test. */
@@ -271,7 +261,6 @@ export class TestsService {
     }
 
     return rows.map((r) => {
-      const variables = definitionVariables(r.definition as TestDefinition);
       return {
         id: r.id,
         name: r.name,
@@ -281,9 +270,8 @@ export class TestsService {
         createdBy: r.createdBy,
         promotedBy: r.promotedBy,
         promotedAt: r.promotedAt ? r.promotedAt.toISOString() : null,
-        // A recording needs an environment iff it references any variable/secret.
-        needsEnvironment: variables.length > 0,
-        variables,
+        // A recording needs an environment iff it uses {{baseUrl}}.
+        needsEnvironment: usesBaseUrl(r.definition as TestDefinition),
         folderId: r.folderId,
         folderName: r.folderName,
         tags: tagsByTest.get(r.id) ?? [],
@@ -641,8 +629,6 @@ export class TestsService {
       .from(tests)
       .where(eq(tests.id, id))
       .limit(1);
-    // Variables the test references — drives the verify control's environment requirement.
-    const variables = definitionVariables(def);
     // A baseline image per checkpoint to draw masks on (default environment preferred, else any).
     const baselineRows = await this.db
       .select({
@@ -668,8 +654,7 @@ export class TestsService {
       version: view.version,
       schedule,
       notes: meta?.notes ?? null,
-      needsEnvironment: variables.length > 0,
-      variables,
+      needsEnvironment: usesBaseUrl(def),
       defaults: (def.defaults?.waitBefore ?? []).map(toConfigWait),
       steps: def.steps.map((s, index): TestConfigStep => ({
         index,

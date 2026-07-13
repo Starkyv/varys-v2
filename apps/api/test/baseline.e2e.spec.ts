@@ -277,17 +277,14 @@ describe("Baseline lifecycle", () => {
     expect(run.steps).toHaveLength(2);
   });
 
-  // Issue 4 TB3 — run against an environment: resolve {{baseUrl}}/{{secret}}, log in, never leak.
-  it("runs against an environment, logs in with a resolved secret, and never leaks it", async () => {
+  // Run against an environment: {{baseUrl}} resolves to the env's base URL; login uses literal
+  // typed credentials (there are no variables/secrets — everything is a literal on the test).
+  it("runs against an environment and logs in with literal credentials", async () => {
     fixture.setVariant("login");
 
     const env = await authed(app)
       .post("/environments")
-      .send({
-        name: "demo",
-        values: { baseUrl: fixture.url, username: "alice" },
-        secrets: { password: "s3cr3t" },
-      })
+      .send({ name: "demo", baseUrl: fixture.url })
       .expect(201);
 
     const definition = {
@@ -295,8 +292,8 @@ describe("Baseline lifecycle", () => {
       viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
       steps: [
         { type: "navigate", url: "{{baseUrl}}" },
-        { type: "type", target: { tag: "input", attributes: { id: "username" } }, value: "{{username}}" },
-        { type: "type", target: { tag: "input", attributes: { id: "password" } }, value: "{{secret:password}}" },
+        { type: "type", target: { tag: "input", attributes: { id: "username" } }, value: "alice" },
+        { type: "type", target: { tag: "input", attributes: { id: "password" } }, value: "s3cr3t" },
         { type: "click", target: { tag: "button", attributes: { id: "submit" } } },
         { type: "screenshot", name: "app", target: { tag: "div", attributes: { id: "app" } } },
       ],
@@ -312,13 +309,6 @@ describe("Baseline lifecycle", () => {
     expect(run.status).toBe("needs_review");
     expect(run.checkpoints[0]).toMatchObject({ name: "app", reviewState: "pending-baseline" });
     expect(run.checkpoints[0].actualUrl).toEqual(expect.any(String));
-
-    // The secret must not leak into run data or the stored (tokenized) definition.
-    expect(JSON.stringify(run)).not.toContain("s3cr3t");
-    const testGet = await authed(app)
-      .get(`/tests/${test.body.id}`)
-      .expect(200);
-    expect(JSON.stringify(testGet.body)).not.toContain("s3cr3t");
   });
 
   // Slice 2 — per-environment baselines seed + approve INDEPENDENTLY, and approve
@@ -331,7 +321,7 @@ describe("Baseline lifecycle", () => {
     const mkEnv = (name: string) =>
       authed(app)
         .post("/environments")
-        .send({ name, values: { baseUrl: fixture.url } })
+        .send({ name, baseUrl: fixture.url })
         .expect(201)
         .then((r) => r.body.id as string);
     const envA = await mkEnv("dev");
@@ -370,37 +360,6 @@ describe("Baseline lifecycle", () => {
     // Approving B leaves A untouched: A still passes against its own baseline.
     const rerunA2 = await runToCompletion(testId, envA);
     expect(rerunA2.checkpoints[0].reviewState).toBe("passed");
-  });
-
-  // Slice 3 — an unresolved token (the environment is missing a value the test
-  // uses) fails the run LEGIBLY: runs.error names the variable, surfaced in the
-  // viewer, instead of a raw Playwright "navigating to {{baseUrl}}/" error.
-  it("fails legibly when the environment is missing a variable the test uses", async () => {
-    fixture.setVariant("default");
-    // An environment with NO baseUrl, so {{baseUrl}} cannot resolve.
-    const env = await authed(app)
-      .post("/environments")
-      .send({ name: "empty", values: {} })
-      .expect(201);
-
-    const definition = {
-      name: "needs baseUrl",
-      viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
-      steps: [
-        { type: "navigate", url: "{{baseUrl}}/" },
-        { type: "screenshot", name: "hero", target: { tag: "div", attributes: { id: "hero" }, text: "Hero" } },
-      ],
-      variables: [{ name: "baseUrl", kind: "url" }],
-    };
-    const test = await authed(app).post("/tests").send(definition).expect(201);
-
-    const run = await runToCompletion(test.body.id, env.body.id);
-    expect(run.status).toBe("failed");
-    expect(run.error).toContain("unresolved variable: baseUrl");
-    // Per-step resolution attributes the unresolved token to the navigate step (0),
-    // so the message names it ("Step 1/2 — navigate to …").
-    expect(run.failedStepIndex).toBe(0);
-    expect(run.error).toContain("Step 1/2");
   });
 
   // Issue 5 TB1 — a fully-masked checkpoint never diffs, even when it changes.

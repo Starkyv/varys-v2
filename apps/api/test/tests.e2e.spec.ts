@@ -111,16 +111,13 @@ describe("Tests API", () => {
     const items = listed.body as {
       id: string;
       needsEnvironment: boolean;
-      variables: { name: string; kind: string }[];
       createdBy: string | null;
     }[];
     const itemA = items.find((i) => i.id === a.body.id);
     const itemB = items.find((i) => i.id === b.body.id);
+    // needsEnvironment is true iff the test uses {{baseUrl}}.
     expect(itemA?.needsEnvironment).toBe(true);
     expect(itemB?.needsEnvironment).toBe(false);
-    // The summary also carries the variable set the Run UI checks an environment against.
-    expect(itemA?.variables).toEqual([{ name: "baseUrl", kind: "url" }]);
-    expect(itemB?.variables).toEqual([]);
     // ...and attributes the test to the signed-in creator (Slice A).
     expect(itemA?.createdBy).toBe(authEmail());
   });

@@ -158,7 +158,7 @@ export async function seedCookies(
   profile: EnvironmentProfile | null,
 ): Promise<void> {
   if (cookies.length === 0) return;
-  const baseUrl = profile?.values.baseUrl;
+  const baseUrl = profile?.baseUrl;
   const toSet = cookies.map((c) => {
     const value = profile ? resolveString(c.value, profile) : c.value;
     const cookie: { name: string; value: string; url?: string; domain?: string; path?: string } = {
@@ -207,7 +207,7 @@ export async function seedLocalStorage(
   profile: EnvironmentProfile | null,
 ): Promise<void> {
   if (items.length === 0) return;
-  const baseOrigin = toOrigin(profile?.values.baseUrl);
+  const baseOrigin = toOrigin(profile?.baseUrl);
   const resolved = items.map((it) => ({
     key: it.key,
     value: profile ? resolveString(it.value, profile) : it.value,
@@ -308,10 +308,8 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
   let context: BrowserContext | undefined;
   let tracingStarted = false;
   try {
-    // Load the run's environment profile (if any). Resolution happens PER STEP in the
-    // loop below — so an unresolved token (e.g. "{{baseUrl}}") is attributed to the
-    // exact step that uses it. Secrets live only in the transient resolved step and are
-    // never persisted.
+    // Load the run's environment (if any) — just the base URL for `{{baseUrl}}`, plus cookies +
+    // localStorage seeded below. `{{baseUrl}}` is substituted per step in the loop below.
     let environment = "default";
     let profile: EnvironmentProfile | null = null;
     let envCookies: EnvCookie[] = [];
@@ -320,8 +318,7 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
       const [env] = await db
         .select({
           name: environments.name,
-          values: environments.values,
-          secrets: environments.secrets,
+          baseUrl: environments.baseUrl,
           cookies: environments.cookies,
           localStorage: environments.localStorage,
         })
@@ -329,10 +326,7 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
         .where(eq(environments.id, row.environmentId))
         .limit(1);
       if (!env) throw new Error(`Environment ${row.environmentId} not found`);
-      profile = {
-        values: (env.values ?? {}) as Record<string, string>,
-        secrets: (env.secrets ?? {}) as Record<string, string>,
-      };
+      profile = { baseUrl: env.baseUrl ?? "" };
       environment = env.name;
       envCookies = (env.cookies ?? []) as EnvCookie[];
       envLocalStorage = (env.localStorage ?? []) as EnvLocalStorageItem[];

@@ -50,6 +50,5 @@ Give the test a name and press **Save**.
 ## What Varys handles for you
 
 So a test works against any environment (staging, production, local), Varys automatically keeps
-the web address and passwords out of the test. Everything else you type into a form stays with
-that test by default — so filling one test's form never affects another. If a value should instead
-change between environments, you can promote it to an environment variable in one tap.
+the web address out of the test — it's the one thing an environment supplies. Everything else you
+type while recording (including form values) is saved with the test exactly as you entered it.

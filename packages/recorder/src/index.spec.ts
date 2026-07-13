@@ -5,16 +5,12 @@ import { type Browser, chromium } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Fingerprint } from "@varys/step-schema";
 import {
-  applySelectorRemedy,
   buildClick,
   buildEntryNavigate,
   buildType,
-  classifyTypedValue,
   createRecording,
   isWeakFingerprint,
   sanitizeEntryUrl,
-  selectorDependsOnVariable,
-  variableNameFor,
   variablesFromSteps,
 } from "./index";
 import { startRecorder } from "./dom";
@@ -23,8 +19,6 @@ import { startRecorder } from "./dom";
 // start a session on the page. The helpers must be injected because `startRecorder`
 // is run via `.toString()` and references them by name in the page's global scope.
 const INJECT = `
-  ${classifyTypedValue.toString()}
-  ${variableNameFor.toString()}
   ${variablesFromSteps.toString()}
   ${sanitizeEntryUrl.toString()}
   ${buildClick.toString()}
@@ -37,7 +31,7 @@ const INJECT = `
   // vitest's SSR transform rewrites to \`__vite_ssr_import_0__.X\`. Those bindings don't
   // exist in the page, so shim the namespace to the injected globals. (In the real
   // extension build these imports are bundled — this is purely a unit-test artifact.)
-  var __vite_ssr_import_0__ = { buildClick, buildType, buildEntryNavigate, createRecording, classifyTypedValue };
+  var __vite_ssr_import_0__ = { buildClick, buildType, buildEntryNavigate, createRecording };
   window.__rec = startRecorder(captureFingerprint);
 `;
 
@@ -259,10 +253,9 @@ describe("recorder", () => {
     expect(shots.find((s) => s.name === "clean")?.masks).toBeUndefined();
   });
 
-  // A typed value defaults to a test-scoped LITERAL (DESIGN §2): even a data-shaped value
-  // stays baked into the test, and the definition declares no data variable for it — only the
-  // auto-parameterized baseUrl. Promotion to a {{variable}} is opt-in (extension confirm / kind).
-  it("keeps a typed value literal by default (variables are opt-in), declaring only baseUrl", async () => {
+  // A typed value is always recorded as a LITERAL (there are no variables/secrets); the only
+  // token is the entry navigate's {{baseUrl}}.
+  it("records a typed value literally, declaring only baseUrl", async () => {
     const page = await browser.newPage();
     await page.goto(fixture.url);
     await page.evaluate((src) => {
@@ -293,44 +286,16 @@ describe("recorder", () => {
   });
 });
 
-describe("classifyTypedValue", () => {
-  it("defaults every typed value to static (a literal baked into the test) — promotion is opt-in", () => {
-    for (const v of [
-      "alice",
-      "Submit",
-      "active",
-      "",
-      "ab12",
-      "USD",
-      "Q3 sales", // multi-word
-      "hello world report", // free text
-      "2026-06-12", // date
-      "550e8400-e29b-41d4-a716-446655440000", // GUID
-      "1234567", // long id
-      "a-very-long-identifier-value", // long token
-    ]) {
-      expect(classifyTypedValue(v)).toBe("static");
-    }
-  });
-});
-
 describe("variablesFromSteps", () => {
-  it("declares url / secret / data variables from the steps' tokens, once each", () => {
+  it("declares baseUrl when the entry navigate uses {{baseUrl}} (the only token left)", () => {
     const steps = [
       { type: "navigate", url: "{{baseUrl}}/app" },
       { type: "type", target: { tag: "input" }, value: "alice" },
-      { type: "type", target: { tag: "input" }, value: "{{secret:password}}" },
-      { type: "type", target: { tag: "input" }, value: "{{dataset}}" },
-      { type: "type", target: { tag: "input" }, value: "{{dataset}}" }, // dup ⇒ once
     ] as unknown as Step[];
-    expect(variablesFromSteps(steps)).toEqual([
-      { name: "baseUrl", kind: "url" },
-      { name: "password", kind: "secret" },
-      { name: "dataset", kind: "data" },
-    ]);
+    expect(variablesFromSteps(steps)).toEqual([{ name: "baseUrl", kind: "url" }]);
   });
 
-  it("returns no variables for a token-free recording", () => {
+  it("returns no variables when nothing uses {{baseUrl}}", () => {
     const steps = [
       { type: "navigate", url: "http://localhost/" },
       { type: "type", target: { tag: "input" }, value: "alice" },
@@ -339,97 +304,17 @@ describe("variablesFromSteps", () => {
   });
 });
 
-describe("variableNameFor", () => {
-  it("prefers id, then name, then a safe default; strips unsafe chars", () => {
-    expect(variableNameFor({ id: "dataset" })).toBe("dataset");
-    expect(variableNameFor({ name: "account" })).toBe("account");
-    expect(variableNameFor({})).toBe("value");
-    expect(variableNameFor({ id: "a b!c" })).toBe("abc");
-  });
-});
-
-describe("selectorDependsOnVariable", () => {
-  const vars = [{ name: "dataset", value: "Q3 sales" }];
-
-  it("fires when a fingerprint's visible text equals a variable value", () => {
-    expect(selectorDependsOnVariable({ tag: "h1", text: "Q3 sales" }, vars)).toEqual({
-      signal: "text",
-      value: "Q3 sales",
-      variable: "dataset",
-    });
-    expect(
-      selectorDependsOnVariable({ tag: "button", accessibleName: "Q3 sales" }, vars),
-    ).toEqual({ signal: "accessibleName", value: "Q3 sales", variable: "dataset" });
-  });
-
-  it("stays quiet for structural-only fingerprints or non-matching text", () => {
-    expect(
-      selectorDependsOnVariable({ tag: "div", testId: "hero", attributes: { id: "hero" } }, vars),
-    ).toBeNull();
-    expect(selectorDependsOnVariable({ tag: "h1", text: "Welcome" }, vars)).toBeNull();
-    expect(selectorDependsOnVariable({ tag: "h1", text: "" }, [{ name: "x", value: "" }])).toBeNull();
-  });
-});
-
-describe("applySelectorRemedy", () => {
-  const fp: Fingerprint = { tag: "h1", text: "Q3 sales", testId: "title" };
-  const hit = { signal: "text", value: "Q3 sales", variable: "dataset" } as const;
-
-  it("bind replaces the offending signal with the variable token", () => {
-    expect(applySelectorRemedy(fp, "bind", hit)).toEqual({
-      tag: "h1",
-      text: "{{dataset}}",
-      testId: "title",
-    });
-  });
-
-  it("structural drops the visible-text signals, keeping structural ones", () => {
-    const out = applySelectorRemedy({ ...fp, accessibleName: "Q3 sales" }, "structural", hit);
-    expect(out).toEqual({ tag: "h1", testId: "title" });
-    expect(out.text).toBeUndefined();
-    expect(out.accessibleName).toBeUndefined();
-  });
-});
-
 // Slice 1 — the shared step-building core, exercised directly in Node (no browser).
-// These pin the factory rules and the human↔agent parity guarantee (ADR 0001).
 describe("shared core — step factories", () => {
   const fp: Fingerprint = { tag: "input", attributes: { id: "q" } };
-  const valueOf = (s: ReturnType<typeof buildType>) => (s as { value: string }).value;
 
   it("buildClick wraps a fingerprint into a click step", () => {
     expect(buildClick(fp)).toEqual({ type: "click", target: fp });
   });
 
-  it("buildType always tokenizes a password field as a secret (live value never recorded)", () => {
-    expect(buildType(fp, { type: "password", id: "pw", value: "hunter2" })).toEqual({
-      type: "type",
-      target: fp,
-      value: "{{secret:pw}}",
-    });
-    expect(valueOf(buildType(fp, { type: "password", value: "hunter2" }))).toBe("{{secret:password}}");
-    // A declared kind can't downgrade a password field away from secret.
-    expect(valueOf(buildType(fp, { type: "password", id: "pw", value: "x" }, { kind: "static" }))).toBe(
-      "{{secret:pw}}",
-    );
-  });
-
-  it("buildType honors the agent's declared kind, defaulting to a literal", () => {
-    // Declared variable promotes a value that would otherwise stay a literal.
-    expect(valueOf(buildType(fp, { id: "account", value: "alice" }, { kind: "variable" }))).toBe(
-      "{{account}}",
-    );
-    // Declared static keeps a data-shaped value literal (same as the default).
-    expect(valueOf(buildType(fp, { id: "account", value: "Q3 sales" }, { kind: "static" }))).toBe(
-      "Q3 sales",
-    );
-    // Declared secret on a non-password field tokenizes as a secret.
-    expect(valueOf(buildType(fp, { id: "token", value: "abc" }, { kind: "secret" }))).toBe(
-      "{{secret:token}}",
-    );
-    // No declared kind ⇒ default static ⇒ literal, whatever the value shape.
-    expect(valueOf(buildType(fp, { id: "account", value: "Q3 sales" }))).toBe("Q3 sales");
-    expect(valueOf(buildType(fp, { id: "account", value: "alice" }))).toBe("alice");
+  it("buildType records the value literally — no variables/secrets, even a password", () => {
+    expect(buildType(fp, "Q3 sales report")).toEqual({ type: "type", target: fp, value: "Q3 sales report" });
+    expect(buildType(fp, "hunter2")).toEqual({ type: "type", target: fp, value: "hunter2" });
   });
 
   it("buildEntryNavigate strips volatile auth params and parameterizes the origin", () => {
@@ -442,15 +327,11 @@ describe("shared core — step factories", () => {
 describe("createRecording accumulator", () => {
   const fp: Fingerprint = { tag: "button", role: "button", accessibleName: "Save" };
 
-  it("accumulates steps, derives variables, and counts steps + checkpoints", () => {
+  it("accumulates steps, derives baseUrl, and counts steps + checkpoints", () => {
     const rec = createRecording();
     rec.push(buildEntryNavigate("https://app.example.com/", "https://app.example.com"));
-    // Explicit `kind: "variable"` — typed values are literals by default now (DESIGN §2), so a
-    // data variable is opt-in; this exercises variable derivation from the resulting token.
-    rec.push(
-      buildType({ tag: "input", attributes: { id: "u" } }, { id: "username", value: "Q3 sales" }, { kind: "variable" }),
-    );
-    rec.push(buildType({ tag: "input" }, { type: "password", id: "password", value: "hunter2" }));
+    rec.push(buildType({ tag: "input", attributes: { id: "u" } }, "Q3 sales"));
+    rec.push(buildType({ tag: "input" }, "hunter2"));
     rec.push(buildClick(fp));
     rec.checkpoint("after-login", { mode: "fullpage" });
 
@@ -459,13 +340,10 @@ describe("createRecording accumulator", () => {
 
     const def = rec.getDefinition("login flow", { width: 800, height: 600, deviceScaleFactor: 1 });
     expect(() => parseTestDefinition(def)).not.toThrow();
-    expect(def.variables).toEqual(
-      expect.arrayContaining([
-        { name: "baseUrl", kind: "url" },
-        { name: "username", kind: "data" },
-        { name: "password", kind: "secret" },
-      ]),
-    );
+    // Only baseUrl is a variable; typed values stay literal (no secret/variable tokens).
+    expect(def.variables).toEqual([{ name: "baseUrl", kind: "url" }]);
+    const typed = def.steps.filter((s) => s.type === "type") as Array<{ value: string }>;
+    expect(typed.map((s) => s.value)).toEqual(["Q3 sales", "hunter2"]);
   });
 
   it("shapes element / region / fullpage checkpoints and keeps masks only when present", () => {
@@ -497,19 +375,11 @@ describe("createRecording accumulator", () => {
 });
 
 describe("human <-> agent parity", () => {
-  // The divergence guarantee: the same (fingerprint, field) inputs produce identical steps
-  // whichever driver supplies them — because both call the same factories (ADR 0001).
-  it("the agent driver and the human driver build identical steps from equivalent inputs", () => {
+  // The divergence guarantee: the same (fingerprint, value) inputs produce identical steps
+  // whichever driver supplies them — because both call the same factory (ADR 0001).
+  it("both drivers build identical type steps from the same fingerprint + value", () => {
     const fp: Fingerprint = { tag: "input", attributes: { id: "password" } };
-    // Human driver reads { type, id, name, value } off the live <input>.
-    const human = buildType(
-      fp,
-      { type: "password", id: "password", name: "password", value: "hunter2" },
-      { classify: classifyTypedValue },
-    );
-    // Agent driver supplies the same field bits (captured via page.evaluate).
-    const agent = buildType(fp, { type: "password", id: "password", name: "password", value: "hunter2" });
-    expect(agent).toEqual(human);
-    expect((human as { value: string }).value).toBe("{{secret:password}}");
+    expect(buildType(fp, "hunter2")).toEqual(buildType(fp, "hunter2"));
+    expect((buildType(fp, "hunter2") as { value: string }).value).toBe("hunter2");
   });
 });

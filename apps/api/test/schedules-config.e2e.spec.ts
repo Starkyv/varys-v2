@@ -98,7 +98,7 @@ describe("Test schedules — config", () => {
     const id = await mkTest("staged");
     const env = await authed(app)
       .post("/environments")
-      .send({ name: "staging", values: { baseUrl: "http://staging.local" } })
+      .send({ name: "staging", baseUrl: "http://staging.local" })
       .expect(201);
     const envId = env.body.id as string;
 

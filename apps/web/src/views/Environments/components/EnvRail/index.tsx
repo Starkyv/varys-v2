@@ -38,7 +38,7 @@ export function EnvRail({
               <span className={styles.text}>
                 <span className={styles.name}>{e.name}</span>
                 <span className={styles.meta}>
-                  {Object.keys(e.values).length} vars · {e.secretNames.length} secrets
+                  {e.baseUrl || "no base URL"} · {e.cookies.length} cookie{e.cookies.length === 1 ? "" : "s"}
                 </span>
               </span>
             </button>

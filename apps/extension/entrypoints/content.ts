@@ -1,12 +1,5 @@
 import { captureFingerprint } from "@varys/capture";
-import {
-  applySelectorRemedy,
-  classifyTypedValue,
-  isWeakFingerprint,
-  type OnStep,
-  selectorDependsOnVariable,
-  variableNameFor,
-} from "@varys/recorder";
+import { isWeakFingerprint, type OnStep } from "@varys/recorder";
 import { type RecordedSession, startRecorder } from "@varys/recorder/dom";
 
 type CaptureMode = "element" | "region" | "fullpage";
@@ -38,20 +31,12 @@ export default defineContentScript({
     let totalSteps = 0;
     let screenshots = 0;
 
-    // Last non-password typed value + how it was classified, for the one-tap confirm.
-    let lastTyped: { el: HTMLInputElement; raw: string; kind: "variable" | "static" } | null = null;
-    // Variable name → the value the author entered for it, so the selector guard can
-    // spot a later locator that leans on that (environment-specific) text.
-    const knownVars = new Map<string, string>();
-    let guardBanner: HTMLElement | null = null;
-
     let host: HTMLElement | null = null;
     let wrapEl: HTMLElement;
     let panelEl: HTMLElement;
     let statusEl: HTMLElement;
     let authEl: HTMLElement | undefined;
     let authLabelEl: HTMLElement | undefined;
-    let confirmEl: HTMLElement;
     let startBtn: HTMLButtonElement;
     let recLabelEl: HTMLElement;
     let shotBtn: HTMLButtonElement;
@@ -110,123 +95,19 @@ export default defineContentScript({
     };
 
     const beginPageRecording = () => {
-      // The recorder owns step capture; the classifier (heuristic by default) decides
-      // whether a typed value is tokenized. A parallel passive listener stashes the
-      // last typed value so the overlay can offer a one-tap Variable/Static flip.
-      session = startRecorder(
-        captureFingerprint,
-        document,
-        (e) => busy || isOverlay(e),
-        shipStep,
-        classifyTypedValue,
-      );
-      document.addEventListener("change", onTypedForConfirm, true);
+      // The recorder owns step capture; every typed value is recorded literally.
+      session = startRecorder(captureFingerprint, document, (e) => busy || isOverlay(e), shipStep);
     };
 
-    // --- one-tap Variable/Static confirm ---------------------------------------
+    /** Commit an element checkpoint from the picked element + its masks. */
+    const commitElementCheckpoint = (name: string, el: Element, masks: Box[]) => {
+      session?.checkpoint(name, { el, masks });
+    };
+
     const escapeHtml = (s: string) =>
       s.replace(/[&<>"]/g, (c) =>
         c === "&" ? "&amp;" : c === "<" ? "&lt;" : c === ">" ? "&gt;" : "&quot;",
       );
-
-    const onTypedForConfirm = (e: Event) => {
-      if (busy || isOverlay(e)) return;
-      const el = e.target as HTMLInputElement | null;
-      if (!el || el.type === "password") return; // passwords are always secrets
-      const kind = classifyTypedValue(el.value);
-      lastTyped = { el, raw: el.value, kind };
-      // Remember values recorded as variables, so the selector guard can match them.
-      if (kind === "variable") knownVars.set(variableNameFor(el), el.value);
-      renderConfirm();
-    };
-
-    /** Flip the most-recent typed value between Variable and Static, then ask the
-     *  background to rewrite that `type` step (variables are re-derived on save). */
-    const flipTyped = (kind: "variable" | "static") => {
-      if (!lastTyped) return;
-      const name = variableNameFor(lastTyped.el);
-      const value = kind === "variable" ? `{{${name}}}` : lastTyped.raw;
-      const step = { type: "type" as const, target: captureFingerprint(lastTyped.el), value };
-      void browser.runtime.sendMessage({ type: "varys:replace-last-type", step }).catch(() => {});
-      if (kind === "variable") knownVars.set(name, lastTyped.raw);
-      else knownVars.delete(name);
-      lastTyped = { ...lastTyped, kind };
-      renderConfirm();
-    };
-
-    const renderConfirm = () => {
-      if (!confirmEl) return;
-      if (!recording || !lastTyped) {
-        confirmEl.innerHTML = "";
-        return;
-      }
-      const shown = lastTyped.raw.length > 24 ? `${lastTyped.raw.slice(0, 24)}…` : lastTyped.raw;
-      confirmEl.innerHTML =
-        `<span class="clabel">“${escapeHtml(shown)}” →</span>` +
-        `<button class="cbtn cvar" aria-pressed="${lastTyped.kind === "variable"}">Variable</button>` +
-        `<button class="cbtn cstat" aria-pressed="${lastTyped.kind === "static"}">Static</button>`;
-      (confirmEl.querySelector(".cvar") as HTMLElement).addEventListener("click", () =>
-        flipTyped("variable"),
-      );
-      (confirmEl.querySelector(".cstat") as HTMLElement).addEventListener("click", () =>
-        flipTyped("static"),
-      );
-    };
-
-    // --- selector guard (locators that lean on environment-specific text) ------
-    /** Commit an element checkpoint, first guarding against a locator whose visible
-     *  text matches a recorded variable value (it would break in another environment).
-     *  On a hit, offer bind / structural / keep before committing the (remedied) target. */
-    const commitElementCheckpoint = (name: string, el: Element, masks: Box[]) => {
-      if (!session) return;
-      const fp = captureFingerprint(el);
-      const hit = knownVars.size
-        ? selectorDependsOnVariable(
-            fp,
-            [...knownVars].map(([n, value]) => ({ name: n, value })),
-          )
-        : null;
-      if (!hit) {
-        session.checkpoint(name, { el, masks });
-        return;
-      }
-      showSelectorGuard(hit, (remedy) => {
-        const target = remedy === "keep" ? fp : applySelectorRemedy(fp, remedy, hit);
-        session?.checkpoint(name, { el, masks, target });
-      });
-    };
-
-    const showSelectorGuard = (
-      hit: { signal: string; value: string; variable: string },
-      choose: (remedy: "bind" | "structural" | "keep") => void,
-    ) => {
-      guardBanner?.remove();
-      guardBanner = document.createElement("div");
-      guardBanner.style.cssText = BANNER_CARD;
-      guardBanner.innerHTML =
-        `<span style="display:inline-flex;align-items:center;gap:7px;color:#454B58;">` +
-        `<span style="display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:6px;background:#FEF3DA;color:#B5710F;flex:none;">⚠</span>` +
-        `Locator leans on the text “${escapeHtml(hit.value)}”, which varies by environment.</span>` +
-        `<button class="g-bind" style="${BTN_PRIMARY}">Bind to {{${escapeHtml(hit.variable)}}}</button>` +
-        `<button class="g-struct" style="${BTN_SECONDARY}">Use structural locator</button>` +
-        `<button class="g-keep" style="${BTN_GHOST}">Keep as-is</button>`;
-      const finish = (remedy: "bind" | "structural" | "keep") => {
-        guardBanner?.remove();
-        guardBanner = null;
-        choose(remedy);
-        render();
-      };
-      (guardBanner.querySelector(".g-bind") as HTMLElement).addEventListener("click", () =>
-        finish("bind"),
-      );
-      (guardBanner.querySelector(".g-struct") as HTMLElement).addEventListener("click", () =>
-        finish("structural"),
-      );
-      (guardBanner.querySelector(".g-keep") as HTMLElement).addEventListener("click", () =>
-        finish("keep"),
-      );
-      document.documentElement.appendChild(guardBanner);
-    };
 
     // --- element picking --------------------------------------------------------
     // A modern, minimalist hover highlight: a floating rounded violet outline that
@@ -590,8 +471,6 @@ export default defineContentScript({
     const start = async () => {
       screenshots = 0;
       totalSteps = 0;
-      lastTyped = null;
-      knownVars.clear();
       // Clear the background's store first, then begin capturing — so the initial
       // navigate step (shipped by beginPageRecording) lands after the reset.
       await browser.runtime.sendMessage({
@@ -612,11 +491,6 @@ export default defineContentScript({
     const stop = () => {
       session?.stop();
       session = null;
-      document.removeEventListener("change", onTypedForConfirm, true);
-      lastTyped = null;
-      knownVars.clear();
-      guardBanner?.remove();
-      guardBanner = null;
       stopBusy();
       recording = false;
       void browser.runtime.sendMessage({ type: "varys:stop" }).catch(() => {});
@@ -629,15 +503,10 @@ export default defineContentScript({
     const discard = () => {
       session?.stop();
       session = null;
-      document.removeEventListener("change", onTypedForConfirm, true);
       stopBusy();
-      guardBanner?.remove();
-      guardBanner = null;
       recording = false;
       totalSteps = 0;
       screenshots = 0;
-      lastTyped = null;
-      knownVars.clear();
       void browser.runtime.sendMessage({ type: "varys:clear" }).catch(() => {});
     };
 
@@ -721,7 +590,6 @@ export default defineContentScript({
             : screenshots > 0
               ? `${screenshots} captured`
               : "Idle";
-      renderConfirm();
     };
 
     const mount = () => {
@@ -820,16 +688,6 @@ export default defineContentScript({
           .bar.is-recording .rec-icon { width: 9px; height: 9px; border-radius: 2px; }
           .bar.is-recording .dot { background: #F0445E; animation: varysPulse 1.4s ease-out infinite; }
 
-          /* Per-capture locator confirm popover */
-          .confirm { position: absolute; top: 100%; left: 16px; margin-top: 9px; display: inline-flex; align-items: center;
-                     gap: 7px; background: #fff; border: 1px solid #E7EAEF; border-radius: 10px; padding: 7px 11px;
-                     box-shadow: 0 6px 18px rgba(16,24,40,0.12); font-size: 12px; max-width: 460px; }
-          .confirm:empty { display: none; }
-          .clabel { color: #454B58; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-          .cbtn { border: 1px solid #E7EAEF; background: #fff; border-radius: 7px; padding: 4px 10px; font: inherit;
-                  font-size: 12px; cursor: pointer; color: #454B58; }
-          .cbtn[aria-pressed="true"] { background: #5347CE; color: #fff; border-color: #5347CE; }
-
           /* Toast */
           .toast { position: absolute; top: 100%; right: 16px; margin-top: 9px; display: none; align-items: center; gap: 7px;
                    background: #101322; color: #fff; font-size: 12px; font-weight: 500; padding: 7px 12px; border-radius: 9px;
@@ -866,7 +724,6 @@ export default defineContentScript({
             <div class="sep tight"></div>
             <button class="close" title="Hide">×</button>
           </div>
-          <div class="confirm"></div>
           <div class="toast"><span class="toast-dot"></span><span class="toast-msg"></span></div>
         </div>`;
       document.documentElement.appendChild(host);
@@ -877,7 +734,6 @@ export default defineContentScript({
       statusEl = shadow.querySelector(".status") as HTMLElement;
       authEl = shadow.querySelector(".auth") as HTMLElement;
       authLabelEl = shadow.querySelector(".auth-label") as HTMLElement;
-      confirmEl = shadow.querySelector(".confirm") as HTMLElement;
       startBtn = shadow.querySelector(".start") as HTMLButtonElement;
       recLabelEl = shadow.querySelector(".rec-label") as HTMLElement;
       shotBtn = shadow.querySelector(".shot") as HTMLButtonElement;

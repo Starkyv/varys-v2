@@ -53,16 +53,14 @@ export class LocatorVerifyService {
     // The candidate is the saved fingerprint with the unsaved edit merged in.
     const candidate = applyFingerprintPatch(baseFp, req.target);
 
-    // Resolve the environment (for {{token}} resolution + cookies + localStorage); env-less
-    // when omitted.
+    // Resolve the environment (for {{baseUrl}} + cookies + localStorage); env-less when omitted.
     let profile: EnvironmentProfile | null = null;
     let cookies: EnvCookie[] = [];
     let localStorage: EnvLocalStorageItem[] = [];
     if (req.environmentId) {
       const [env] = await this.db
         .select({
-          values: environments.values,
-          secrets: environments.secrets,
+          baseUrl: environments.baseUrl,
           cookies: environments.cookies,
           localStorage: environments.localStorage,
         })
@@ -70,10 +68,7 @@ export class LocatorVerifyService {
         .where(eq(environments.id, req.environmentId))
         .limit(1);
       if (!env) throw new NotFoundException(`Environment ${req.environmentId} not found`);
-      profile = {
-        values: (env.values ?? {}) as Record<string, string>,
-        secrets: (env.secrets ?? {}) as Record<string, string>,
-      };
+      profile = { baseUrl: env.baseUrl ?? "" };
       cookies = (env.cookies ?? []) as EnvCookie[];
       localStorage = (env.localStorage ?? []) as EnvLocalStorageItem[];
     }

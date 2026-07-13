@@ -1,5 +1,5 @@
 import type { EnvCookie, EnvLocalStorageItem, EnvironmentView } from "@varys/review-contract";
-import { Button, Database, Input, Lock, Trash } from "@varys/ui";
+import { Button, Database, Input, Trash } from "@varys/ui";
 import { useState } from "react";
 import { useConfirm } from "../../../../context/confirm";
 import { useToast } from "../../../../context/toast";
@@ -13,13 +13,9 @@ export function EnvEditor({ env, onDeleted }: { env: EnvironmentView; onDeleted:
   const confirm = useConfirm();
 
   const [name, setName] = useState(env.name);
-  const [values, setValues] = useState<Record<string, string>>({ ...env.values });
+  const [baseUrl, setBaseUrl] = useState(env.baseUrl ?? "");
   const [cookies, setCookies] = useState<EnvCookie[]>(env.cookies ?? []);
   const [localItems, setLocalItems] = useState<EnvLocalStorageItem[]>(env.localStorage ?? []);
-  const [newVarKey, setNewVarKey] = useState("");
-  const [newVarVal, setNewVarVal] = useState("");
-  const [newSecretName, setNewSecretName] = useState("");
-  const [newSecretVal, setNewSecretVal] = useState("");
   const [newCookieName, setNewCookieName] = useState("");
   const [newCookieVal, setNewCookieVal] = useState("");
   const [newCookieDomain, setNewCookieDomain] = useState("");
@@ -31,7 +27,7 @@ export function EnvEditor({ env, onDeleted }: { env: EnvironmentView; onDeleted:
 
   function save() {
     update.mutate(
-      { id: env.id, body: { name: name.trim() || env.name, values, cookies, localStorage: localItems } },
+      { id: env.id, body: { name: name.trim() || env.name, baseUrl: baseUrl.trim(), cookies, localStorage: localItems } },
       { onSuccess: () => toast("Environment saved"), onError },
     );
   }
@@ -74,45 +70,6 @@ export function EnvEditor({ env, onDeleted }: { env: EnvironmentView; onDeleted:
     setLocalItems((items) => items.filter((it) => it.key !== itemKey));
   }
 
-  function addVariable() {
-    const key = newVarKey.trim();
-    if (!key) return;
-    setValues((v) => ({ ...v, [key]: newVarVal }));
-    setNewVarKey("");
-    setNewVarVal("");
-  }
-
-  function removeVariable(key: string) {
-    setValues((v) => {
-      const next = { ...v };
-      delete next[key];
-      return next;
-    });
-  }
-
-  function addSecret() {
-    const secretName = newSecretName.trim();
-    if (!secretName) return;
-    update.mutate(
-      { id: env.id, body: { secrets: { [secretName]: newSecretVal } } },
-      {
-        onSuccess: () => {
-          toast(`Secret ${secretName} added (write-only)`);
-          setNewSecretName("");
-          setNewSecretVal("");
-        },
-        onError,
-      },
-    );
-  }
-
-  function removeSecret(secretName: string) {
-    update.mutate(
-      { id: env.id, body: { removeSecrets: [secretName] } },
-      { onSuccess: () => toast(`Removed secret ${secretName}`), onError },
-    );
-  }
-
   async function onDelete() {
     const ok = await confirm({
       title: `Delete environment “${env.name}”?`,
@@ -149,60 +106,22 @@ export function EnvEditor({ env, onDeleted }: { env: EnvironmentView; onDeleted:
       </header>
 
       <div className={styles.body}>
-        <div className={styles.sectionTitle}>Variables</div>
+        <div className={styles.sectionTitle}>Base URL</div>
         <div className={styles.rows}>
-          {Object.entries(values).map(([key, value]) => (
-            <div key={key} className={styles.varRow}>
-              <span className={styles.varKey}>{key}</span>
-              <Input mono inputSize="sm" value={value} onChange={(e) => setValues((v) => ({ ...v, [key]: e.target.value }))} aria-label={key} />
-              <button type="button" className={styles.remove} aria-label={`Remove ${key}`} onClick={() => removeVariable(key)}>
-                <Trash size={14} />
-              </button>
-            </div>
-          ))}
-          {Object.keys(values).length === 0 && <div className={styles.none}>No variables yet.</div>}
+          <Input
+            mono
+            inputSize="sm"
+            value={baseUrl}
+            placeholder="https://staging.example.com"
+            aria-label="Base URL"
+            onChange={(e) => setBaseUrl(e.target.value)}
+          />
         </div>
-        <div className={styles.addRow}>
-          <input className={styles.addKey} placeholder="variable" value={newVarKey} onChange={(e) => setNewVarKey(e.target.value)} />
-          <input className={styles.addVal} placeholder="value" value={newVarVal} onChange={(e) => setNewVarVal(e.target.value)} />
-          <Button variant="secondary" size="sm" onClick={addVariable} disabled={!newVarKey.trim()}>
-            Add
-          </Button>
-        </div>
-
-        <div className={styles.secretsHead}>
-          <span className={styles.sectionTitle}>Secrets</span>
-          <span className={styles.secretsHint}>
-            <Lock size={12} />
-            write-only · values never shown
-          </span>
-        </div>
-        <div className={styles.rows}>
-          {env.secretNames.map((secretName) => (
-            <div key={secretName} className={styles.secretRow}>
-              <span className={styles.secretIcon}>
-                <Lock size={15} />
-              </span>
-              <span className={styles.secretName}>{secretName}</span>
-              <span className={styles.secretMask}>••••••••</span>
-              <button type="button" className={styles.remove} aria-label={`Remove ${secretName}`} onClick={() => removeSecret(secretName)}>
-                <Trash size={15} />
-              </button>
-            </div>
-          ))}
-          {env.secretNames.length === 0 && <div className={styles.none}>No secrets yet.</div>}
-        </div>
-        <div className={styles.addRow}>
-          <input className={styles.addKey} placeholder="SECRET_NAME" value={newSecretName} onChange={(e) => setNewSecretName(e.target.value)} />
-          <input className={styles.addVal} type="password" placeholder="value" value={newSecretVal} onChange={(e) => setNewSecretVal(e.target.value)} />
-          <Button variant="secondary" size="sm" onClick={addSecret} disabled={!newSecretName.trim()} loading={update.isPending}>
-            Add secret
-          </Button>
-        </div>
+        <p className={styles.cookieNote}>Substituted for {"{{baseUrl}}"} in the test's steps when running against this environment.</p>
 
         <div className={styles.secretsHead}>
           <span className={styles.sectionTitle}>Cookies</span>
-          <span className={styles.secretsHint}>set before each run · value supports {"{{secret:NAME}}"}</span>
+          <span className={styles.secretsHint}>set before each run</span>
         </div>
         <div className={styles.rows}>
           {cookies.map((c) => (
@@ -213,7 +132,7 @@ export function EnvEditor({ env, onDeleted }: { env: EnvironmentView; onDeleted:
                 mono
                 inputSize="sm"
                 value={c.value}
-                placeholder="value or {{secret:NAME}}"
+                placeholder="value"
                 onChange={(e) => patchCookie(c.name, { value: e.target.value })}
                 aria-label={`${c.name} value`}
               />
@@ -235,7 +154,7 @@ export function EnvEditor({ env, onDeleted }: { env: EnvironmentView; onDeleted:
         </div>
         <div className={styles.addRow}>
           <input className={styles.addKey} placeholder="cookie name" value={newCookieName} onChange={(e) => setNewCookieName(e.target.value)} />
-          <input className={styles.addVal} placeholder="value or {{secret:NAME}}" value={newCookieVal} onChange={(e) => setNewCookieVal(e.target.value)} />
+          <input className={styles.addVal} placeholder="value" value={newCookieVal} onChange={(e) => setNewCookieVal(e.target.value)} />
           <input className={styles.addVal} placeholder="domain (optional)" value={newCookieDomain} onChange={(e) => setNewCookieDomain(e.target.value)} />
           <Button variant="secondary" size="sm" onClick={addCookie} disabled={!newCookieName.trim()}>
             Add cookie
@@ -244,7 +163,7 @@ export function EnvEditor({ env, onDeleted }: { env: EnvironmentView; onDeleted:
 
         <div className={styles.secretsHead}>
           <span className={styles.sectionTitle}>Local storage</span>
-          <span className={styles.secretsHint}>set before each run · value supports {"{{secret:NAME}}"}</span>
+          <span className={styles.secretsHint}>set before each run</span>
         </div>
         <div className={styles.rows}>
           {localItems.map((it) => (
@@ -255,7 +174,7 @@ export function EnvEditor({ env, onDeleted }: { env: EnvironmentView; onDeleted:
                 mono
                 inputSize="sm"
                 value={it.value}
-                placeholder="value or {{secret:NAME}}"
+                placeholder="value"
                 onChange={(e) => patchLocalItem(it.key, { value: e.target.value })}
                 aria-label={`${it.key} value`}
               />
@@ -277,13 +196,13 @@ export function EnvEditor({ env, onDeleted }: { env: EnvironmentView; onDeleted:
         </div>
         <div className={styles.addRow}>
           <input className={styles.addKey} placeholder="key" value={newLocalKey} onChange={(e) => setNewLocalKey(e.target.value)} />
-          <input className={styles.addVal} placeholder="value or {{secret:NAME}}" value={newLocalVal} onChange={(e) => setNewLocalVal(e.target.value)} />
+          <input className={styles.addVal} placeholder="value" value={newLocalVal} onChange={(e) => setNewLocalVal(e.target.value)} />
           <input className={styles.addVal} placeholder="origin (optional)" value={newLocalOrigin} onChange={(e) => setNewLocalOrigin(e.target.value)} />
           <Button variant="secondary" size="sm" onClick={addLocalItem} disabled={!newLocalKey.trim()}>
             Add entry
           </Button>
         </div>
-        <p className={styles.cookieNote}>Cookies &amp; local storage are saved with the environment — click Save to apply.</p>
+        <p className={styles.cookieNote}>Base URL, cookies &amp; local storage are saved with the environment — click Save to apply.</p>
       </div>
     </div>
   );

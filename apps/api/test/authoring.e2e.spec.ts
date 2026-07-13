@@ -98,7 +98,7 @@ describe("Authoring → MCP → Draft", () => {
     expect((tests.body as Array<{ id: string }>).find((t) => t.id === finished.testId)).toBeUndefined();
   });
 
-  it("records a login flow: fingerprinted click/type, tokenized password + {{username}} variable", async () => {
+  it("records a login flow: fingerprinted click/type with literal values, only {{baseUrl}} parameterized", async () => {
     fixture.setVariant("login");
     const opened = await callTool("open_session", {
       startUrl: fixture.url,
@@ -117,16 +117,10 @@ describe("Authoring → MCP → Draft", () => {
     expect(passwordRef).toBeTruthy();
     expect(submitRef).toBeTruthy();
 
-    // Claude declares the username as a variable; the password field auto-tokenizes.
-    await callTool("type", {
-      sessionId: sid,
-      ref: usernameRef,
-      value: "Q3 sales report",
-      kind: "variable",
-      name: "username",
-    });
+    // Typed values are recorded literally — no variables/secrets, even for a password field.
+    await callTool("type", { sessionId: sid, ref: usernameRef, value: "Q3 sales report" });
     const typed = await callTool("type", { sessionId: sid, ref: passwordRef, value: "hunter2" });
-    expect(typed.recorded.value).toBe("{{secret:password}}"); // the literal never persists
+    expect(typed.recorded.value).toBe("hunter2"); // stored literally
     await callTool("click", { sessionId: sid, ref: submitRef });
 
     // A full-page checkpoint — the visual assertion. With one present, finish doesn't warn.
@@ -146,20 +140,15 @@ describe("Authoring → MCP → Draft", () => {
     expect(def.steps[0].type).toBe("navigate");
     expect(def.steps[0].url?.startsWith("{{baseUrl}}")).toBe(true);
     const typeValues = def.steps.filter((s) => s.type === "type").map((s) => s.value);
-    expect(typeValues).toContain("{{username}}");
-    expect(typeValues).toContain("{{secret:password}}");
-    expect(typeValues).not.toContain("hunter2");
+    // Typed values are literal — no tokens.
+    expect(typeValues).toContain("Q3 sales report");
+    expect(typeValues).toContain("hunter2");
     expect(def.steps.some((s) => s.type === "click")).toBe(true);
     // The checkpoint persisted as a full-page screenshot step.
     const shot = def.steps.find((s) => s.type === "screenshot");
     expect(shot).toMatchObject({ name: "welcome", captureMode: "fullpage" });
-    expect(def.variables).toEqual(
-      expect.arrayContaining([
-        { name: "baseUrl", kind: "url" },
-        { name: "username", kind: "data" },
-        { name: "password", kind: "secret" },
-      ]),
-    );
+    // Only the entry URL's origin is parameterized.
+    expect(def.variables).toEqual([{ name: "baseUrl", kind: "url" }]);
     // (The authoring preview captured at the "welcome" checkpoint is asserted via the
     // read-model in drafts.e2e — those reads are auth-guarded, so they live there with the
     // service-level setup rather than behind a live browser session here.)

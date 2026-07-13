@@ -27,7 +27,7 @@ export class EnvironmentsController {
     return this.environments.getById(id);
   }
 
-  // Body: { name?, values? (full replace), secrets? (set map), removeSecrets? (clear) }.
+  // Body: { name?, baseUrl?, cookies? (full replace), localStorage? (full replace) }.
   @Put(":id")
   update(@Param("id") id: string, @Body() body: UpdateEnvironmentInput) {
     return this.environments.update(id, body ?? {});

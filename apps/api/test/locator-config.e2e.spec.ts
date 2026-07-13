@@ -83,9 +83,8 @@ describe("Locator editor — config", () => {
     expect(steps[4].target).toMatchObject({ tag: "button", accessibleName: "Lonely" });
 
     // The config read-model also drives the verify control's environment requirement
-    // (Slice 16.3b): this fixture uses a literal URL + no tokens, so no environment is needed.
+    // (Slice 16.3b): this fixture uses a literal URL + no {{baseUrl}}, so no environment is needed.
     expect(cfg.body.needsEnvironment).toBe(false);
-    expect(cfg.body.variables).toEqual([]);
   });
 
   it("merges edited signals into a new version, preserving the rest; clearing drops just that signal", async () => {

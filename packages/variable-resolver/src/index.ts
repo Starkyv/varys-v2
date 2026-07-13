@@ -1,26 +1,18 @@
 import type { Fingerprint, Step, TestDefinition, Wait } from "@varys/step-schema";
 
 /**
- * Per-environment values. `secrets` are kept apart from `values` so callers can
- * redact them; both are resolved into steps only transiently inside the worker
- * and are never persisted.
+ * The environment a run resolves against — just the base URL. There are no variables or
+ * secrets anymore: `{{baseUrl}}` is the only token, and everything else in a test is a literal.
  */
 export interface EnvironmentProfile {
-  values: Record<string, string>;
-  secrets: Record<string, string>;
+  baseUrl: string;
 }
 
-const TOKEN = /\{\{\s*(secret:)?([\w.-]+)\s*\}\}/g;
+const BASE_URL_TOKEN = /\{\{\s*baseUrl\s*\}\}/g;
 
-/** Substitute {{name}} (from values) and {{secret:name}} (from secrets). */
+/** Substitute the one remaining token, `{{baseUrl}}`; all other text is literal. */
 export function resolveString(input: string, profile: EnvironmentProfile): string {
-  return input.replace(TOKEN, (_match, isSecret: string | undefined, name: string) => {
-    const map = isSecret ? profile.secrets : profile.values;
-    if (!(name in map)) {
-      throw new Error(`unresolved ${isSecret ? "secret" : "variable"}: ${name}`);
-    }
-    return map[name];
-  });
+  return input.replace(BASE_URL_TOKEN, profile.baseUrl);
 }
 
 /** Resolve tokens in a fingerprint's visible-text signals (a selector-guard "bind"

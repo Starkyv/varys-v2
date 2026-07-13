@@ -3,8 +3,6 @@ import {
   buildClick,
   buildEntryNavigate,
   buildType,
-  classifyTypedValue,
-  type ClassifyTyped,
   createRecording,
   type OnStep,
 } from "./index";
@@ -58,7 +56,6 @@ export function startRecorder(
   doc: Document = document,
   ignore?: (e: Event) => boolean,
   onStep?: OnStep,
-  classifyTyped: ClassifyTyped = classifyTypedValue,
 ): RecordedSession {
   const rec = createRecording(onStep);
 
@@ -78,14 +75,8 @@ export function startRecorder(
     if (ignore?.(e)) return;
     const el = e.target as HTMLInputElement | null;
     if (!el) return;
-    // Same secret/variable policy as the agent path — funneled through the shared factory.
-    rec.push(
-      buildType(
-        capture(el),
-        { type: el.type, id: el.id, name: el.name, value: el.value },
-        { classify: classifyTyped },
-      ),
-    );
+    // Values are recorded literally (no variables/secrets) — funneled through the shared factory.
+    rec.push(buildType(capture(el), el.value));
   };
 
   doc.addEventListener("click", onClick, true);

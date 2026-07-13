@@ -2,15 +2,11 @@ import { randomUUID } from "node:crypto";
 import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { captureFingerprint } from "@varys/capture";
 import {
-  applySelectorRemedy,
   buildClick,
   buildEntryNavigate,
   buildType,
   createRecording,
-  type KnownVariable,
   type Recording,
-  selectorDependsOnVariable,
-  type TypedKind,
 } from "@varys/recorder";
 import type { Fingerprint, Rect, Step, Viewport, Wait } from "@varys/step-schema";
 import type {
@@ -63,8 +59,6 @@ export interface ActionResult {
   ok: true;
   /** A terse record of what was appended to the test, for Claude's confirmation. */
   recorded: { type: Step["type"]; value?: string; checkpoint?: string };
-  /** Set when the selector guard fired and a remedy was applied to the locator. */
-  guard?: string;
   /** Fresh perception after the action, so Claude can decide the next step. */
   snapshot: SnapshotResult;
 }
@@ -95,8 +89,6 @@ interface SessionState {
   mode: AuthoringMode;
   /** Waits requested since the last recorded step — drained onto the next step's waitBefore. */
   pendingWaits: Wait[];
-  /** Variables typed so far (name → authoring-time value) — the selector guard's reference. */
-  knownVariables: KnownVariable[];
   /** Reference screenshots captured at each checkpoint (name → PNG) — the promote-view
    *  previews, persisted on finish. A Map so a re-checkpointed name keeps the latest. */
   previews: Map<string, Buffer>;
@@ -285,7 +277,6 @@ export class AuthoringSessionService {
       intent: input.intent?.trim() || null,
       mode,
       pendingWaits: [],
-      knownVariables: [],
       previews: new Map(),
       frameSeq: 0,
     });
@@ -307,7 +298,6 @@ export class AuthoringSessionService {
   async click(
     sessionId: string,
     target: { ref?: string; text?: string },
-    opts?: { remedy?: "bind" | "structural" },
   ): Promise<ActionResult> {
     const s = this.require(sessionId);
     const locator = this.resolveTarget(s.page, target);
@@ -315,11 +305,10 @@ export class AuthoringSessionService {
     await locator.click({ timeout: 10_000 });
     await s.page.waitForLoadState("domcontentloaded", { timeout: 3000 }).catch(() => undefined);
 
-    const guard = this.applyGuard(s, fpRaw, opts?.remedy);
-    const step = this.withWaits(s, buildClick(guard?.fp ?? fpRaw));
+    const step = this.withWaits(s, buildClick(fpRaw));
     s.rec.push(step);
     await this.emitFrame(sessionId, { type: "click" });
-    return { ok: true, recorded: { type: "click" }, guard: guard?.note, snapshot: await this.snapshot(s, false) };
+    return { ok: true, recorded: { type: "click" }, snapshot: await this.snapshot(s, false) };
   }
 
   /** Hover a target (by ref or text) to reveal hover-only affordances (dropdown menus,
@@ -358,40 +347,19 @@ export class AuthoringSessionService {
     return { ok: true, recorded: { type: "navigate" }, snapshot: await this.snapshot(s, false) };
   }
 
-  /** Type a value into a field by ref. The password→secret and variable/static policy is the
-   *  shared `buildType` (Claude's declared `kind` wins, heuristic otherwise). The live value
-   *  is filled to drive the app; the recorded step is tokenized — a password never persists. */
-  async type(
-    sessionId: string,
-    ref: string,
-    value: string,
-    opts?: { kind?: TypedKind; name?: string; remedy?: "bind" | "structural" },
-  ): Promise<ActionResult> {
+  /** Type a value into a field by ref. The value is recorded literally — no variables/secrets. */
+  async type(sessionId: string, ref: string, value: string): Promise<ActionResult> {
     const s = this.require(sessionId);
     const locator = this.resolveRef(s.page, ref);
     const fpRaw = await this.captureFp(s.page, locator, false);
-    const field = await locator
-      .evaluate((node) => {
-        const el = node as HTMLInputElement;
-        return { type: el.type, id: el.id, name: el.name };
-      })
-      .catch(() => ({ type: undefined as string | undefined, id: "", name: "" }));
     await locator.fill(value, { timeout: 10_000 });
 
-    const guard = this.applyGuard(s, fpRaw, opts?.remedy);
-    const built = buildType(
-      guard?.fp ?? fpRaw,
-      { type: field.type, id: opts?.name || field.id, name: field.name, value },
-      { kind: opts?.kind },
-    );
-    const step = this.withWaits(s, built);
+    const step = this.withWaits(s, buildType(fpRaw, value));
     s.rec.push(step);
-    this.trackVariable(s, step, value);
     await this.emitFrame(sessionId, { type: "type" });
     return {
       ok: true,
       recorded: { type: "type", value: step.type === "type" ? step.value : undefined },
-      guard: guard?.note,
       snapshot: await this.snapshot(s, false),
     };
   }
@@ -590,29 +558,6 @@ export class AuthoringSessionService {
     const waits = s.pendingWaits;
     s.pendingWaits = [];
     return { ...step, waitBefore: [...(step.waitBefore ?? []), ...waits] } as Step;
-  }
-
-  /** Selector guard: if the locator leans on env-specific visible text (matching a typed
-   *  variable's value), apply Claude's remedy (default `structural`) so it stays portable. */
-  private applyGuard(
-    s: SessionState,
-    fp: Fingerprint,
-    remedy?: "bind" | "structural",
-  ): { fp: Fingerprint; note: string } | undefined {
-    const hit = selectorDependsOnVariable(fp, s.knownVariables);
-    if (!hit) return undefined;
-    const chosen = remedy ?? "structural";
-    return {
-      fp: applySelectorRemedy(fp, chosen, hit),
-      note: `locator depended on env-specific ${hit.signal} "${hit.value}" (variable {{${hit.variable}}}); applied ${chosen} remedy`,
-    };
-  }
-
-  /** Record a typed data variable's authoring-time value, for the selector guard. */
-  private trackVariable(s: SessionState, step: Step, original: string): void {
-    if (step.type !== "type") return;
-    const m = /^\{\{([\w.-]+)\}\}$/.exec(step.value);
-    if (m && m[1] !== "baseUrl") s.knownVariables.push({ name: m[1], value: original });
   }
 
   /** Resolve an action target — a snapshot `ref` (preferred) or, as a fallback, visible

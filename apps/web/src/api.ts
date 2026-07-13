@@ -494,8 +494,7 @@ export async function fetchEnvironments(): Promise<EnvironmentView[]> {
 
 export interface CreateEnvironmentBody {
   name: string;
-  values?: Record<string, string>;
-  secrets?: Record<string, string>;
+  baseUrl?: string;
   cookies?: EnvCookie[];
   localStorage?: EnvLocalStorageItem[];
 }
@@ -513,13 +512,11 @@ export async function createEnvironment(body: CreateEnvironmentBody): Promise<{ 
   return (await res.json()) as { id: string };
 }
 
-/** Update body: `values` REPLACES the whole map; secrets are a write-only delta
- *  (`secrets` sets, `removeSecrets` clears). Omitted fields are left untouched. */
+/** Update body: any present field replaces the current value; omitted fields are left
+ *  untouched. An environment is just a run target (base URL + cookies + localStorage). */
 export interface UpdateEnvironmentBody {
   name?: string;
-  values?: Record<string, string>;
-  secrets?: Record<string, string>;
-  removeSecrets?: string[];
+  baseUrl?: string;
   /** Full-list replace of the env's pre-run cookies. */
   cookies?: EnvCookie[];
   /** Full-list replace of the env's pre-run localStorage entries. */

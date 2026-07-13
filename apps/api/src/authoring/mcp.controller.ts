@@ -223,20 +223,14 @@ export class McpController {
             sessionId: { type: "string" },
             ref: { type: "string", description: "An element ref from a snapshot (e.g. e7)." },
             text: { type: "string", description: "Fallback: visible text to locate the element when it has no ref." },
-            remedy: {
-              type: "string",
-              enum: ["bind", "structural"],
-              description: "If the locator depends on env-specific visible text, how to fix it (default: structural).",
-            },
           },
           required: ["sessionId"],
         },
         handler: (args) =>
-          a.click(
-            String(args.sessionId ?? ""),
-            { ref: args.ref ? String(args.ref) : undefined, text: args.text ? String(args.text) : undefined },
-            { remedy: args.remedy === "bind" || args.remedy === "structural" ? args.remedy : undefined },
-          ),
+          a.click(String(args.sessionId ?? ""), {
+            ref: args.ref ? String(args.ref) : undefined,
+            text: args.text ? String(args.text) : undefined,
+          }),
       },
       {
         name: "hover",
@@ -274,26 +268,18 @@ export class McpController {
       {
         name: "type",
         description:
-          "Type a value into the field with the given ref. Declare `kind`: 'variable' (env-specific data → tokenized as {{name}}), 'static' (a fixed UI value, kept literal), or 'secret' (→ {{secret:name}}). A password field is ALWAYS recorded as a secret regardless. Omit kind to use a heuristic. The live value drives the app; the recorded value is tokenized.",
+          "Type a value into the field with the given ref. The value is recorded literally (there are no variables or secrets — everything is a literal on the test). Only the entry URL's origin is parameterized, as {{baseUrl}}.",
         inputSchema: {
           type: "object",
           properties: {
             sessionId: { type: "string" },
             ref: { type: "string" },
-            value: { type: "string", description: "The value to type (the live value; a password is never persisted)." },
-            kind: { type: "string", enum: ["variable", "static", "secret"] },
-            name: { type: "string", description: "Variable/secret name to use when tokenizing (defaults to the field id/name)." },
-            remedy: { type: "string", enum: ["bind", "structural"] },
+            value: { type: "string", description: "The value to type (recorded literally)." },
           },
           required: ["sessionId", "ref", "value"],
         },
         handler: (args) =>
-          a.type(String(args.sessionId ?? ""), String(args.ref ?? ""), String(args.value ?? ""), {
-            kind:
-              args.kind === "variable" || args.kind === "static" || args.kind === "secret" ? args.kind : undefined,
-            name: args.name ? String(args.name) : undefined,
-            remedy: args.remedy === "bind" || args.remedy === "structural" ? args.remedy : undefined,
-          }),
+          a.type(String(args.sessionId ?? ""), String(args.ref ?? ""), String(args.value ?? "")),
       },
       {
         name: "wait",

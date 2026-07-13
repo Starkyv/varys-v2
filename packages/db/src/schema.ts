@@ -229,13 +229,13 @@ export const baselines = pgTable("baselines", {
 export const environments = pgTable("environments", {
   id: uuid("id").defaultRandom().primaryKey(),
   name: text("name").notNull(),
-  values: jsonb("values").notNull().default({}),
-  secrets: jsonb("secrets").notNull().default({}),
+  /** The base URL the test's `{{baseUrl}}` resolves to for this environment. */
+  baseUrl: text("base_url").notNull().default(""),
   /** Cookies seeded onto the browser context before each run against this env
-   *  (array of { name, value, domain?, path? }). Values may carry `{{secret:NAME}}`. */
+   *  (array of { name, value, domain?, path? }). */
   cookies: jsonb("cookies").notNull().default([]),
   /** localStorage entries seeded into the browser before each run against this env
-   *  (array of { key, value, origin? }). Values may carry `{{secret:NAME}}`. */
+   *  (array of { key, value, origin? }). */
   localStorage: jsonb("local_storage").notNull().default([]),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -444,14 +444,19 @@ CREATE TABLE IF NOT EXISTS baselines (
 CREATE TABLE IF NOT EXISTS environments (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   name text NOT NULL,
-  values jsonb NOT NULL DEFAULT '{}'::jsonb,
-  secrets jsonb NOT NULL DEFAULT '{}'::jsonb,
+  base_url text NOT NULL DEFAULT '',
   created_at timestamptz NOT NULL DEFAULT now()
 );
 -- Bring an existing environments table (created before cookies) up to date.
 ALTER TABLE environments ADD COLUMN IF NOT EXISTS cookies jsonb NOT NULL DEFAULT '[]'::jsonb;
 -- Bring an existing environments table (created before localStorage) up to date.
 ALTER TABLE environments ADD COLUMN IF NOT EXISTS local_storage jsonb NOT NULL DEFAULT '[]'::jsonb;
+-- Slim env model: base_url is now a first-class field (was values->>'baseUrl'); variables +
+-- secrets are gone (everything else is a literal on the test).
+ALTER TABLE environments ADD COLUMN IF NOT EXISTS base_url text NOT NULL DEFAULT '';
+UPDATE environments SET base_url = COALESCE(values->>'baseUrl', '') WHERE base_url = '' AND values ? 'baseUrl';
+ALTER TABLE environments DROP COLUMN IF EXISTS values;
+ALTER TABLE environments DROP COLUMN IF EXISTS secrets;
 -- Per-checkpoint authoring preview screenshots (Slice 14 — Claude/MCP authoring).
 CREATE TABLE IF NOT EXISTS draft_previews (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
