@@ -763,10 +763,6 @@ export class RunsService {
     if (!ctx) {
       throw new NotFoundException(`Checkpoint ${checkpointName} not found for run ${runId}`);
     }
-    const { baseline, actual } = await this.loadDiffInputs(
-      ctx.baselineArtifactKey,
-      ctx.actualArtifactKey,
-    );
 
     // 1. New audited test_version with the updated masks/threshold on this step.
     const def = await this.latestDefinition(ctx.testId);
@@ -793,8 +789,19 @@ export class RunsService {
       createdBy,
     });
 
-    // 2. Re-judge ONLY this run_result against the stored artifacts.
     const threshold = input.threshold ?? ctx.threshold;
+
+    // 2. Re-judge ONLY when there's a baseline to diff against. A pending-baseline checkpoint
+    //    has nothing to compare yet — the saved masks live on the new test version and apply
+    //    once its first capture is approved as baseline and on future runs (the review reads
+    //    masks from the latest test version, so they show up immediately).
+    if (!ctx.baselineArtifactKey || !ctx.actualArtifactKey) {
+      return { reviewState: "pending-baseline", diffScore: 0, threshold, version: nextVersion };
+    }
+    const { baseline, actual } = await this.loadDiffInputs(
+      ctx.baselineArtifactKey,
+      ctx.actualArtifactKey,
+    );
     const { perPixel } = await this.settings.getImageComparison();
     const { verdict, score, diffImage } = diffPng(baseline, actual, threshold, masks, perPixel);
     if (verdict === "match") {

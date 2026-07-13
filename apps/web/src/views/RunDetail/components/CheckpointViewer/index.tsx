@@ -16,6 +16,7 @@ import { DecisionBar } from "../DecisionBar";
 import { DiffStage, type DiffMode } from "../DiffStage";
 import { LocatorDetail } from "../LocatorDetail";
 import { MaskTuning } from "../MaskTuning";
+import { PendingMaskEditor } from "../PendingMaskEditor";
 import styles from "./styles.module.scss";
 
 const CAPTURE_LABEL: Record<CaptureMode, string> = {
@@ -106,6 +107,12 @@ export function CheckpointViewer({
             </span>
           )}
         </div>
+
+        {isPending && (
+          // First capture — no baseline to diff yet, so edit the ignore regions directly on the
+          // capture that's about to become the baseline (draw / move / resize; saves a version).
+          <PendingMaskEditor checkpoint={cp} runId={runId} />
+        )}
 
         {hasBaseline &&
           (cp.diffUrl ? (

@@ -1,0 +1,31 @@
+.editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+  padding-top: var(--space-16);
+  border-top: 1px solid var(--color-border);
+}
+
+.head {
+  display: flex;
+  gap: var(--space-8);
+  align-items: flex-start;
+}
+
+.headIcon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  color: var(--color-text-muted);
+  margin-top: 1px;
+}
+
+.headText {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  line-height: var(--line-height-snug);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+}
