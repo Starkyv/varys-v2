@@ -110,6 +110,19 @@
   height: 280px;
 }
 
+/* Fallback when the diff view has nothing to show yet (e.g. re-eval errored) — a labelled
+ * placeholder instead of a blank canvas. */
+.diffEmpty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 280px;
+  padding: var(--space-24);
+  text-align: center;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-subtle);
+}
+
 .controls {
   display: grid;
   grid-template-columns: 1fr 1fr;

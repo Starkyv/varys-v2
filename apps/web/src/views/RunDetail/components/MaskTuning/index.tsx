@@ -75,6 +75,14 @@ export function MaskTuning({ checkpoint: cp, runId }: { checkpoint: CheckpointVi
     setThreshold(t);
     reevaluate(masks, t);
   };
+  // Switching to "Masked diff" must actually SHOW a diff. A passing checkpoint has no stored diff
+  // (cp.diffUrl is null) and no preview has been computed yet, so the canvas would be blank —
+  // compute one on demand when flipping to it. A failing checkpoint already has cp.diffUrl (or a
+  // prior re-eval), so there's nothing to fetch and we skip the extra call.
+  const selectView = (v: View) => {
+    setView(v);
+    if (v === "diff" && !diffSrc && !reEval.isPending) reevaluate(masks, threshold);
+  };
 
   // Keep the anchor point under the cursor/centre fixed as the canvas rescales.
   useLayoutEffect(() => {
@@ -157,7 +165,7 @@ export function MaskTuning({ checkpoint: cp, runId }: { checkpoint: CheckpointVi
 
       {/* Toolbar: what you're looking at · how an empty drag behaves · zoom */}
       <div className={styles.toolbar}>
-        <SegmentedControl ariaLabel="Canvas view" size="sm" options={viewOptions} value={view} onValueChange={setView} />
+        <SegmentedControl ariaLabel="Canvas view" size="sm" options={viewOptions} value={view} onValueChange={selectView} />
         {view === "capture" && (
           <SegmentedControl ariaLabel="Pointer mode" size="sm" options={modeOptions} value={mode} onValueChange={setMode} />
         )}
@@ -204,8 +212,12 @@ export function MaskTuning({ checkpoint: cp, runId }: { checkpoint: CheckpointVi
                   }}
                 />
               )
-            : diffSrc && (
+            : reEval.isPending && !diffSrc ? (
+                <Skeleton className={styles.shimmer} radius="0" />
+              ) : diffSrc ? (
                 <img className={styles.img} src={diffSrc} alt="masked diff preview" decoding="async" draggable={false} />
+              ) : (
+                <div className={styles.diffEmpty}>Draw a mask or move the threshold to preview the masked diff.</div>
               )}
           {view === "capture" && cp.actualUrl && !imgReady && <Skeleton className={styles.shimmer} radius="0" />}
 
