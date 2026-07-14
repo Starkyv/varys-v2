@@ -1,4 +1,5 @@
 import {
+  type AnyPgColumn,
   boolean,
   doublePrecision,
   integer,
@@ -11,11 +12,16 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 
-/** A flat folder — each test's one browsable home (DESIGN §5; no nesting for MVP).
- *  Organization metadata only: never part of the versioned definition. */
+/** A folder — each test's one browsable home (DESIGN §5). Folders nest via `parentId`
+ *  (null = a root folder); names are unique among siblings. Deleting a folder deletes its whole
+ *  subtree of folders (ON DELETE CASCADE), but the TESTS in them are only unfiled, never deleted
+ *  (tests.folder_id is SET NULL). Organization metadata only: never part of the versioned
+ *  definition. */
 export const folders = pgTable("folders", {
   id: uuid("id").defaultRandom().primaryKey(),
-  name: text("name").notNull().unique(),
+  name: text("name").notNull(),
+  /** Parent folder, or null for a root folder. Self-FK; ON DELETE CASCADE removes the subtree. */
+  parentId: uuid("parent_id").references((): AnyPgColumn => folders.id, { onDelete: "cascade" }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -334,9 +340,18 @@ CREATE TABLE IF NOT EXISTS tests (
 );
 CREATE TABLE IF NOT EXISTS folders (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  name text NOT NULL UNIQUE,
+  name text NOT NULL,
+  parent_id uuid REFERENCES folders(id) ON DELETE CASCADE,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+-- Nested folders: parent_id (null = root). Deleting a folder cascades to its subtree of folders;
+-- the tests within are unfiled (tests.folder_id SET NULL), never deleted. Names are unique among
+-- SIBLINGS, not globally — drop the old global unique, add a per-parent unique index (nil-uuid
+-- stands in for the null parent so root folders are unique among roots).
+ALTER TABLE folders ADD COLUMN IF NOT EXISTS parent_id uuid REFERENCES folders(id) ON DELETE CASCADE;
+ALTER TABLE folders DROP CONSTRAINT IF EXISTS folders_name_key;
+CREATE UNIQUE INDEX IF NOT EXISTS folders_parent_name_uniq
+  ON folders (COALESCE(parent_id, '00000000-0000-0000-0000-000000000000'::uuid), name);
 -- Bring an existing tests table up to date; folder deletion unfiles via SET NULL.
 ALTER TABLE tests ADD COLUMN IF NOT EXISTS folder_id uuid REFERENCES folders(id) ON DELETE SET NULL;
 -- Draft lifecycle (Slice 14 — Claude/MCP authoring): existing rows default to an
@@ -451,10 +466,20 @@ CREATE TABLE IF NOT EXISTS environments (
 ALTER TABLE environments ADD COLUMN IF NOT EXISTS cookies jsonb NOT NULL DEFAULT '[]'::jsonb;
 -- Bring an existing environments table (created before localStorage) up to date.
 ALTER TABLE environments ADD COLUMN IF NOT EXISTS local_storage jsonb NOT NULL DEFAULT '[]'::jsonb;
--- Slim env model: base_url is now a first-class field (was values->>'baseUrl'); variables +
--- secrets are gone (everything else is a literal on the test).
+-- Slim env model: base_url is now a first-class field (was values->>baseUrl); variables +
+-- secrets are gone (everything else is a literal on the test). Backfill runs ONLY while the old
+-- values column still exists, so this stays idempotent on a fresh or already-migrated DB.
 ALTER TABLE environments ADD COLUMN IF NOT EXISTS base_url text NOT NULL DEFAULT '';
-UPDATE environments SET base_url = COALESCE(values->>'baseUrl', '') WHERE base_url = '' AND values ? 'baseUrl';
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'environments' AND column_name = 'values'
+  ) THEN
+    UPDATE environments SET base_url = COALESCE(values->>'baseUrl', '')
+      WHERE base_url = '' AND values ? 'baseUrl';
+  END IF;
+END $$;
 ALTER TABLE environments DROP COLUMN IF EXISTS values;
 ALTER TABLE environments DROP COLUMN IF EXISTS secrets;
 -- Per-checkpoint authoring preview screenshots (Slice 14 — Claude/MCP authoring).

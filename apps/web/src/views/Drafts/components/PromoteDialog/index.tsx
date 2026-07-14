@@ -12,6 +12,7 @@ import {
 import { useEffect, useId, useState } from "react";
 import { ZoomableImage } from "../../../../components/ZoomableImage";
 import { useToast } from "../../../../context/toast";
+import { folderPathOptions } from "../../../../lib/folders";
 import { useDraft, useFolders, usePromoteDraft } from "../../../../queries";
 import styles from "./styles.module.scss";
 
@@ -45,10 +46,7 @@ export function PromoteDialog({
     }
   }, [open]);
 
-  const folderOptions = [
-    { label: "Unfiled", value: "" },
-    ...(folders.data ?? []).map((f) => ({ label: f.name, value: f.id })),
-  ];
+  const folderOptions = [{ label: "Unfiled", value: "" }, ...folderPathOptions(folders.data ?? [])];
 
   const onPromote = () => {
     if (!draft) return;

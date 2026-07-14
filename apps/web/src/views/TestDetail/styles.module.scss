@@ -524,6 +524,29 @@
   color: var(--color-danger);
 }
 
+/* --- typed value (type steps) --- */
+.valueRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  padding: var(--space-10) var(--space-12);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-subtle);
+  color: var(--color-text-subtle);
+}
+
+.valueLabel {
+  flex: 0 0 auto;
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+  font-weight: var(--font-weight-medium);
+}
+
+.valueInput {
+  flex: 1;
+  min-width: 0;
+}
+
 /* --- threshold --- */
 .thresholdRow {
   display: flex;

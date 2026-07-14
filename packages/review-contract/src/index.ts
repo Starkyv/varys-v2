@@ -186,6 +186,9 @@ export interface TestConfigStep {
   /** Screenshot-only: the explicit per-checkpoint threshold, or null when it inherits
    *  the runner default (shown as a placeholder in the editor). */
   threshold: number | null;
+  /** Type-only: the literal value typed into the field (editable on Test Detail). Null for
+   *  non-type steps. */
+  value: string | null;
   /** The step's element locator, surfaced as editable signals — present for click, type,
    *  and element-mode screenshot steps; null for navigate and full-page / region
    *  screenshots (which have no element target). Edited via `TestConfigStepPatch.target`. */
@@ -280,6 +283,8 @@ export interface TestConfigStepPatch {
   threshold?: number;
   /** Screenshot-only: replace this checkpoint's diff-ignore mask regions (full list). */
   masks?: Rect[];
+  /** Type-only: set the literal value typed into the field. */
+  value?: string;
   /** Edit the step's element locator signals (click / type / element-mode screenshot).
    *  Merged onto the existing fingerprint; other signals are preserved. */
   target?: FingerprintPatch;
@@ -544,11 +549,13 @@ export interface McpStatus {
   lastSeenAt: number | null;
 }
 
-/** A flat folder — each test's one browsable home (DESIGN §5). */
+/** A folder — each test's one browsable home (DESIGN §5). Folders nest via `parentId`. */
 export interface FolderSummary {
   id: string;
   name: string;
-  /** How many tests currently live in this folder. */
+  /** Parent folder id, or null for a root folder. */
+  parentId: string | null;
+  /** How many tests live DIRECTLY in this folder (not counting subfolders). */
   testCount: number;
 }
 

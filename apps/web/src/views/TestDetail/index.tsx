@@ -261,6 +261,16 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
     setMasksByIndex((prev) => ({ ...prev, [index]: next }));
   }
 
+  // Per-step typed value (type steps only), seeded from the read-model — an editable literal.
+  const initialValues: Record<number, string> = {};
+  for (const s of config.steps) {
+    if (s.type === "type") initialValues[s.index] = s.value ?? "";
+  }
+  const [typedValues, setTypedValues] = useState<Record<number, string>>(initialValues);
+  function setTypedValue(index: number, v: string) {
+    setTypedValues((prev) => ({ ...prev, [index]: v }));
+  }
+
   // Per-step editable locator signals, seeded from the read-model. Only steps with an
   // element target (click / type / element-mode screenshot) get an entry.
   const initialTargets: Record<number, LocatorDraft> = {};
@@ -442,6 +452,10 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
         s.type === "screenshot" &&
         JSON.stringify(masksByIndex[s.index] ?? []) !== JSON.stringify(initialMasksByIndex[s.index] ?? []);
 
+      // Typed value (type steps only): send when the literal actually changed.
+      const valueChanged =
+        s.type === "type" && (typedValues[s.index] ?? "") !== (initialValues[s.index] ?? "");
+
       // Locator: send only the signals that actually changed ("" = clear that signal).
       let targetPatch: FingerprintPatch | undefined;
       const td = targets[s.index];
@@ -454,11 +468,12 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
         if (Object.keys(fp).length > 0) targetPatch = fp;
       }
 
-      if (!waitsChanged && !thresholdChanged && !masksChanged && !targetPatch) return;
+      if (!waitsChanged && !thresholdChanged && !masksChanged && !valueChanged && !targetPatch) return;
       const p: TestConfigStepPatch = { index: s.index };
       if (waitsChanged) p.waitBefore = stepWaits[i];
       if (thresholdChanged) p.threshold = Number(cur);
       if (masksChanged) p.masks = masksByIndex[s.index] ?? [];
+      if (valueChanged) p.value = typedValues[s.index] ?? "";
       if (targetPatch) p.target = targetPatch;
       steps.push(p);
     });
@@ -801,6 +816,21 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
                         />
                       ) : (
                         <div className={styles.stepNote}>Navigation settles on network idle automatically.</div>
+                      )}
+
+                      {s.type === "type" && (
+                        <div className={styles.valueRow}>
+                          <Pencil size={13} />
+                          <span className={styles.valueLabel}>Value</span>
+                          <Input
+                            inputSize="sm"
+                            value={typedValues[s.index] ?? ""}
+                            placeholder="(empty)"
+                            aria-label={`Typed value for step ${i + 1}`}
+                            className={styles.valueInput}
+                            onChange={(e) => setTypedValue(s.index, e.target.value)}
+                          />
+                        </div>
                       )}
 
                       {s.target && (

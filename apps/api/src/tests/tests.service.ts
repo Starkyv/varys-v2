@@ -665,6 +665,8 @@ export class TestsService {
         checkpointName: s.type === "screenshot" ? s.name : null,
         captureMode: s.type === "screenshot" ? (s.captureMode ?? "element") : null,
         threshold: s.type === "screenshot" ? (s.threshold ?? null) : null,
+        // Type-only: the literal value typed into the field (editable on Test Detail).
+        value: s.type === "type" ? s.value : null,
         // The editable locator — present for steps with an element target (click, type,
         // element-mode screenshot); null for navigate and full-page / region screenshots.
         target: "target" in s ? summarizeFingerprint(s.target) : null,
@@ -766,6 +768,10 @@ export class TestsService {
       }
       if (p.masks !== undefined && out.type === "screenshot") {
         out = { ...out, masks: p.masks };
+      }
+      // Type-only: set the literal value typed into the field.
+      if (p.value !== undefined && out.type === "type") {
+        out = { ...out, value: p.value };
       }
       // Locator edit: merge the signal patch onto the step's fingerprint. Only steps
       // that have an element target (click / type / element-mode screenshot) carry one.

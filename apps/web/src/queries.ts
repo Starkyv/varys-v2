@@ -40,6 +40,7 @@ import {
   fetchSuites,
   fetchTags,
   fetchTests,
+  moveFolder,
   persistCheckpointMasks,
   postDecision,
   promoteDraft,
@@ -469,11 +470,20 @@ export function useDeleteTest() {
   });
 }
 
-/** Create a folder, then refresh the folder list. */
+/** Create a folder (optionally nested under `parentId`), then refresh the folder list. */
 export function useCreateFolder() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (name: string) => createFolder(name),
+    mutationFn: (vars: { name: string; parentId?: string | null }) => createFolder(vars.name, vars.parentId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: foldersQueryKey() }),
+  });
+}
+
+/** Move a folder under a new parent (null = root), then refresh the folder list. */
+export function useMoveFolder() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { id: string; parentId: string | null }) => moveFolder(vars.id, vars.parentId),
     onSuccess: () => qc.invalidateQueries({ queryKey: foldersQueryKey() }),
   });
 }

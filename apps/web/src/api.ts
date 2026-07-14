@@ -349,19 +349,38 @@ export async function fetchFolders(): Promise<FolderSummary[]> {
   return (await res.json()) as FolderSummary[];
 }
 
-/** Create a folder. 409 (name taken) surfaces as an error. */
-export async function createFolder(name: string): Promise<{ id: string }> {
+/** Create a folder, optionally nested under `parentId`. 409 (name taken) surfaces as an error. */
+export async function createFolder(name: string, parentId?: string | null): Promise<{ id: string }> {
   const res = await fetch(`${API_BASE}/folders`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, parentId: parentId ?? null }),
   });
   if (!res.ok) {
     throw new Error(
-      res.status === 409 ? `A folder named “${name}” already exists` : `Failed to create folder (${res.status})`,
+      res.status === 409 ? `A folder named “${name}” already exists here` : `Failed to create folder (${res.status})`,
     );
   }
   return (await res.json()) as { id: string };
+}
+
+/** Move a folder under a new parent (null = root). 400 on a cycle, 409 on a name clash. */
+export async function moveFolder(id: string, parentId: string | null): Promise<void> {
+  const res = await fetch(`${API_BASE}/folders/${id}/move`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ parentId }),
+  });
+  if (!res.ok) {
+    let message = `Failed to move folder (${res.status})`;
+    try {
+      const body = (await res.json()) as { message?: string };
+      if (body?.message) message = body.message;
+    } catch {
+      /* non-JSON error body — keep the default */
+    }
+    throw new Error(message);
+  }
 }
 
 /** Rename a folder. 409 (name taken) surfaces as an error. */

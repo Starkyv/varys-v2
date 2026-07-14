@@ -5,6 +5,7 @@ import { useConfirm } from "../../../../context/confirm";
 import { useRouter } from "../../../../context/router";
 import { useToast } from "../../../../context/toast";
 import { useDeleteTest, useUpdateTest } from "../../../../queries";
+import { folderPathOptions } from "../../../../lib/folders";
 import { absoluteTime, formatActor, shortDate } from "../../../../lib/format";
 import styles from "./styles.module.scss";
 
@@ -55,7 +56,7 @@ export function TestRow({
               {test.name}
             </button>
             {test.needsEnvironment && (
-              <span className={styles.envBadge} title="References variables — needs an environment">
+              <span className={styles.envBadge} title="Uses {{baseUrl}} — pick an environment to run">
                 <Lock size={11} />
                 env
               </span>
@@ -182,7 +183,7 @@ function OrganizeEditor({
           selectSize="sm"
           value={folderId}
           onValueChange={setFolderId}
-          options={[{ value: "", label: "— Unfiled —" }, ...folders.map((f) => ({ value: f.id, label: f.name }))]}
+          options={[{ value: "", label: "— Unfiled —" }, ...folderPathOptions(folders)]}
         />
       </div>
       <div className={styles.tagEditor}>

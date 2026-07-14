@@ -25,10 +25,17 @@
   }
 }
 
+/* A quiet affordance: the drag handle stays out of the way until you reach for the row. */
 .grip {
   flex: 0 0 auto;
   display: inline-flex;
   color: var(--color-text-subtle);
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+
+  .row:hover & {
+    opacity: 0.5;
+  }
 }
 
 .main {
@@ -75,8 +82,8 @@
   height: 18px;
   padding: 0 var(--space-8);
   border-radius: var(--radius-full);
-  background: var(--color-info-soft);
-  color: var(--color-info-fg);
+  background: var(--color-bg-inset);
+  color: var(--color-text-subtle);
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-medium);
 }
