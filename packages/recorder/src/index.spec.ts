@@ -7,6 +7,7 @@ import type { Fingerprint } from "@varys/step-schema";
 import {
   buildClick,
   buildEntryNavigate,
+  buildHover,
   buildType,
   createRecording,
   isWeakFingerprint,
@@ -22,6 +23,7 @@ const INJECT = `
   ${variablesFromSteps.toString()}
   ${sanitizeEntryUrl.toString()}
   ${buildClick.toString()}
+  ${buildHover.toString()}
   ${buildType.toString()}
   ${buildEntryNavigate.toString()}
   ${createRecording.toString()}
@@ -31,7 +33,7 @@ const INJECT = `
   // vitest's SSR transform rewrites to \`__vite_ssr_import_0__.X\`. Those bindings don't
   // exist in the page, so shim the namespace to the injected globals. (In the real
   // extension build these imports are bundled — this is purely a unit-test artifact.)
-  var __vite_ssr_import_0__ = { buildClick, buildType, buildEntryNavigate, createRecording };
+  var __vite_ssr_import_0__ = { buildClick, buildHover, buildType, buildEntryNavigate, createRecording };
   window.__rec = startRecorder(captureFingerprint);
 `;
 
@@ -116,13 +118,141 @@ describe("recorder", () => {
     expect(steps[0].type).toBe("navigate");
     expect((steps[0] as { url: string }).url.startsWith("{{baseUrl}}")).toBe(true);
     expect(steps.some((s) => s.type === "type" && (s as { value: string }).value === "alice")).toBe(true);
+    // The recorder core records every typed value LITERALLY (no variables/secrets) — password
+    // handling lives in the extension layer, not here. (Was previously asserting a stale
+    // "{{secret:password}}" that predates the secrets removal.)
     expect(
-      steps.some((s) => s.type === "type" && (s as { value: string }).value === "{{secret:password}}"),
+      steps.some((s) => s.type === "type" && (s as { value: string }).value === "hunter2"),
     ).toBe(true);
     expect(steps.some((s) => s.type === "click")).toBe(true);
     expect(
       steps.some((s) => s.type === "screenshot" && (s as { name: string }).name === "app"),
     ).toBe(true);
+  });
+
+  it("records a hover step when a hover reveals a menu that is then clicked", async () => {
+    fixture.setVariant("hovermenu");
+    const page = await browser.newPage();
+    await page.goto(fixture.url);
+    await page.evaluate((src) => {
+      (0, eval)(src);
+    }, INJECT);
+
+    // Hover the trigger (reveals #flyout), then click the revealed item — a flow a click-only
+    // recorder would capture as a lone click that can't be replayed (the menu is closed at run).
+    await page.hover("#more");
+    await page.click("#explorer");
+
+    const def = (await page.evaluate(() =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).__rec.getDefinition("hover flow", {
+        width: 800,
+        height: 600,
+        deviceScaleFactor: 1,
+      }),
+    )) as TestDefinition;
+    await page.close();
+    fixture.setVariant("login"); // restore for the other tests
+
+    expect(() => parseTestDefinition(def)).not.toThrow();
+
+    // A hover on the trigger is recorded immediately before the click on the revealed item.
+    const hoverIdx = def.steps.findIndex((s) => s.type === "hover");
+    expect(hoverIdx).toBeGreaterThanOrEqual(0);
+    expect(def.steps[hoverIdx + 1]?.type).toBe("click");
+    // The hover targets the trigger; the click targets the revealed menu item.
+    expect((def.steps[hoverIdx] as { target: Fingerprint }).target.testId).toBe("more-trigger");
+    expect((def.steps[hoverIdx + 1] as { target: Fingerprint }).target.testId).toBe("fly-explorer");
+  });
+
+  it("does not record a hover for an ordinary click (no reveal)", async () => {
+    fixture.setVariant("login");
+    const page = await browser.newPage();
+    await page.goto(fixture.url);
+    await page.evaluate((src) => {
+      (0, eval)(src);
+    }, INJECT);
+
+    // Hovering + clicking a plain button that reveals nothing must NOT synthesize a hover step.
+    await page.hover("#submit");
+    await page.click("#submit");
+
+    const def = (await page.evaluate(() =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).__rec.getDefinition("plain click", {
+        width: 800,
+        height: 600,
+        deviceScaleFactor: 1,
+      }),
+    )) as TestDefinition;
+    await page.close();
+
+    expect(def.steps.some((s) => s.type === "hover")).toBe(false);
+  });
+
+  it("records a checkbox toggle as a single click, never an un-fillable type step", async () => {
+    fixture.setVariant("checkbox");
+    const page = await browser.newPage();
+    await page.goto(fixture.url);
+    await page.evaluate((src) => {
+      (0, eval)(src);
+    }, INJECT);
+
+    // Click the label (fires the label click + a synthetic click on the control + one change).
+    await page.click("#internal-label");
+
+    const def = (await page.evaluate(() =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).__rec.getDefinition("checkbox flow", {
+        width: 800,
+        height: 600,
+        deviceScaleFactor: 1,
+      }),
+    )) as TestDefinition;
+    await page.close();
+    fixture.setVariant("login"); // restore for the other tests
+
+    expect(() => parseTestDefinition(def)).not.toThrow();
+    // A checkbox can't be filled — there must be NO type step for it.
+    expect(def.steps.some((s) => s.type === "type")).toBe(false);
+    // Exactly ONE click step for the toggle (no double-record from the label's synthetic click),
+    // targeting the label (its visible text is the durable locator).
+    const clicks = def.steps.filter((s) => s.type === "click");
+    expect(clicks.length).toBe(1);
+    expect((clicks[0] as { target: Fingerprint }).target.testId).toBe("chk-internal-label");
+  });
+
+  it("captures a typed value even when the field never blurs (flushed into the definition)", async () => {
+    fixture.setVariant("checkbox");
+    const page = await browser.newPage();
+    await page.goto(fixture.url);
+    await page.evaluate((src) => {
+      (0, eval)(src);
+    }, INJECT);
+
+    // Type without ever blurring the field — no native `change` fires. (This is the popover
+    // case: the input would unmount on outside-click before it ever blurs.)
+    await page.locator("#also").pressSequentially("ttest");
+
+    // getDefinition is what "Save" calls — it must flush the in-progress value into a type step.
+    const def = (await page.evaluate(() =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).__rec.getDefinition("typing flow", {
+        width: 800,
+        height: 600,
+        deviceScaleFactor: 1,
+      }),
+    )) as TestDefinition;
+    await page.close();
+    fixture.setVariant("login"); // restore for the other tests
+
+    expect(() => parseTestDefinition(def)).not.toThrow();
+    const typed = def.steps.filter(
+      (s) => s.type === "type" && (s as { value: string }).value === "ttest",
+    );
+    // Exactly one type step for the field, with the final value — not one per keystroke.
+    expect(typed.length).toBe(1);
+    expect((typed[0] as { target: Fingerprint }).target.testId).toBe("also-input");
   });
 
   it("streams each step to onStep as it is recorded (for navigation-surviving capture)", async () => {

@@ -46,6 +46,17 @@ export function browserLaunchArgs(): string[] {
     .filter(Boolean);
 }
 
+/** How long an action step waits for its target to appear before failing. Content fetched AFTER
+ *  navigation (slow SPAs / remote backends) can render several seconds late — the matcher's old
+ *  5s poll gave up too early, so a real, soon-to-appear element read as "could not locate".
+ *  Playwright's own actionability wait is 30s; we default to a patient 15s, overridable with
+ *  `VARYS_ACTION_TIMEOUT_MS` (raise it for a slow backend). A `selector` waitBefore is still the
+ *  precise tool when a step needs to gate on a specific element. */
+export function actionResolveTimeoutMs(): number {
+  const n = Number(process.env.VARYS_ACTION_TIMEOUT_MS);
+  return Number.isFinite(n) && n > 0 ? n : 30_000;
+}
+
 export interface ReplayDeps {
   db: Db;
   storage: StorageAdapter;
@@ -107,7 +118,12 @@ export async function applyWaits(page: Page, waits: Wait[] | undefined): Promise
     if (w.kind === "delay") {
       await page.waitForTimeout(w.ms);
     } else if (w.kind === "networkIdle") {
-      await page.waitForLoadState("networkidle", { timeout: w.timeoutMs });
+      // Best-effort: a busy SPA (streaming lists, polling, lazy images) may NEVER reach network
+      // idle, so a hard failure here makes networkIdle a footgun — the wait would fail the step
+      // before the action's own locate/verify (the real gate) even runs. Settle up to the
+      // timeout, then proceed. (Mirrors the pre-screenshot settle below.) Prefer a `selector`
+      // wait when you need a hard gate on a specific element.
+      await page.waitForLoadState("networkidle", { timeout: w.timeoutMs }).catch(() => undefined);
     } else {
       await waitLocator(page, w.target).waitFor({
         state: w.state,
@@ -134,14 +150,16 @@ export async function performStepAction(
     await page.goto(step.url, { waitUntil: "networkidle" });
     return;
   }
-  if (step.type === "click" || step.type === "type") {
+  if (step.type === "click" || step.type === "type" || step.type === "hover") {
     await applyWaits(page, [...defaultWaits, ...(step.waitBefore ?? [])]);
     // A prior click may have triggered an in-flight navigation; settle the document before
     // resolving, or the fingerprint would miss against a half-loaded page. Cheap when loaded.
     await page.waitForLoadState("domcontentloaded").catch(() => undefined);
-    const target = await resolve(page, step.target);
+    // Patient resolve: the target may render a few seconds after navigation (slow SPA/backend).
+    const target = await resolve(page, step.target, { timeoutMs: actionResolveTimeoutMs() });
     if (!target) throw new Error(`could not locate ${step.type} target`);
     if (step.type === "type") await target.locator.fill(step.value);
+    else if (step.type === "hover") await target.locator.hover();
     else await target.locator.click();
   }
 }
@@ -376,9 +394,14 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
       // Resolve this step's tokens now — an unresolved {{token}} fails THIS step.
       const step = profile ? resolveStep(raw, profile) : raw;
 
-      // Action steps (navigate / click / type) go through the shared drive primitive so a
+      // Action steps (navigate / click / hover / type) go through the shared drive primitive so a
       // Run and the verify probe reach state identically. Screenshots fall through below.
-      if (step.type === "navigate" || step.type === "click" || step.type === "type") {
+      if (
+        step.type === "navigate" ||
+        step.type === "click" ||
+        step.type === "hover" ||
+        step.type === "type"
+      ) {
         await performStepAction(page, step, resolvedDefaultWaits);
         recordStep("passed");
         continue;
@@ -400,7 +423,7 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
         actual = await page.screenshot({ clip: step.rect });
       } else {
         if (!step.target) throw new Error(`element checkpoint "${step.name}" has no target`);
-        const found = await resolve(page, step.target);
+        const found = await resolve(page, step.target, { timeoutMs: actionResolveTimeoutMs() });
         if (found) {
           actual = await found.locator.screenshot();
           healed = found.healed;

@@ -51,6 +51,7 @@ export function resolveStep(step: Step, profile: EnvironmentProfile): Step {
         ...(step.waitBefore ? { waitBefore: resolveWaits(step.waitBefore, profile) } : {}),
       };
     case "click":
+    case "hover":
       return {
         ...step,
         target: resolveFingerprint(step.target, profile),

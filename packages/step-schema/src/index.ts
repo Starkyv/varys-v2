@@ -125,6 +125,15 @@ export const clickStep = z.object({
   waitBefore: z.array(wait).optional(),
 });
 
+/** A hover over an element — replayed as `locator.hover()`. Recorded when hovering a trigger
+ *  reveals content (a menu/flyout/tooltip) the user then interacts with; a subsequent click on
+ *  that revealed content would be unreachable at replay without first re-hovering the trigger. */
+export const hoverStep = z.object({
+  type: z.literal("hover"),
+  target: fingerprint,
+  waitBefore: z.array(wait).optional(),
+});
+
 export const typeStep = z.object({
   type: z.literal("type"),
   target: fingerprint,
@@ -135,6 +144,7 @@ export const typeStep = z.object({
 export const step = z.discriminatedUnion("type", [
   navigateStep,
   clickStep,
+  hoverStep,
   typeStep,
   screenshotStep,
 ]);
@@ -228,6 +238,8 @@ export function describeStep(step: Step): string {
       return `navigate to "${step.url}"`;
     case "click":
       return `click ${fingerprintLabel(step.target)}`;
+    case "hover":
+      return `hover ${fingerprintLabel(step.target)}`;
     case "type":
       return `type into ${fingerprintLabel(step.target)}`;
     case "screenshot":

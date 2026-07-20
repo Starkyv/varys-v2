@@ -172,7 +172,7 @@ export interface TestConfigStep {
   /** 0-based position in the definition's step list — the stable key the patch uses
    *  (steps can be removed via the patch, but never reordered or inserted). */
   index: number;
-  type: "navigate" | "click" | "type" | "screenshot";
+  type: "navigate" | "click" | "hover" | "type" | "screenshot";
   /** Human label (same `describeStep` vocabulary as the run timeline). */
   label: string;
   /** False for navigate (no `waitBefore` in the schema); true otherwise. */

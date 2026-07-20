@@ -8,7 +8,16 @@ import { createServer } from "node:http";
  * `setVariant` lets a test change what the same URL renders, so one test can
  * seed a baseline and then produce a visual diff on a later run.
  */
-export type Variant = "default" | "changed" | "login" | "deferred" | "stampA" | "stampB";
+export type Variant =
+  | "default"
+  | "changed"
+  | "login"
+  | "deferred"
+  | "stampA"
+  | "stampB"
+  | "hovermenu"
+  | "checkbox"
+  | "busy";
 
 function html(variant: Variant): string {
   // A stable hero with one volatile sub-region (#stamp, top-left) — stampA/stampB
@@ -65,6 +74,111 @@ function html(variant: Variant): string {
     <button id="submit" type="button" onclick="document.getElementById('app').textContent = 'Welcome'">Log in</button>
   </form>
   <div id="app"></div>
+</body>
+</html>`;
+  }
+
+  if (variant === "busy") {
+    // Never reaches network idle: a periodic fetch keeps the network perpetually active (like a
+    // streaming/polling SPA). Used to prove a `networkIdle` wait is best-effort — it settles up to
+    // its timeout, then the step proceeds to the (immediately present) button instead of failing.
+    return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Varys Fixture — Busy</title>
+<style>* { margin: 0; } body { background:#fff; font-family: Arial, sans-serif; padding: 24px; }</style>
+</head>
+<body>
+  <button id="go" type="button" data-testid="go">Go</button>
+  <div id="out"></div>
+  <script>
+    document.getElementById("go").addEventListener("click", function () {
+      document.getElementById("out").textContent = "clicked";
+    });
+    // Keep the network busy forever so 'networkidle' is never reached.
+    setInterval(function () { fetch("/ping?t=" + Date.now()).catch(function () {}); }, 200);
+  </script>
+</body>
+</html>`;
+  }
+
+  if (variant === "checkbox") {
+    // A <label>-wrapped checkbox (the common pattern) + a text input. Clicking the label fires
+    // the label click AND a synthetic click on the control, plus one `change` — exercising that
+    // the recorder emits exactly ONE click step for the toggle (never an un-fillable type step).
+    return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Varys Fixture — Checkbox</title>
+<style>
+  * { margin: 0; }
+  body { background: #ffffff; font-family: Arial, sans-serif; padding: 24px; }
+  label { display: flex; gap: 8px; align-items: center; margin: 8px 0; font-size: 16px; }
+  #out { margin-top: 16px; }
+</style>
+</head>
+<body>
+  <label id="internal-label" data-testid="chk-internal-label">
+    <input type="checkbox" id="internal" data-testid="chk-internal" />
+    <span>Exclude internal</span>
+  </label>
+  <input type="text" id="also" data-testid="also-input" placeholder="also exclude" />
+  <div id="out"></div>
+  <script>
+    document.getElementById("internal").addEventListener("change", function () {
+      document.getElementById("out").textContent = this.checked ? "excluded" : "included";
+    });
+  </script>
+</body>
+</html>`;
+  }
+
+  if (variant === "hovermenu") {
+    // A JS-driven flyout: hovering #more reveals an absolutely-positioned menu (a sibling, not a
+    // child of the trigger) containing a link the user clicks. Mirrors the real "hover a trigger →
+    // menu appears → click an item" pattern. The menu is only created on hover, so a replay that
+    // clicks the item WITHOUT first hovering #more can't find it — exactly what a recorded `hover`
+    // step fixes. Left open once revealed (no mouseleave teardown) so the flow is deterministic.
+    return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Varys Fixture — Hover menu</title>
+<style>
+  * { margin: 0; }
+  body { background: #ffffff; font-family: Arial, sans-serif; padding: 24px; }
+  #more { width: 64px; height: 32px; background: #334; color: #fff;
+    display: flex; align-items: center; justify-content: center; }
+  #flyout { position: absolute; left: 96px; top: 24px; background: #fff;
+    border: 1px solid #ccc; padding: 8px; }
+  #flyout button { display: block; font-size: 16px; }
+  #out { margin-top: 96px; }
+</style>
+</head>
+<body>
+  <button id="more" type="button" data-testid="more-trigger" aria-label="More">More</button>
+  <div id="out"></div>
+  <script>
+    var more = document.getElementById("more");
+    more.addEventListener("mouseenter", function () {
+      if (document.getElementById("flyout")) return;
+      var fly = document.createElement("div");
+      fly.id = "flyout";
+      fly.setAttribute("role", "menu");
+      var item = document.createElement("button");
+      item.id = "explorer";
+      item.type = "button";
+      item.setAttribute("data-testid", "fly-explorer");
+      item.textContent = "Explorer";
+      item.addEventListener("click", function () {
+        document.getElementById("out").textContent = "Explorer opened";
+      });
+      fly.appendChild(item);
+      document.body.appendChild(fly);
+    });
+  </script>
 </body>
 </html>`;
   }

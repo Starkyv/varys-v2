@@ -86,6 +86,12 @@ export function buildClick(target: Fingerprint): Step {
   return { type: "click", target };
 }
 
+/** A hover step from an already-captured fingerprint. Emitted (by both drivers) when a hover
+ *  reveals content the user then interacts with — so replay re-hovers the trigger first. */
+export function buildHover(target: Fingerprint): Step {
+  return { type: "hover", target };
+}
+
 /** A type step. The value is recorded literally — there are no variables or secrets, so even a
  *  password is stored as typed (everything is a literal on the test). */
 export function buildType(target: Fingerprint, value: string): Step {

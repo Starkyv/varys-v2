@@ -116,6 +116,7 @@ function splitWaits(waits: ConfigWait[]): { locked: LockedWait[]; editable: Edit
 const STEP_ICON: Record<TestConfigStep["type"], typeof Eye> = {
   navigate: ExternalLink,
   click: Activity,
+  hover: MousePointer,
   type: Pencil,
   screenshot: Eye,
 };
