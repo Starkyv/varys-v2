@@ -255,6 +255,37 @@ describe("recorder", () => {
     expect((typed[0] as { target: Fingerprint }).target.testId).toBe("also-input");
   });
 
+  it("captures typing into a contenteditable (rich-text / markdown) editor", async () => {
+    fixture.setVariant("editor");
+    const page = await browser.newPage();
+    await page.goto(fixture.url);
+    await page.evaluate((src) => {
+      (0, eval)(src);
+    }, INJECT);
+
+    // Rich-text editors are contenteditable divs, not <input>/<textarea>.
+    await page.locator("#editor").pressSequentially("hello world notes");
+
+    const def = (await page.evaluate(() =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).__rec.getDefinition("editor flow", {
+        width: 800,
+        height: 600,
+        deviceScaleFactor: 1,
+      }),
+    )) as TestDefinition;
+    await page.close();
+    fixture.setVariant("login"); // restore for the other tests
+
+    expect(() => parseTestDefinition(def)).not.toThrow();
+    const typed = def.steps.filter(
+      (s) => s.type === "type" && (s as { value: string }).value === "hello world notes",
+    );
+    // The contenteditable's content is recorded as a single type step targeting the editor host.
+    expect(typed.length).toBe(1);
+    expect((typed[0] as { target: Fingerprint }).target.testId).toBe("dk-editor");
+  });
+
   it("streams each step to onStep as it is recorded (for navigation-surviving capture)", async () => {
     const page = await browser.newPage();
     await page.goto(fixture.url);

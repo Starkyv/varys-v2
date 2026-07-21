@@ -177,31 +177,55 @@ export function startRecorder(
     const t = (el.getAttribute("type") ?? "text").toLowerCase();
     return !/^(checkbox|radio|button|submit|reset|file|image|range|color)$/.test(t);
   };
+  // Rich-text / markdown editors (TipTap, ProseMirror, etc.) are `contenteditable` <div>s, not
+  // <input>/<textarea>. They fire `input` events too, so we capture them the same way — climbing
+  // from the event target to the nearest `contenteditable` host (Playwright's `fill` targets that
+  // host and supports contenteditable). Without this, the editor's content is never recorded and
+  // the form's Save stays disabled at replay.
+  const contentEditableHost = (el: Element): HTMLElement | null => {
+    for (let n: Element | null = el; n; n = n.parentElement) {
+      const ce = n.getAttribute?.("contenteditable");
+      if (ce === "" || ce === "true" || ce === "plaintext-only") return n as HTMLElement;
+      if (ce === "false") return null; // an explicitly non-editable island — don't record
+    }
+    return null;
+  };
+  const editableHost = (el: Element): HTMLElement | null =>
+    isTextInput(el) ? (el as HTMLElement) : contentEditableHost(el);
+  const editableValue = (host: HTMLElement): string =>
+    host.tagName === "INPUT" || host.tagName === "TEXTAREA"
+      ? (host as HTMLInputElement).value
+      : (host.innerText ?? host.textContent ?? "");
+
   let pending: { el: Element; fp: Fingerprint; value: string } | null = null;
   const flushPending = () => {
     if (!pending) return;
     rec.push(buildType(pending.fp, pending.value));
     pending = null;
   };
-  const noteInput = (el: HTMLInputElement | HTMLTextAreaElement) => {
-    if (pending && pending.el === el) {
-      pending.value = el.value; // same field — just update the value
+  const noteInput = (host: HTMLElement) => {
+    const value = editableValue(host);
+    if (pending && pending.el === host) {
+      pending.value = value; // same field — just update the value
       return;
     }
     flushPending(); // a different field got focus mid-edit; commit the previous one
-    pending = { el, fp: capture(el), value: el.value };
+    pending = { el: host, fp: capture(host), value };
   };
 
   const onInput = (e: Event) => {
     if (ignore?.(e)) return;
     const el = e.target as Element | null;
-    if (el && isTextInput(el)) noteInput(el);
+    if (!el) return;
+    const host = editableHost(el);
+    if (host) noteInput(host);
   };
 
   const onFocusOut = (e: Event) => {
     if (ignore?.(e)) return;
-    // Blur commits the field — but only if it's the one we're tracking.
-    if (pending && e.target === pending.el) flushPending();
+    // Blur commits the field — the tracked host, or a child of it (contenteditable blurs a node).
+    const t = e.target as Node | null;
+    if (pending && t && (t === pending.el || pending.el.contains(t))) flushPending();
   };
 
   const onClick = (e: Event) => {

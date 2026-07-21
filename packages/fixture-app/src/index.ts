@@ -17,7 +17,8 @@ export type Variant =
   | "stampB"
   | "hovermenu"
   | "checkbox"
-  | "busy";
+  | "busy"
+  | "editor";
 
 function html(variant: Variant): string {
   // A stable hero with one volatile sub-region (#stamp, top-left) — stampA/stampB
@@ -74,6 +75,38 @@ function html(variant: Variant): string {
     <button id="submit" type="button" onclick="document.getElementById('app').textContent = 'Welcome'">Log in</button>
   </form>
   <div id="app"></div>
+</body>
+</html>`;
+  }
+
+  if (variant === "editor") {
+    // A rich-text / markdown editor is a `contenteditable` div (not input/textarea), like the
+    // Domain Knowledge / Skills editors. The Save button stays disabled until the editor has
+    // content — so a recording that fails to capture the typed content can't enable Save. This
+    // proves the recorder captures contenteditable typing and replay fills it.
+    return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Varys Fixture — Editor</title>
+<style>
+  * { margin: 0; }
+  body { background: #ffffff; font-family: Arial, sans-serif; padding: 24px; }
+  #editor { min-height: 80px; width: 400px; border: 1px solid #ccc; padding: 8px; font-size: 16px; }
+  #save[disabled] { opacity: 0.5; }
+  #out { margin-top: 12px; }
+</style>
+</head>
+<body>
+  <div id="editor" contenteditable="true" data-testid="dk-editor" role="textbox" aria-label="Knowledge"></div>
+  <button id="save" type="button" data-testid="dk-save" disabled>Save</button>
+  <div id="out"></div>
+  <script>
+    var ed = document.getElementById("editor");
+    var save = document.getElementById("save");
+    ed.addEventListener("input", function () { save.disabled = ed.innerText.trim().length === 0; });
+    save.addEventListener("click", function () { document.getElementById("out").textContent = "saved: " + ed.innerText; });
+  </script>
 </body>
 </html>`;
   }
