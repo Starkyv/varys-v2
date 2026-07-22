@@ -153,3 +153,32 @@
   color: var(--color-text-muted);
   font-size: var(--font-size-sm);
 }
+
+.sectionLabel {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-8);
+  padding: var(--space-12) var(--space-4) var(--space-6);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-subtle);
+
+  &:first-child {
+    padding-top: var(--space-4);
+  }
+}
+
+.sectionHint {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-muted);
+}
+
+.folderCount {
+  flex: 0 0 auto;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}

@@ -113,6 +113,54 @@ function waitLocator(page: Page, fp: Fingerprint): Locator {
   return page.locator(fp.tag);
 }
 
+/**
+ * A locator for the nearest stable ancestor of a target (a row / card with a data-testid or id).
+ * Used to HOVER that container when the target itself can't be found — many action controls (edit /
+ * delete buttons on a card or table row) are hidden with a pure-CSS `:hover` rule (opacity 0 → 1,
+ * no DOM change), so the matcher's visibility filter never sees them. Hovering the container reveals
+ * the target AND makes it the only visible instance among identical siblings.
+ */
+function ancestorAnchor(page: Page, fp: Fingerprint): Locator | null {
+  for (const a of fp.ancestors ?? []) {
+    if (a.testId) return page.locator(`[data-testid="${a.testId}"]`).first();
+    if (a.id) return page.locator(`#${a.id}`).first();
+  }
+  return null;
+}
+
+/**
+ * Resolve a target; if it isn't found, try revealing it by hovering its nearest stable ancestor
+ * (a control that only enters the DOM / becomes `display`-visible on `:hover`, e.g. a JS-rendered
+ * flyout), then resolve once more. Returns the matcher result or null.
+ */
+async function resolveWithHoverReveal(page: Page, fp: Fingerprint, timeoutMs: number) {
+  const first = await resolve(page, fp, { timeoutMs });
+  if (first) return first;
+  const anchor = ancestorAnchor(page, fp);
+  if (!anchor) return null;
+  await anchor.hover({ timeout: 5_000 }).catch(() => undefined);
+  return resolve(page, fp, { timeoutMs: Math.min(timeoutMs, 5_000) });
+}
+
+/**
+ * Click a resolved target, revealing it first if a pure-CSS `:hover` rule gates its clickability.
+ * Card/row edit & delete buttons are commonly `opacity: 0; pointer-events: none` until the card is
+ * `:hover`ed. Playwright's click hit-tests the point BEFORE physically hovering, so such a button
+ * reads as "intercepted" and never gets clicked. So: try a normal click; if it can't land, hover the
+ * nearest stable ancestor (the card/row) to trip its `:hover` rule — leaving the mouse over it, so
+ * the button stays `pointer-events: auto` — then click again.
+ */
+async function clickWithReveal(page: Page, fp: Fingerprint, locator: Locator, timeoutMs: number) {
+  const ok = await locator
+    .click({ timeout: Math.min(timeoutMs, 4_000) })
+    .then(() => true)
+    .catch(() => false);
+  if (ok) return;
+  const anchor = ancestorAnchor(page, fp);
+  if (anchor) await anchor.hover({ timeout: 5_000 }).catch(() => undefined);
+  await locator.click({ timeout: timeoutMs });
+}
+
 export async function applyWaits(page: Page, waits: Wait[] | undefined): Promise<void> {
   for (const w of waits ?? []) {
     if (w.kind === "delay") {
@@ -155,12 +203,13 @@ export async function performStepAction(
     // A prior click may have triggered an in-flight navigation; settle the document before
     // resolving, or the fingerprint would miss against a half-loaded page. Cheap when loaded.
     await page.waitForLoadState("domcontentloaded").catch(() => undefined);
-    // Patient resolve: the target may render a few seconds after navigation (slow SPA/backend).
-    const target = await resolve(page, step.target, { timeoutMs: actionResolveTimeoutMs() });
+    // Patient resolve (the target may render a few seconds after navigation), with a hover-reveal
+    // fallback for controls shown only on `:hover` (card/row edit & delete buttons).
+    const target = await resolveWithHoverReveal(page, step.target, actionResolveTimeoutMs());
     if (!target) throw new Error(`could not locate ${step.type} target`);
     if (step.type === "type") await target.locator.fill(step.value);
     else if (step.type === "hover") await target.locator.hover();
-    else await target.locator.click();
+    else await clickWithReveal(page, step.target, target.locator, actionResolveTimeoutMs());
   }
 }
 
@@ -423,7 +472,7 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
         actual = await page.screenshot({ clip: step.rect });
       } else {
         if (!step.target) throw new Error(`element checkpoint "${step.name}" has no target`);
-        const found = await resolve(page, step.target, { timeoutMs: actionResolveTimeoutMs() });
+        const found = await resolveWithHoverReveal(page, step.target, actionResolveTimeoutMs());
         if (found) {
           actual = await found.locator.screenshot();
           healed = found.healed;

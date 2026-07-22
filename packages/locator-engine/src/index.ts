@@ -318,17 +318,26 @@ function scoreInPage(args: {
       if (sibs.indexOf(el) === fp.domIndex) score += 6;
     }
 
-    // Ancestor chain similarity (tags/ids/testIds up the tree).
+    // Ancestor chain similarity, split into two very different signals:
+    //  • tag chain — weak and *shared*: sibling controls (13 cards' delete buttons) have the
+    //    same tag path, so this is capped low; it must never be the thing that decides a winner.
+    //  • ancestor id/testId — strong and *distinguishing*: a matching `item-card-<id>` on ONE
+    //    candidate's chain is exactly what tells the target card's button apart from its siblings.
+    //    Scored per-hit and uncapped, so a unique ancestor key can't be washed out by the tag cap
+    //    (the old combined `min(16, …)` let the shared grid ancestor + tag matches saturate the cap
+    //    for every sibling, erasing the one ancestor that mattered → 13-way tie → ambiguous).
     if (fp.ancestors?.length) {
       let p = el.parentElement;
-      let am = 0;
+      let tagChain = 0;
+      let keyHits = 0;
       for (let i = 0; p && i < fp.ancestors.length; i++, p = p.parentElement) {
         const fa = fp.ancestors[i];
-        if (fa.tag === p.tagName.toLowerCase()) am += 1;
-        if (fa.id && p.id === fa.id) am += 3;
-        if (fa.testId && p.getAttribute("data-testid") === fa.testId) am += 3;
+        if (fa.tag === p.tagName.toLowerCase()) tagChain += 1;
+        if (fa.id && p.id === fa.id) keyHits += 1;
+        if (fa.testId && p.getAttribute("data-testid") === fa.testId) keyHits += 1;
       }
-      score += Math.min(16, am * 2);
+      score += Math.min(8, tagChain);
+      score += keyHits * 12;
     }
 
     return { score, matched };

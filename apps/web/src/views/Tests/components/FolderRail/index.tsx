@@ -1,5 +1,5 @@
 import type { FolderSummary } from "@varys/review-contract";
-import { ChevronDown, ChevronRight, cx, Flask, Folder, Inbox, Plus, Trash } from "@varys/ui";
+import { ChevronRight, cx, Flask, Folder, Inbox, Plus, Trash } from "@varys/ui";
 import { type DragEvent, useMemo, useState } from "react";
 import { useConfirm } from "../../../../context/confirm";
 import { useToast } from "../../../../context/toast";
@@ -11,30 +11,17 @@ export type FolderFilter = "__all" | "__unfiled" | string;
 interface RailCounts {
   all: number;
   unfiled: number;
+  /** Subtree test count per folder (folder + all descendants). */
   byId: Record<string, number>;
 }
 
-type FolderNode = FolderSummary & { children: FolderNode[] };
-
-/** Assemble the flat folder list into a parent→children tree (roots = no/absent parent). */
-function buildTree(folders: FolderSummary[]): FolderNode[] {
-  const byId = new Map<string, FolderNode>(folders.map((f) => [f.id, { ...f, children: [] }]));
-  const roots: FolderNode[] = [];
-  for (const node of byId.values()) {
-    const parent = node.parentId ? byId.get(node.parentId) : undefined;
-    if (parent) parent.children.push(node);
-    else roots.push(node);
-  }
-  return roots;
-}
-
-/** Every id at or under `node` — the set a reparent must not drop into (would make a cycle). */
-function subtreeIds(node: FolderNode, acc: Set<string> = new Set()): Set<string> {
-  acc.add(node.id);
-  for (const c of node.children) subtreeIds(c, acc);
-  return acc;
-}
-
+/**
+ * Finder-style folder navigator: a breadcrumb path + the current level's subfolders. Clicking a
+ * folder GOES INSIDE it (breadcrumb extends, the sidebar shows its subfolders, the test list shows
+ * its tests). Any breadcrumb crumb jumps back up. Folders can be created at the current level,
+ * renamed (double-click), deleted, and drag-reparented; tests drag onto a folder (or a crumb) to
+ * file them. The "current location" is derived from the active selection, so it survives refetch.
+ */
 export function FolderRail({
   folders,
   counts,
@@ -58,71 +45,69 @@ export function FolderRail({
   const deleteFolder = useDeleteFolder();
   const moveFolder = useMoveFolder();
 
-  const tree = useMemo(() => buildTree(folders), [folders]);
+  const byId = useMemo(() => new Map(folders.map((f) => [f.id, f])), [folders]);
+  const childrenOf = useMemo(() => {
+    const m = new Map<string | null, FolderSummary[]>();
+    for (const f of folders) {
+      const p = f.parentId ?? null;
+      m.set(p, [...(m.get(p) ?? []), f]);
+    }
+    for (const arr of m.values()) arr.sort((a, b) => a.name.localeCompare(b.name));
+    return m;
+  }, [folders]);
+
+  // The folder we're browsing INSIDE (null = top level), derived from the active selection so the
+  // navigator location is stable across refetches without a second source of truth.
+  const location = active === "__all" || active === "__unfiled" || !byId.has(active) ? null : active;
+
+  // Breadcrumb path: root → ancestors → current folder.
+  const crumbs = useMemo(() => {
+    const path: FolderSummary[] = [];
+    let cur = location ? byId.get(location) : undefined;
+    while (cur) {
+      path.unshift(cur);
+      cur = cur.parentId ? byId.get(cur.parentId) : undefined;
+    }
+    return path;
+  }, [location, byId]);
+
+  const level = childrenOf.get(location) ?? [];
 
   const [over, setOver] = useState<string | null>(null);
-  const [creatingRoot, setCreatingRoot] = useState(false);
+  const [dragFolder, setDragFolder] = useState<FolderSummary | null>(null);
+  const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
-  const [subUnder, setSubUnder] = useState<string | null>(null); // create a subfolder under this id
-  const [subName, setSubName] = useState("");
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
-  // Folders are open by default; we track which are explicitly COLLAPSED so newly-loaded /
-  // created folders start expanded (their nesting is visible without a click).
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const [dragFolder, setDragFolder] = useState<FolderNode | null>(null);
 
-  const isOpen = (id: string) => !collapsed.has(id);
-  const toggleOpen = (id: string) =>
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  const openFolder = (id: string) =>
-    setCollapsed((prev) => {
-      if (!prev.has(id)) return prev;
-      const next = new Set(prev);
-      next.delete(id);
-      return next;
-    });
+  /** Every id at or under `rootId` — a reparent must not drop into this set (would make a cycle). */
+  function subtreeIds(rootId: string): Set<string> {
+    const out = new Set<string>();
+    const stack = [rootId];
+    while (stack.length > 0) {
+      const id = stack.pop() as string;
+      if (out.has(id)) continue;
+      out.add(id);
+      for (const c of childrenOf.get(id) ?? []) stack.push(c.id);
+    }
+    return out;
+  }
 
-  function commitCreateRoot() {
+  function createHere() {
     const name = newName.trim();
     if (!name) {
-      setCreatingRoot(false);
+      setCreating(false);
       return;
     }
     createFolder.mutate(
-      { name },
+      { name, parentId: location ?? undefined },
       {
         onSuccess: () => {
           toast(`Folder “${name}” created`);
           setNewName("");
-          setCreatingRoot(false);
+          setCreating(false);
         },
         onError: (e) => toast(e instanceof Error ? e.message : "Couldn’t create folder"),
-      },
-    );
-  }
-
-  function commitCreateSub(parentId: string) {
-    const name = subName.trim();
-    if (!name) {
-      setSubUnder(null);
-      return;
-    }
-    createFolder.mutate(
-      { name, parentId },
-      {
-        onSuccess: () => {
-          toast(`Subfolder “${name}” created`);
-          setSubName("");
-          setSubUnder(null);
-          openFolder(parentId);
-        },
-        onError: (e) => toast(e instanceof Error ? e.message : "Couldn’t create subfolder"),
       },
     );
   }
@@ -130,41 +115,46 @@ export function FolderRail({
   function commitRename(id: string, currentName: string) {
     const name = renameValue.trim();
     if (name && name !== currentName) {
-      renameFolder.mutate({ id, name }, { onError: (e) => toast(e instanceof Error ? e.message : "Rename failed") });
+      renameFolder.mutate(
+        { id, name },
+        { onError: (e) => toast(e instanceof Error ? e.message : "Rename failed") },
+      );
     }
     setRenamingId(null);
   }
 
-  async function onDelete(node: FolderNode) {
-    const subs = subtreeIds(node).size - 1; // descendant folders (excluding this one)
+  async function onDelete(f: FolderSummary) {
+    const subs = subtreeIds(f.id).size - 1;
     const message = subs
       ? `This folder and its ${subs} subfolder${subs === 1 ? "" : "s"} are removed; their tests become Unfiled — the tests are not deleted.`
       : "Its tests become Unfiled — they are not deleted.";
     const ok = await confirm({
-      title: `Delete folder “${node.name}”?`,
+      title: `Delete folder “${f.name}”?`,
       message,
       confirmLabel: "Delete folder",
       tone: "danger",
     });
     if (!ok) return;
-    deleteFolder.mutate(node.id, {
+    deleteFolder.mutate(f.id, {
       onSuccess: () => {
-        toast(`Folder “${node.name}” deleted`);
-        if (active === node.id) onSelect("__all");
+        toast(`Folder “${f.name}” deleted`);
+        // If we were viewing the deleted folder (or a descendant), step up to its parent.
+        if (active === f.id || (byId.has(active) && subtreeIds(f.id).has(active))) {
+          onSelect(f.parentId ?? "__all");
+        }
       },
     });
   }
 
-  /** Can the dragged folder be dropped onto `targetId` (null = root)? Not itself, not one of
-   *  its own descendants, and not a no-op move to its current parent. */
+  /** Can the dragged folder be dropped onto `targetId` (null = root)? Not itself, not a descendant,
+   *  and not a no-op move to its current parent. */
   function canDropFolder(targetId: string | null): boolean {
     if (!dragFolder) return false;
     if (targetId === dragFolder.id) return false;
-    if (targetId !== null && subtreeIds(dragFolder).has(targetId)) return false;
+    if (targetId !== null && subtreeIds(dragFolder.id).has(targetId)) return false;
     return (dragFolder.parentId ?? null) !== (targetId ?? null);
   }
 
-  /** Drag-over a drop target: allow a folder reparent (when legal) or a test file. */
   function onTargetDragOver(e: DragEvent, dropId: string, folderTarget: string | null, acceptsTest: boolean) {
     if (dragFolder) {
       if (!canDropFolder(folderTarget)) return;
@@ -191,187 +181,162 @@ export function FolderRail({
     }
   }
 
-  function renderNode(node: FolderNode, depth: number) {
-    const isActive = active === node.id;
-    const isOver = over === node.id;
-    const hasChildren = node.children.length > 0;
-    const count = counts.byId[node.id] ?? 0;
-    return (
-      <div key={node.id}>
-        <div
-          className={cx(styles.item, isActive && styles.active, isOver && styles.dropOver)}
-          style={{ paddingLeft: `calc(var(--space-12) + ${depth * 16}px)` }}
-          draggable={renamingId !== node.id}
-          onDragStart={(e) => {
-            setDragFolder(node);
-            e.dataTransfer.setData("text/plain", node.id);
-            e.dataTransfer.effectAllowed = "move";
-          }}
-          onDragEnd={() => {
-            setDragFolder(null);
-            setOver(null);
-          }}
-          onDragOver={(e) => onTargetDragOver(e, node.id, node.id, true)}
-          onDragLeave={() => setOver((o) => (o === node.id ? null : o))}
-          onDrop={(e) => onTargetDrop(e, node.id, true)}
-        >
-          {hasChildren ? (
-            <button
-              type="button"
-              className={styles.chevron}
-              aria-label={isOpen(node.id) ? "Collapse" : "Expand"}
-              aria-expanded={isOpen(node.id)}
-              onClick={() => toggleOpen(node.id)}
-            >
-              {isOpen(node.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-            </button>
-          ) : (
-            <span className={styles.chevronSpacer} />
-          )}
-          <span className={styles.icon}>
-            <Folder size={17} />
-          </span>
-          {renamingId === node.id ? (
-            <input
-              autoFocus
-              className={styles.renameInput}
-              value={renameValue}
-              onChange={(e) => setRenameValue(e.target.value)}
-              onBlur={() => commitRename(node.id, node.name)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") commitRename(node.id, node.name);
-                if (e.key === "Escape") setRenamingId(null);
-              }}
-            />
-          ) : (
-            <button
-              type="button"
-              className={styles.nameBtn}
-              onClick={() => onSelect(node.id)}
-              onDoubleClick={() => {
-                setRenamingId(node.id);
-                setRenameValue(node.name);
-              }}
-              title="Double-click to rename"
-            >
-              {node.name}
-            </button>
-          )}
-          {renamingId !== node.id && (
-            <>
-              <button
-                type="button"
-                className={styles.addSub}
-                aria-label={`Add subfolder in ${node.name}`}
-                title="New subfolder"
-                onClick={() => {
-                  openFolder(node.id);
-                  setSubUnder(node.id);
-                  setSubName("");
-                }}
-              >
-                <Plus size={13} />
-              </button>
-              <button
-                type="button"
-                className={styles.rowAction}
-                aria-label={`Delete ${node.name}`}
-                onClick={() => void onDelete(node)}
-              >
-                <Trash size={14} />
-              </button>
-              <span className={styles.count}>{count}</span>
-            </>
-          )}
-        </div>
-
-        {subUnder === node.id && (
-          <input
-            autoFocus
-            className={styles.subInput}
-            style={{ marginLeft: `${(depth + 1) * 16}px` }}
-            placeholder="Subfolder name"
-            value={subName}
-            onChange={(e) => setSubName(e.target.value)}
-            onBlur={() => commitCreateSub(node.id)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") commitCreateSub(node.id);
-              if (e.key === "Escape") {
-                setSubName("");
-                setSubUnder(null);
-              }
-            }}
-          />
-        )}
-
-        {hasChildren && isOpen(node.id) && node.children.map((c) => renderNode(c, depth + 1))}
-      </div>
-    );
-  }
-
   return (
     <div className={styles.rail}>
       <div className={styles.title}>Folders</div>
-      <div className={styles.items}>
+
+      {/* Breadcrumb — the path you're in; every crumb jumps there, and accepts a dropped test/folder. */}
+      <nav className={styles.crumbs} aria-label="Folder path">
         <button
           type="button"
-          className={cx(styles.item, active === "__all" && styles.active, over === "__all" && styles.dropOver)}
+          className={cx(styles.crumb, active === "__all" && styles.crumbActive, over === "__all" && styles.dropOver)}
           onClick={() => onSelect("__all")}
-          onDragOver={(e) => onTargetDragOver(e, "__all", null, false)}
+          onDragOver={(e) => onTargetDragOver(e, "__all", null, true)}
           onDragLeave={() => setOver((o) => (o === "__all" ? null : o))}
-          onDrop={(e) => onTargetDrop(e, null, false)}
-        >
-          <span className={styles.chevronSpacer} />
-          <span className={styles.icon}>
-            <Flask size={17} />
-          </span>
-          <span className={styles.name}>All tests</span>
-          <span className={styles.count}>{counts.all}</span>
-        </button>
-
-        {tree.map((node) => renderNode(node, 0))}
-
-        <div
-          className={cx(styles.item, active === "__unfiled" && styles.active, over === "__unfiled" && styles.dropOver)}
-          onDragOver={(e) => onTargetDragOver(e, "__unfiled", null, true)}
-          onDragLeave={() => setOver((o) => (o === "__unfiled" ? null : o))}
           onDrop={(e) => onTargetDrop(e, null, true)}
         >
-          <span className={styles.chevronSpacer} />
-          <span className={styles.icon}>
-            <Inbox size={17} />
+          <Flask size={14} />
+          All tests
+          <span className={styles.crumbCount}>{counts.all}</span>
+        </button>
+        {crumbs.map((c) => (
+          <span key={c.id} className={styles.crumbWrap}>
+            <ChevronRight size={13} className={styles.crumbSep} />
+            <button
+              type="button"
+              className={cx(styles.crumb, active === c.id && styles.crumbActive, over === `crumb-${c.id}` && styles.dropOver)}
+              onClick={() => onSelect(c.id)}
+              onDragOver={(e) => onTargetDragOver(e, `crumb-${c.id}`, c.id, true)}
+              onDragLeave={() => setOver((o) => (o === `crumb-${c.id}` ? null : o))}
+              onDrop={(e) => onTargetDrop(e, c.id, true)}
+            >
+              {c.name}
+            </button>
           </span>
-          <button type="button" className={styles.nameBtn} onClick={() => onSelect("__unfiled")}>
-            Unfiled
-          </button>
-          <span className={styles.count}>{counts.unfiled}</span>
-        </div>
+        ))}
+      </nav>
+
+      {/* Current level — the subfolders you can open. */}
+      <div className={styles.items}>
+        {level.map((f) => {
+          const isActive = active === f.id;
+          const isOver = over === f.id;
+          const count = counts.byId[f.id] ?? 0;
+          const hasChildren = (childrenOf.get(f.id)?.length ?? 0) > 0;
+          return (
+            <div
+              key={f.id}
+              className={cx(styles.item, isActive && styles.active, isOver && styles.dropOver)}
+              draggable={renamingId !== f.id}
+              onDragStart={(e) => {
+                setDragFolder(f);
+                e.dataTransfer.setData("text/plain", f.id);
+                e.dataTransfer.effectAllowed = "move";
+              }}
+              onDragEnd={() => {
+                setDragFolder(null);
+                setOver(null);
+              }}
+              onDragOver={(e) => onTargetDragOver(e, f.id, f.id, true)}
+              onDragLeave={() => setOver((o) => (o === f.id ? null : o))}
+              onDrop={(e) => onTargetDrop(e, f.id, true)}
+            >
+              <span className={styles.icon}>
+                <Folder size={17} />
+              </span>
+              {renamingId === f.id ? (
+                <input
+                  autoFocus
+                  className={styles.renameInput}
+                  value={renameValue}
+                  onChange={(e) => setRenameValue(e.target.value)}
+                  onBlur={() => commitRename(f.id, f.name)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") commitRename(f.id, f.name);
+                    if (e.key === "Escape") setRenamingId(null);
+                  }}
+                />
+              ) : (
+                <button
+                  type="button"
+                  className={styles.nameBtn}
+                  onClick={() => onSelect(f.id)}
+                  onDoubleClick={() => {
+                    setRenamingId(f.id);
+                    setRenameValue(f.name);
+                  }}
+                  title="Open · double-click to rename"
+                >
+                  {f.name}
+                </button>
+              )}
+              {renamingId !== f.id && (
+                <>
+                  <button
+                    type="button"
+                    className={styles.rowAction}
+                    aria-label={`Delete ${f.name}`}
+                    onClick={() => void onDelete(f)}
+                  >
+                    <Trash size={14} />
+                  </button>
+                  <span className={styles.count}>{count}</span>
+                  <span className={cx(styles.enter, !hasChildren && styles.enterMuted)} aria-hidden>
+                    <ChevronRight size={15} />
+                  </span>
+                </>
+              )}
+            </div>
+          );
+        })}
+
+        {/* Unfiled bucket lives at the top level only. */}
+        {location === null && (
+          <div
+            className={cx(styles.item, active === "__unfiled" && styles.active, over === "__unfiled" && styles.dropOver)}
+            onDragOver={(e) => onTargetDragOver(e, "__unfiled", null, true)}
+            onDragLeave={() => setOver((o) => (o === "__unfiled" ? null : o))}
+            onDrop={(e) => onTargetDrop(e, null, true)}
+          >
+            <span className={styles.icon}>
+              <Inbox size={17} />
+            </span>
+            <button type="button" className={styles.nameBtn} onClick={() => onSelect("__unfiled")}>
+              Unfiled
+            </button>
+            <span className={styles.count}>{counts.unfiled}</span>
+          </div>
+        )}
+
+        {level.length === 0 && location !== null && (
+          <div className={styles.levelEmpty}>No subfolders here — this folder’s tests are on the right.</div>
+        )}
       </div>
 
-      {creatingRoot ? (
+      {creating ? (
         <input
           autoFocus
           className={styles.newInput}
-          placeholder="Folder name"
+          placeholder={location ? "Subfolder name" : "Folder name"}
           value={newName}
           onChange={(e) => setNewName(e.target.value)}
-          onBlur={commitCreateRoot}
+          onBlur={createHere}
           onKeyDown={(e) => {
-            if (e.key === "Enter") commitCreateRoot();
+            if (e.key === "Enter") createHere();
             if (e.key === "Escape") {
               setNewName("");
-              setCreatingRoot(false);
+              setCreating(false);
             }
           }}
         />
       ) : (
-        <button type="button" className={styles.newFolder} onClick={() => setCreatingRoot(true)}>
+        <button type="button" className={styles.newFolder} onClick={() => setCreating(true)}>
           <Plus size={14} />
-          New folder
+          {location ? `New folder in “${byId.get(location)?.name ?? ""}”` : "New folder"}
         </button>
       )}
 
-      <div className={styles.hint}>Drag a test onto a folder to file it, or drag a folder onto another to nest it.</div>
+      <div className={styles.hint}>Click a folder to open it. Drag a test onto a folder to file it.</div>
     </div>
   );
 }

@@ -97,6 +97,39 @@ describe("locator resolve", () => {
     expect(rowText).toContain("Apples");
   });
 
+  // Card-grid action buttons: many identical `item-card-delete` buttons, all sharing the same tag
+  // chain AND a common grid ancestor — the ONLY thing telling them apart is the distinguishing
+  // `item-card-<id>` on one candidate's chain. The ancestor score must weight that key strongly and
+  // uncapped; a combined cap (the old `min(16, …)`) let the shared ancestors saturate it and erased
+  // the distinguisher → a 13-way tie the matcher refused (ambiguous).
+  it("disambiguates identical sibling controls by a distinguishing ancestor testId", async () => {
+    const cards = ["aaa", "bbb", "ccc", "ddd", "eee", "fff", "ggg", "hhh"]
+      .map(
+        (cid) =>
+          `<div data-testid="item-card-${cid}"><div><button data-testid="item-card-delete">Delete</button></div></div>`,
+      )
+      .join("");
+    await page.setContent(`<div data-testid="cognitive-skill-grid">${cards}</div>`);
+    const del: Fingerprint = {
+      tag: "button",
+      testId: "item-card-delete",
+      accessibleName: "Delete",
+      ancestors: [
+        { tag: "div" },
+        { tag: "div", testId: "item-card-ggg" },
+        { tag: "div", testId: "cognitive-skill-grid" },
+      ],
+    };
+    const v = await verify(page, del);
+    expect(v.status).toBe("resolved");
+    const r = await resolve(page, del);
+    expect(r).not.toBeNull();
+    const cardId = await r!.locator.evaluate((el) =>
+      el.closest("[data-testid^='item-card-']:not([data-testid='item-card-delete'])")?.getAttribute("data-testid"),
+    );
+    expect(cardId).toBe("item-card-ggg");
+  });
+
   it("does not resolve on a build-hashed class alone (it's only corroboration)", async () => {
     await page.setContent(`<div class="X__a___1">content</div>`);
     const onlyHashed: Fingerprint = { tag: "div", moduleClasses: ["X__a___1"] };

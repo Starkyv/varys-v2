@@ -22,11 +22,14 @@ export class SuitesController {
   }
 
   @Post()
-  create(@Body() body: { name: string; testIds?: string[] }, @CurrentUser() user: AuthUser) {
+  create(
+    @Body() body: { name: string; testIds?: string[]; folderIds?: string[] },
+    @CurrentUser() user: AuthUser,
+  ) {
     return this.suites.create(body ?? { name: "" }, user.email);
   }
 
-  // Body: { name?, testIds? } — testIds is a FULL member-list replace.
+  // Body: { name?, testIds?, folderIds? } — testIds/folderIds each FULL-replace their selection.
   @Put(":id")
   update(@Param("id") id: string, @Body() body: UpdateSuiteInput) {
     return this.suites.update(id, body ?? {});

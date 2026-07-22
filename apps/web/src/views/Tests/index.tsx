@@ -23,14 +23,30 @@ export function Tests() {
   const all = tests.data ?? [];
 
   const counts = useMemo(() => {
-    const byId: Record<string, number> = {};
+    // Direct test count per folder.
+    const direct: Record<string, number> = {};
     let unfiled = 0;
     for (const t of all) {
-      if (t.folderId) byId[t.folderId] = (byId[t.folderId] ?? 0) + 1;
+      if (t.folderId) direct[t.folderId] = (direct[t.folderId] ?? 0) + 1;
       else unfiled += 1;
     }
+    // Roll up so a folder's count includes its whole subtree — otherwise a folder like
+    // "Knowledge Center" that holds tests only in its subfolders shows a misleading 0.
+    const children = new Map<string, string[]>();
+    for (const f of folders.data ?? []) {
+      if (f.parentId) children.set(f.parentId, [...(children.get(f.parentId) ?? []), f.id]);
+    }
+    const byId: Record<string, number> = {};
+    const rollup = (id: string): number => {
+      if (byId[id] != null) return byId[id];
+      let sum = direct[id] ?? 0;
+      for (const c of children.get(id) ?? []) sum += rollup(c);
+      byId[id] = sum;
+      return sum;
+    };
+    for (const f of folders.data ?? []) rollup(f.id);
     return { all: all.length, unfiled, byId };
-  }, [all]);
+  }, [all, folders.data]);
 
   const filtered = useMemo(
     () =>

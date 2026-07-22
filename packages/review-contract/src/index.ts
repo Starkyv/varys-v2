@@ -564,19 +564,28 @@ export interface FolderSummary {
 export interface SuiteSummary {
   id: string;
   name: string;
-  /** How many tests the suite currently selects. */
+  /** How many tests the suite currently selects — the EFFECTIVE count: the selected folders'
+   *  tests (and subfolders') plus individually-selected tests, deduped. */
   testCount: number;
+  /** How many whole folders the suite includes. */
+  folderCount: number;
   /** Who created the suite (email); null for suites created before attribution. */
   createdBy: string | null;
 }
 
-/** A suite with its member tests (full summaries, so the UI gets folder/tags/
- *  needsEnvironment context without extra lookups). */
+/** A suite with its EFFECTIVE member tests (full summaries) plus the raw selection so the editor
+ *  can restore exactly what was picked. A suite selects any mix of whole folders (dynamic — all
+ *  tests in the folder + subfolders) and individual standalone tests. */
 export interface SuiteView {
   id: string;
   name: string;
   /** Who created the suite (email); null for suites created before attribution. */
   createdBy: string | null;
+  /** The folders the suite includes (raw selection — restores the editor's folder checkboxes). */
+  folderIds: string[];
+  /** The individually-selected standalone tests (raw selection). */
+  testIds: string[];
+  /** The effective, deduped member tests (folders resolved + standalone), newest first. */
   tests: TestSummary[];
 }
 

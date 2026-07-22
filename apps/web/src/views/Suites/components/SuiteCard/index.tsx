@@ -21,7 +21,10 @@ export function SuiteCard({
         <div className={styles.text}>
           <div className={styles.name}>{suite.name}</div>
           <div className={styles.count}>
-            {suite.testCount} tests
+            {suite.testCount} test{suite.testCount === 1 ? "" : "s"}
+            {suite.folderCount > 0 && (
+              <span> · {suite.folderCount} folder{suite.folderCount === 1 ? "" : "s"}</span>
+            )}
             {suite.createdBy && (
               <span title={`Created by ${suite.createdBy}`}> · by {formatActor(suite.createdBy)}</span>
             )}

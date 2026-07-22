@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { environments, runResults, runs, suiteRuns, suites, suiteTests, tests, testVersions } from "@varys/db";
+import { environments, runResults, runs, suiteRuns, suites, tests, testVersions } from "@varys/db";
 import type {
   Resolution,
   ReviewState,
@@ -17,6 +17,7 @@ import { deriveRunOutcome } from "@varys/review-contract";
 import { asc, desc, eq, inArray } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
 import { RunsService } from "../runs/runs.service";
+import { effectiveTestIds } from "../suites/suite-membership";
 
 const ENVIRONMENT = "default";
 
@@ -78,12 +79,14 @@ export class SuiteRunsService {
       .limit(1);
     if (!suite) throw new NotFoundException(`Suite ${suiteId} not found`);
 
-    const members = await this.db
-      .select({ testId: suiteTests.testId })
-      .from(suiteTests)
-      .where(eq(suiteTests.suiteId, suiteId));
-    if (members.length === 0) {
-      throw new BadRequestException("suite has no members — add tests before running it");
+    // Resolve the suite's EFFECTIVE tests NOW: selected folders expand to their tests (+ subfolders,
+    // dynamically), unioned with individually-selected tests. Snapshotting at trigger time means a
+    // folder-based suite picks up whatever is in the folder at the moment it runs.
+    const memberTestIds = await effectiveTestIds(this.db, suiteId);
+    if (memberTestIds.length === 0) {
+      throw new BadRequestException(
+        "suite has no tests to run — add tests or a non-empty folder before running it",
+      );
     }
 
     // Validate the whole env selection up front: a bogus id fails the trigger
@@ -106,7 +109,7 @@ export class SuiteRunsService {
 
     // The trace flag fans out to every child (per-trigger on demand only).
     const targets: (string | undefined)[] = envIds.length > 0 ? envIds : [undefined];
-    for (const { testId } of members) {
+    for (const testId of memberTestIds) {
       for (const envId of targets) {
         await this.runs.create(testId, {
           environmentId: envId,

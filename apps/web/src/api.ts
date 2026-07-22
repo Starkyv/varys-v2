@@ -427,6 +427,7 @@ export async function fetchSuite(id: string): Promise<SuiteView> {
 export async function createSuite(body: {
   name: string;
   testIds?: string[];
+  folderIds?: string[];
 }): Promise<{ id: string }> {
   const res = await fetch(`${API_BASE}/suites`, {
     method: "POST",
@@ -442,7 +443,7 @@ export async function createSuite(body: {
 /** Update a suite — rename and/or replace the member list wholesale. */
 export async function updateSuite(
   id: string,
-  body: { name?: string; testIds?: string[] },
+  body: { name?: string; testIds?: string[]; folderIds?: string[] },
 ): Promise<void> {
   const res = await fetch(`${API_BASE}/suites/${id}`, {
     method: "PUT",

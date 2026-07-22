@@ -91,6 +91,23 @@ export const suiteTests = pgTable(
   (t) => ({ pk: primaryKey({ columns: [t.suiteId, t.testId] }) }),
 );
 
+/** Suite folder membership — a suite can include whole folders (all tests in the folder AND its
+ *  subfolders), resolved DYNAMICALLY at read/run time so a test added to the folder later is
+ *  included automatically. A suite's effective tests = these folders' tests ∪ `suiteTests`
+ *  (individually-picked standalone tests), deduped. CASCADE both ways (memberships only). */
+export const suiteFolders = pgTable(
+  "suite_folders",
+  {
+    suiteId: uuid("suite_id")
+      .notNull()
+      .references(() => suites.id, { onDelete: "cascade" }),
+    folderId: uuid("folder_id")
+      .notNull()
+      .references(() => folders.id, { onDelete: "cascade" }),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.suiteId, t.folderId] }) }),
+);
+
 /** A suite run — the parent of a fan-out: one ordinary child run per
  *  (member test × environment), DESIGN §6. No aggregate state is stored —
  *  status/counts are derived on read from the children. The suite FK is
@@ -315,6 +332,7 @@ export const schema = {
   testTags,
   suites,
   suiteTests,
+  suiteFolders,
   suiteRuns,
   testVersions,
   runs,
@@ -380,6 +398,12 @@ CREATE TABLE IF NOT EXISTS suite_tests (
   suite_id uuid NOT NULL REFERENCES suites(id) ON DELETE CASCADE,
   test_id uuid NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
   PRIMARY KEY (suite_id, test_id)
+);
+-- Suites can also include whole folders (resolved to their tests + subfolders' tests dynamically).
+CREATE TABLE IF NOT EXISTS suite_folders (
+  suite_id uuid NOT NULL REFERENCES suites(id) ON DELETE CASCADE,
+  folder_id uuid NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+  PRIMARY KEY (suite_id, folder_id)
 );
 CREATE TABLE IF NOT EXISTS suite_runs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

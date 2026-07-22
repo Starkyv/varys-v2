@@ -365,7 +365,8 @@ export function useSuite(id: string) {
 export function useCreateSuite() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { name: string; testIds?: string[] }) => createSuite(body),
+    mutationFn: (body: { name: string; testIds?: string[]; folderIds?: string[] }) =>
+      createSuite(body),
     onSuccess: () => qc.invalidateQueries({ queryKey: suitesQueryKey() }),
   });
 }
@@ -374,8 +375,10 @@ export function useCreateSuite() {
 export function useUpdateSuite() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (vars: { id: string; body: { name?: string; testIds?: string[] } }) =>
-      updateSuite(vars.id, vars.body),
+    mutationFn: (vars: {
+      id: string;
+      body: { name?: string; testIds?: string[]; folderIds?: string[] };
+    }) => updateSuite(vars.id, vars.body),
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: suitesQueryKey() });
       qc.invalidateQueries({ queryKey: suiteQueryKey(vars.id) });
