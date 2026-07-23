@@ -1,5 +1,9 @@
 import { Body, Controller, Get, Inject, Put } from "@nestjs/common";
-import type { ImageComparisonSettings } from "@varys/review-contract";
+import type {
+  ImageComparisonSettings,
+  JudgeSettingsPatch,
+  JudgeSettingsView,
+} from "@varys/review-contract";
 import { SettingsService } from "./settings.service";
 
 /**
@@ -25,5 +29,16 @@ export class SettingsController {
     @Body() body: Partial<ImageComparisonSettings>,
   ): Promise<ImageComparisonSettings> {
     return this.settings.saveImageComparison(body ?? {});
+  }
+
+  // The LLM judge config for context checkpoints. GET is masked (never returns the API key).
+  @Get("judge")
+  getJudge(): Promise<JudgeSettingsView> {
+    return this.settings.getJudge();
+  }
+
+  @Put("judge")
+  putJudge(@Body() body: JudgeSettingsPatch): Promise<JudgeSettingsView> {
+    return this.settings.saveJudge(body ?? {});
   }
 }

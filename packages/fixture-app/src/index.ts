@@ -18,7 +18,8 @@ export type Variant =
   | "hovermenu"
   | "checkbox"
   | "busy"
-  | "editor";
+  | "editor"
+  | "iframe";
 
 function html(variant: Variant): string {
   // A stable hero with one volatile sub-region (#stamp, top-left) — stampA/stampB
@@ -242,6 +243,30 @@ function html(variant: Variant): string {
       document.body.appendChild(d);
     }, 2000);
   </script>
+</body>
+</html>`;
+  }
+
+  if (variant === "iframe") {
+    // Content rendered INSIDE a same-origin `srcDoc` iframe — the DataGenie Brief report / Wisdom
+    // visualization shape. The real content (`#report`, `data-testid="brief-body"`) lives in the
+    // frame's document; a checkpoint must descend via `frameChain` to see or capture it.
+    const inner =
+      `<!doctype html><html lang="en"><head><meta charset="utf-8" />` +
+      `<style>*{margin:0}body{font-family:Arial,sans-serif}` +
+      `#report{width:300px;height:150px;background:#3366cc;color:#fff;` +
+      `display:flex;align-items:center;justify-content:center;font-size:20px}</style></head>` +
+      `<body><div id="report" data-testid="brief-body">Weekly Violations Summary</div></body></html>`;
+    return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Varys Fixture — Iframe</title>
+<style>* { margin: 0; } body { background: #ffffff; font-family: Arial, sans-serif; padding: 24px; }
+  #report-frame { width: 340px; height: 190px; border: 0; }</style>
+</head>
+<body>
+  <iframe id="report-frame" data-testid="report-frame" srcdoc='${inner}'></iframe>
 </body>
 </html>`;
   }

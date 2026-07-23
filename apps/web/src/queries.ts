@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   ImageComparisonSettings,
+  JudgeSettingsPatch,
   LocatorVerifyRequest,
   PromoteDraftBody,
   TestConfigPatch,
@@ -22,9 +23,11 @@ import {
   fetchAuthoringInstructions,
   fetchAuthoringSessions,
   fetchImageComparisonSettings,
+  fetchJudgeSettings,
   fetchMcpStatus,
   saveAuthoringInstructions,
   saveImageComparisonSettings,
+  saveJudgeSettings,
   fetchDashboard,
   fetchDraft,
   fetchDrafts,
@@ -234,6 +237,27 @@ export function useSaveImageComparisonSettings() {
   return useMutation({
     mutationFn: (body: Partial<ImageComparisonSettings>) => saveImageComparisonSettings(body),
     onSuccess: (next) => qc.setQueryData(imageComparisonSettingsQueryKey(), next),
+  });
+}
+
+export function judgeSettingsQueryKey() {
+  return ["settings", "judge"] as const;
+}
+
+/** The judge (context-compare) config — masked (no API key). */
+export function useJudgeSettings() {
+  return useQuery({
+    queryKey: judgeSettingsQueryKey(),
+    queryFn: fetchJudgeSettings,
+  });
+}
+
+/** Save the judge config; seeds the cache with the server's new masked view. */
+export function useSaveJudgeSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: JudgeSettingsPatch) => saveJudgeSettings(body),
+    onSuccess: (next) => qc.setQueryData(judgeSettingsQueryKey(), next),
   });
 }
 

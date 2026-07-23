@@ -76,6 +76,88 @@ describe("screenshot captureMode", () => {
   });
 });
 
+describe("screenshot compareMode", () => {
+  it("defaults a screenshot step with no compareMode to pixel (back-compat)", () => {
+    const def = parseTestDefinition({
+      ...base,
+      steps: [
+        { type: "navigate", url: "http://x/" },
+        { type: "screenshot", name: "hero", target: { tag: "div" } },
+      ],
+    });
+    const shot = def.steps.find((s) => s.type === "screenshot");
+    expect(shot).toMatchObject({ compareMode: "pixel" });
+  });
+
+  it("accepts a context checkpoint carrying a prompt", () => {
+    const def = parseTestDefinition({
+      ...base,
+      steps: [
+        { type: "navigate", url: "http://x/" },
+        {
+          type: "screenshot",
+          name: "brief",
+          captureMode: "fullpage",
+          compareMode: "context",
+          prompt: "is the current brief broken vs the baseline?",
+        },
+      ],
+    });
+    const shot = def.steps.find((s) => s.type === "screenshot");
+    expect(shot).toMatchObject({
+      compareMode: "context",
+      prompt: "is the current brief broken vs the baseline?",
+    });
+  });
+
+  it("allows a context checkpoint with no prompt (inherits the global default at run time)", () => {
+    const def = parseTestDefinition({
+      ...base,
+      steps: [
+        { type: "navigate", url: "http://x/" },
+        { type: "screenshot", name: "brief", captureMode: "fullpage", compareMode: "context" },
+      ],
+    });
+    const shot = def.steps.find((s) => s.type === "screenshot");
+    expect(shot).toMatchObject({ compareMode: "context" });
+    expect((shot as { prompt?: string }).prompt).toBeUndefined();
+  });
+
+  it("labels a context checkpoint distinctly in describeStep", () => {
+    expect(
+      describeStep({
+        type: "screenshot",
+        name: "brief",
+        captureMode: "fullpage",
+        compareMode: "context",
+        prompt: "still good?",
+      }),
+    ).toBe('checkpoint "brief" (fullpage, context)');
+  });
+});
+
+describe("waits", () => {
+  it("parses a streamIdle wait (quietMs + timeoutMs both optional)", () => {
+    const def = parseTestDefinition({
+      ...base,
+      steps: [
+        { type: "navigate", url: "http://x/" },
+        {
+          type: "screenshot",
+          name: "wisdom",
+          captureMode: "fullpage",
+          waitBefore: [{ kind: "streamIdle", quietMs: 800, timeoutMs: 45000 }, { kind: "streamIdle" }],
+        },
+      ],
+    });
+    const shot = def.steps.find((s) => s.type === "screenshot");
+    expect((shot as { waitBefore?: unknown[] }).waitBefore).toEqual([
+      { kind: "streamIdle", quietMs: 800, timeoutMs: 45000 },
+      { kind: "streamIdle" },
+    ]);
+  });
+});
+
 describe("declared variables", () => {
   const steps = [
     { type: "navigate", url: "{{baseUrl}}/" },
@@ -122,7 +204,7 @@ describe("describeStep", () => {
       [{ type: "click", target: { tag: "button", text: "Submit" } }, 'click "Submit"'],
       [{ type: "type", target: { tag: "input", attributes: { id: "search" } }, value: "x" }, "type into #search"],
       [
-        { type: "screenshot", name: "hero", captureMode: "element", target: { tag: "div" } },
+        { type: "screenshot", name: "hero", captureMode: "element", compareMode: "pixel", target: { tag: "div" } },
         'checkpoint "hero" (element)',
       ],
     ];

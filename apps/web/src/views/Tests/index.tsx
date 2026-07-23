@@ -1,4 +1,15 @@
-import { Button, EmptyState, ErrorState, ExternalLink, Flask, Search, Skeleton } from "@varys/ui";
+import type { FolderSummary } from "@varys/review-contract";
+import {
+  Button,
+  ChevronRight,
+  EmptyState,
+  ErrorState,
+  ExternalLink,
+  Flask,
+  Folder,
+  Search,
+  Skeleton,
+} from "@varys/ui";
 import { useMemo, useState } from "react";
 import { useRunDialog } from "../../context/run-dialog";
 import { useToast } from "../../context/toast";
@@ -22,31 +33,35 @@ export function Tests() {
 
   const all = tests.data ?? [];
 
-  const counts = useMemo(() => {
-    // Direct test count per folder.
-    const direct: Record<string, number> = {};
-    let unfiled = 0;
-    for (const t of all) {
-      if (t.folderId) direct[t.folderId] = (direct[t.folderId] ?? 0) + 1;
-      else unfiled += 1;
+  // The tree shows per-folder DIRECT counts (each folder.testCount from the API); we only need the
+  // two totals here. "Unfiled" = tests with no folder.
+  const unfiledCount = useMemo(() => all.filter((t) => t.folderId == null).length, [all]);
+
+  const foldersData = folders.data ?? [];
+  const byId = useMemo(() => new Map(foldersData.map((f) => [f.id, f])), [foldersData]);
+  const selectedFolder =
+    folderFilter !== "__all" && folderFilter !== "__unfiled" ? byId.get(folderFilter) : undefined;
+
+  // Subfolders to show as tiles in the main pane, so you can drill DOWN from the right too (root
+  // folders when viewing "All tests"; none for Unfiled).
+  const childFolders = useMemo(() => {
+    if (folderFilter === "__unfiled") return [];
+    const parentId = folderFilter === "__all" ? null : (selectedFolder?.id ?? null);
+    return foldersData
+      .filter((f) => (f.parentId ?? null) === parentId)
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [foldersData, folderFilter, selectedFolder]);
+
+  // Path root → selected, for the content-pane breadcrumb (each crumb navigates UP).
+  const crumbs = useMemo(() => {
+    const path: FolderSummary[] = [];
+    let cur = selectedFolder;
+    while (cur) {
+      path.unshift(cur);
+      cur = cur.parentId ? byId.get(cur.parentId) : undefined;
     }
-    // Roll up so a folder's count includes its whole subtree — otherwise a folder like
-    // "Knowledge Center" that holds tests only in its subfolders shows a misleading 0.
-    const children = new Map<string, string[]>();
-    for (const f of folders.data ?? []) {
-      if (f.parentId) children.set(f.parentId, [...(children.get(f.parentId) ?? []), f.id]);
-    }
-    const byId: Record<string, number> = {};
-    const rollup = (id: string): number => {
-      if (byId[id] != null) return byId[id];
-      let sum = direct[id] ?? 0;
-      for (const c of children.get(id) ?? []) sum += rollup(c);
-      byId[id] = sum;
-      return sum;
-    };
-    for (const f of folders.data ?? []) rollup(f.id);
-    return { all: all.length, unfiled, byId };
-  }, [all, folders.data]);
+    return path;
+  }, [selectedFolder, byId]);
 
   const filtered = useMemo(
     () =>
@@ -136,23 +151,77 @@ export function Tests() {
       <div className={styles.layout}>
         <FolderRail
           folders={folders.data ?? []}
-          counts={counts}
+          allCount={all.length}
+          unfiledCount={unfiledCount}
           active={folderFilter}
           onSelect={setFolderFilter}
           dragActive={dragId !== null}
           onDropToFolder={dropToFolder}
         />
         <div className={styles.listCard}>
-          {filtered.length === 0 ? (
-            <div className={styles.filteredEmpty}>
-              <span className={styles.filteredIcon}>
-                <Search size={22} />
-              </span>
-              <div className={styles.filteredTitle}>No tests match these filters</div>
-              <Button variant="secondary" size="sm" onClick={clearFilters}>
-                Clear filters
-              </Button>
+          {/* Path bar — drill UP from the main view (each crumb jumps there). */}
+          {(selectedFolder || folderFilter === "__unfiled") && (
+            <nav className={styles.pathBar} aria-label="Folder path">
+              <button type="button" className={styles.crumb} onClick={() => setFolderFilter("__all")}>
+                All tests
+              </button>
+              {crumbs.map((c) => (
+                <span key={c.id} className={styles.crumbWrap}>
+                  <ChevronRight size={13} className={styles.crumbSep} />
+                  <button type="button" className={styles.crumb} onClick={() => setFolderFilter(c.id)}>
+                    {c.name}
+                  </button>
+                </span>
+              ))}
+              {folderFilter === "__unfiled" && (
+                <span className={styles.crumbWrap}>
+                  <ChevronRight size={13} className={styles.crumbSep} />
+                  <span className={styles.crumbCurrent}>Unfiled</span>
+                </span>
+              )}
+            </nav>
+          )}
+
+          {/* Subfolder icons — double-click to open, like a desktop file browser. */}
+          {childFolders.length > 0 && (
+            <div className={styles.subfolders}>
+              {childFolders.map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  className={styles.folderIconTile}
+                  onDoubleClick={() => setFolderFilter(f.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") setFolderFilter(f.id);
+                  }}
+                  title={`Double-click to open ${f.name}`}
+                >
+                  <span className={styles.folderGlyph}>
+                    <Folder size={44} />
+                    {f.testCount > 0 && <span className={styles.folderBadge}>{f.testCount}</span>}
+                  </span>
+                  <span className={styles.folderLabel}>{f.name}</span>
+                </button>
+              ))}
             </div>
+          )}
+
+          {filtered.length === 0 ? (
+            childFolders.length > 0 ? (
+              <div className={styles.subEmpty}>
+                No tests directly in this folder — open a subfolder above, or drag a test here.
+              </div>
+            ) : (
+              <div className={styles.filteredEmpty}>
+                <span className={styles.filteredIcon}>
+                  <Search size={22} />
+                </span>
+                <div className={styles.filteredTitle}>No tests match these filters</div>
+                <Button variant="secondary" size="sm" onClick={clearFilters}>
+                  Clear filters
+                </Button>
+              </div>
+            )
           ) : (
             filtered.map((t) => (
               <TestRow

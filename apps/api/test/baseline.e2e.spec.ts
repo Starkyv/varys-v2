@@ -465,6 +465,40 @@ describe("Baseline lifecycle", () => {
     expect(diff.checkpoints[0].reviewState).toBe("diff");
   });
 
+  // Phase 4 — frame-aware capture: an element checkpoint whose target lives INSIDE a
+  // same-origin srcDoc iframe (the Brief/Wisdom shape) resolves via `frameChain` and captures
+  // the in-frame element. If frameChain weren't honored, resolve would miss → run would fail.
+  it("captures an element inside a same-origin iframe via frameChain", async () => {
+    fixture.setVariant("iframe");
+    const definition = {
+      name: "iframe capture",
+      viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+      steps: [
+        { type: "navigate", url: fixture.url },
+        {
+          type: "screenshot",
+          name: "brief",
+          captureMode: "element",
+          target: {
+            tag: "div",
+            testId: "brief-body",
+            frameChain: [{ testId: "report-frame" }],
+          },
+        },
+      ],
+    };
+    const test = await authed(app).post("/tests").send(definition).expect(201);
+
+    const run = await runToCompletion(test.body.id);
+    fixture.setVariant("default");
+
+    expect(run.status).toBe("needs_review");
+    const cp = run.checkpoints[0];
+    expect(cp).toMatchObject({ name: "brief", reviewState: "pending-baseline" });
+    expect(cp.actualUrl).toEqual(expect.any(String)); // proves the in-frame element was captured
+    expect(cp.healed).toBe(false); // matched by testId inside the frame, not a fallback
+  });
+
   // Issue 5 TB2 — a wait makes a deferred element available before the screenshot.
   it("waits for a deferred element before screenshotting", async () => {
     fixture.setVariant("deferred");

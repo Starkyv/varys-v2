@@ -195,6 +195,9 @@ export const runResults = pgTable(
      *  `resolution`. Null while the checkpoint is still unresolved. */
     resolvedBy: text("resolved_by"),
     resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    /** The LLM judge's one-line rationale for a `context`-compared checkpoint (shown to the
+     *  reviewer beside the two images). Null for pixel-compared checkpoints. */
+    judgeReasoning: text("judge_reasoning"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   // One result per checkpoint per run — lets the worker upsert so a redelivered run
@@ -457,6 +460,8 @@ CREATE TABLE IF NOT EXISTS run_results (
 -- Attribution (Slice A): who recorded the approve/reject decision, and when.
 ALTER TABLE run_results ADD COLUMN IF NOT EXISTS resolved_by text;
 ALTER TABLE run_results ADD COLUMN IF NOT EXISTS resolved_at timestamptz;
+-- Dynamic-content testing: the LLM judge's rationale for a context-compared checkpoint.
+ALTER TABLE run_results ADD COLUMN IF NOT EXISTS judge_reasoning text;
 CREATE TABLE IF NOT EXISTS run_steps (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   run_id uuid NOT NULL REFERENCES runs(id),

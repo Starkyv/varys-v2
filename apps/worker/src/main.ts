@@ -14,6 +14,8 @@ async function main() {
   const boss = createBoss(connectionString);
 
   await startBoss(boss);
+  // The judge for context checkpoints is built inside processRun per run (from the Configurations
+  // page settings, env fallback), so a settings change applies without restarting the worker.
   await workRuns(boss, (runId) => processRun({ db, storage }, runId));
 
   // eslint-disable-next-line no-console

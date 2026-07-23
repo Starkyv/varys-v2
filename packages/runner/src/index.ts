@@ -12,6 +12,12 @@ import {
   testVersions,
 } from "@varys/db";
 import { diffPng } from "@varys/diff-engine";
+import {
+  buildJudge,
+  createJudgeFromEnv,
+  type JudgeProvider,
+  type JudgeProviderName,
+} from "@varys/judge-engine";
 import { resolve, verify } from "@varys/locator-engine";
 import {
   describeStep,
@@ -60,6 +66,10 @@ export function actionResolveTimeoutMs(): number {
 export interface ReplayDeps {
   db: Db;
   storage: StorageAdapter;
+  /** The LLM judge for `context`-compared checkpoints. Optional so pixel-only deployments and
+   *  existing callers need no change; a `context` checkpoint encountered without a judge fails
+   *  its step loudly (never silently passes). */
+  judge?: JudgeProvider;
 }
 
 // Re-exported so callers (e.g. the API's locator-verify probe) can build a profile without
@@ -90,6 +100,45 @@ async function globalImageDefaults(db: Db): Promise<{ ratio: number; perPixel: n
   return {
     ratio: clamp(byKey.get(RATIO_KEY), DEFAULT_THRESHOLD),
     perPixel: clamp(byKey.get(PER_PIXEL_KEY), DEFAULT_PER_PIXEL),
+  };
+}
+
+/** `app_settings` keys for the LLM judge config (edited on the Configurations page; the API masks
+ *  the key). Kept in sync with the API's settings service. */
+const JUDGE_SETTINGS_KEYS = {
+  provider: "judge_provider",
+  model: "judge_model",
+  apiKey: "judge_api_key",
+  baseUrl: "judge_base_url",
+  temperature: "judge_temperature",
+  defaultPrompt: "judge_default_prompt",
+} as const;
+
+/**
+ * Resolve the context-compare judge + the global default prompt from the DB Configurations
+ * (`app_settings`), falling back to the environment (`VARYS_JUDGE_*`) for the judge when the DB
+ * isn't configured. Read PER RUN so a Configurations edit takes effect on the next run without
+ * redeploying the worker. The `judge` is undefined when neither source is configured, and
+ * `defaultPrompt` is "" when unset — a `context` checkpoint with no prompt of its own then fails its
+ * step loudly (never a false pass).
+ */
+async function resolveJudge(db: Db): Promise<{ judge: JudgeProvider | undefined; defaultPrompt: string }> {
+  const rows = await db
+    .select({ key: appSettings.key, value: appSettings.value })
+    .from(appSettings)
+    .where(inArray(appSettings.key, Object.values(JUDGE_SETTINGS_KEYS)));
+  const v = new Map(rows.map((r) => [r.key, r.value]));
+  const temperature = Number(v.get(JUDGE_SETTINGS_KEYS.temperature));
+  const fromDb = buildJudge({
+    provider: v.get(JUDGE_SETTINGS_KEYS.provider) as JudgeProviderName | undefined,
+    apiKey: v.get(JUDGE_SETTINGS_KEYS.apiKey) ?? "",
+    model: v.get(JUDGE_SETTINGS_KEYS.model) ?? "",
+    baseUrl: v.get(JUDGE_SETTINGS_KEYS.baseUrl) || undefined,
+    temperature: Number.isFinite(temperature) ? temperature : undefined,
+  });
+  return {
+    judge: fromDb ?? createJudgeFromEnv(),
+    defaultPrompt: v.get(JUDGE_SETTINGS_KEYS.defaultPrompt) ?? "",
   };
 }
 
@@ -172,6 +221,34 @@ export async function applyWaits(page: Page, waits: Wait[] | undefined): Promise
       // timeout, then proceed. (Mirrors the pre-screenshot settle below.) Prefer a `selector`
       // wait when you need a hard gate on a specific element.
       await page.waitForLoadState("networkidle", { timeout: w.timeoutMs }).catch(() => undefined);
+    } else if (w.kind === "streamIdle") {
+      // Wait until the DOM has been mutation-free for `quietMs` — i.e. a streamed Wisdom answer /
+      // late-rendering chart has SETTLED — capped at `timeoutMs`. Best-effort: resolves at the cap
+      // if the page never fully quiesces, so a perpetually-animating page can't hang the step.
+      // Passed as a RAW STRING expression (not a serialized function) so esbuild/tsx `keepNames`
+      // can't rewrite it to call a `__name` helper that doesn't exist in the page — the same reason
+      // `seedLocalStorage` builds its init script from a string.
+      const quietMs = w.quietMs ?? 800;
+      const timeoutMs = w.timeoutMs ?? 30_000;
+      const src = `(function () {
+  return new Promise(function (resolve) {
+    var quiet = ${quietMs}, max = ${timeoutMs}, t = null, obs = null;
+    var hard = setTimeout(done, max);
+    function done() {
+      try { if (obs) obs.disconnect(); } catch (e) {}
+      if (t) clearTimeout(t);
+      clearTimeout(hard);
+      resolve(true);
+    }
+    function bump() { if (t) clearTimeout(t); t = setTimeout(done, quiet); }
+    try {
+      obs = new MutationObserver(bump);
+      obs.observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true });
+    } catch (e) {}
+    bump();
+  });
+})()`;
+      await page.evaluate(src).catch(() => undefined);
     } else {
       await waitLocator(page, w.target).waitFor({
         state: w.state,
@@ -307,6 +384,7 @@ const RESULT_CONFLICT = {
     diffScore: sql`excluded.diff_score`,
     threshold: sql`excluded.threshold`,
     healed: sql`excluded.healed`,
+    judgeReasoning: sql`excluded.judge_reasoning`,
   },
 };
 
@@ -342,6 +420,20 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
   if (!row) throw new Error(`Run ${runId} not found`);
   const { testId } = row;
   const recorded = row.definition as TestDefinition;
+
+  // Build the context-compare judge only when this run has a context checkpoint. `deps.judge`
+  // (tests) wins; otherwise it's built from the Configurations/app_settings (env fallback), read
+  // per run so a settings edit applies without a redeploy.
+  const needsJudge = recorded.steps.some(
+    (s) => s.type === "screenshot" && s.compareMode === "context",
+  );
+  let judge = deps.judge;
+  let judgeDefaultPrompt = "";
+  if (needsJudge) {
+    const resolved = await resolveJudge(db);
+    judge = judge ?? resolved.judge; // deps.judge (tests) wins; else DB/env
+    judgeDefaultPrompt = resolved.defaultPrompt;
+  }
 
   const reviewStates: string[] = [];
   // Which step is currently executing — read by the catch so the failure names it.
@@ -532,6 +624,58 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
           })
           .onConflictDoUpdate(RESULT_CONFLICT);
         reviewStates.push("pending-baseline");
+      } else if (step.compareMode === "context") {
+        // Non-deterministic content: an LLM judge compares the approved baseline against the
+        // current capture (ignoring that words/numbers/charts legitimately differ) and returns
+        // pass/fail + reasoning. `pass` → passed; `fail` (or a judge ERROR, fail-safe) → `diff`
+        // into needs-review with the reasoning — a judge verdict never hard-fails a run, and a
+        // broken/absent judge never manufactures a green.
+        const baselineBytes = await storage.get(baseline.artifactKey);
+        if (!baselineBytes) throw new Error("baseline artifact missing");
+        if (!judge) {
+          throw new Error(
+            `checkpoint "${step.name}" uses context compare but no judge provider is configured (set it on the Configurations page or via VARYS_JUDGE_*)`,
+          );
+        }
+        // Per-checkpoint prompt wins; otherwise inherit the global default from Configurations.
+        const effectivePrompt = step.prompt?.trim() || judgeDefaultPrompt.trim();
+        if (!effectivePrompt) {
+          throw new Error(
+            `context checkpoint "${step.name}" has no prompt and no default judge prompt is set on the Configurations page`,
+          );
+        }
+
+        let verdict: "pass" | "fail";
+        let reasoning: string;
+        try {
+          const r = await judge.judge({
+            baseline: baselineBytes,
+            current: actual,
+            prompt: effectivePrompt,
+          });
+          verdict = r.verdict;
+          reasoning = r.reasoning;
+        } catch (judgeErr) {
+          verdict = "fail";
+          reasoning = `judge error: ${
+            judgeErr instanceof Error ? judgeErr.message : String(judgeErr)
+          }`;
+        }
+        const reviewState = verdict === "pass" ? "passed" : "diff";
+        await db
+          .insert(runResults)
+          .values({
+            runId,
+            checkpointName: step.name,
+            reviewState,
+            actualArtifactKey: actualKey,
+            baselineArtifactKey: baseline.artifactKey,
+            threshold,
+            healed,
+            judgeReasoning: reasoning,
+          })
+          .onConflictDoUpdate(RESULT_CONFLICT);
+        reviewStates.push(reviewState);
       } else {
         const baselineBytes = await storage.get(baseline.artifactKey);
         if (!baselineBytes) throw new Error("baseline artifact missing");

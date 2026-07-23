@@ -136,7 +136,7 @@ function buildNewStep(input: NewStepInput): Step {
   if (input.type === "screenshot") {
     const name = (input.name ?? "").trim();
     if (!name) throw new BadRequestException("A checkpoint needs a name.");
-    return { type: "screenshot", name, captureMode: "fullpage" };
+    return { type: "screenshot", name, captureMode: "fullpage", compareMode: "pixel" };
   }
   // click / type — a hand-authored locator: empty tag (unknown) + the raw selector as override.
   const selector = (input.selector ?? "").trim();
@@ -664,6 +664,8 @@ export class TestsService {
         waitBefore: s.type === "navigate" ? [] : (s.waitBefore ?? []).map(toConfigWait),
         checkpointName: s.type === "screenshot" ? s.name : null,
         captureMode: s.type === "screenshot" ? (s.captureMode ?? "element") : null,
+        compareMode: s.type === "screenshot" ? (s.compareMode ?? "pixel") : null,
+        prompt: s.type === "screenshot" ? (s.prompt ?? null) : null,
         threshold: s.type === "screenshot" ? (s.threshold ?? null) : null,
         // Type-only: the literal value typed into the field (editable on Test Detail).
         value: s.type === "type" ? s.value : null,
@@ -769,6 +771,14 @@ export class TestsService {
       if (p.masks !== undefined && out.type === "screenshot") {
         out = { ...out, masks: p.masks };
       }
+      if (p.compareMode !== undefined && out.type === "screenshot") {
+        out = { ...out, compareMode: p.compareMode };
+      }
+      if (p.prompt !== undefined && out.type === "screenshot") {
+        out = { ...out, prompt: p.prompt };
+      }
+      // A context checkpoint's prompt is optional — when blank it inherits the global default judge
+      // prompt from the Configurations page (resolved at run time).
       // Type-only: set the literal value typed into the field.
       if (p.value !== undefined && out.type === "type") {
         out = { ...out, value: p.value };

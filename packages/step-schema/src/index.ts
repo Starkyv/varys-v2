@@ -20,8 +20,30 @@ export const navigateStep = z.object({
  * signals — capturing the bundle, not a single selector, is what lets the
  * matcher evolve without re-recording.
  */
+/**
+ * Identifies one `<iframe>` to descend into on the way to a target. A target's element can live
+ * inside a (possibly nested) iframe — e.g. a DataGenie Brief report or a Wisdom visualization,
+ * both rendered into a same-origin `<iframe srcDoc>`. The matcher tries these signals in order to
+ * locate the frame element (testId → id → name → src substring → nth iframe). Only same-origin
+ * frames are reachable; an unresolvable frame fails the step loudly rather than capturing empty.
+ */
+export const frameRef = z.object({
+  testId: z.string().optional(),
+  id: z.string().optional(),
+  name: z.string().optional(),
+  /** A substring of the iframe's `src` (stable slice), for frames identified by URL. */
+  urlContains: z.string().optional(),
+  /** 0-based index among the iframes of its parent document — the last-resort fallback when the
+   *  frame carries no stable attribute. */
+  index: z.number().int().nonnegative().optional(),
+});
+export type FrameRef = z.infer<typeof frameRef>;
+
 export const fingerprint = z.object({
   testId: z.string().optional(),
+  /** Ordered iframes to descend (outermost first) before matching the target inside the innermost
+   *  frame's document. Absent/empty ⇒ the target is in the top-level page (today's behavior). */
+  frameChain: z.array(frameRef).optional(),
   role: z.string().optional(),
   accessibleName: z.string().optional(),
   /** True when `accessibleName` came from a stable attribute (aria-label, title, …)
@@ -93,6 +115,14 @@ export const wait = z.discriminatedUnion("kind", [
     kind: z.literal("networkIdle"),
     timeoutMs: z.number().int().positive().optional(),
   }),
+  /** Wait until the DOM has been mutation-free for `quietMs` — i.e. streaming/late-rendering
+   *  content (Wisdom answers, late d3 layout) has settled — capped at `timeoutMs`. Best-effort:
+   *  proceeds at the cap even if the page never fully quiesces. */
+  z.object({
+    kind: z.literal("streamIdle"),
+    quietMs: z.number().int().positive().optional(),
+    timeoutMs: z.number().int().positive().optional(),
+  }),
   z.object({
     kind: z.literal("selector"),
     target: fingerprint,
@@ -113,9 +143,22 @@ export const screenshotStep = z.object({
   /** Required for `region` capture; the clipped rectangle (screenshot-pixel space). */
   rect: rect.optional(),
   waitBefore: z.array(wait).optional(),
-  /** Regions (in screenshot pixel space) the diff ignores. */
+  /** How the captured screenshot is compared against its baseline. Absent ⇒ `pixel`
+   *  (back-compat): the classic `diffPng` pixel comparison. `context` sends the baseline
+   *  + current screenshots + `prompt` to an LLM judge that returns pass/fail + reasoning —
+   *  for non-deterministic, LLM-generated content (Briefs, Wisdom) that pixel-diff can't
+   *  handle. `compareMode` is orthogonal to `captureMode`. */
+  compareMode: z.enum(["pixel", "context"]).default("pixel"),
+  /** The author-written instruction/checklist the `context` judge follows (e.g. "both are
+   *  AI-generated briefs; ignore that words/numbers differ; is the CURRENT one broken or
+   *  degraded vs the baseline?"). Required when `compareMode` is `context`; unused for
+   *  `pixel`. */
+  prompt: z.string().min(1).optional(),
+  /** Regions (in screenshot pixel space) the diff ignores. Pixel-mode only — ignored when
+   *  `compareMode` is `context`. */
   masks: z.array(rect).optional(),
-  /** Max mismatched-pixel ratio (0..1) tolerated before a diff is flagged. */
+  /** Max mismatched-pixel ratio (0..1) tolerated before a diff is flagged. Pixel-mode only —
+   *  ignored when `compareMode` is `context`. */
   threshold: z.number().positive().max(1).optional(),
 });
 
@@ -203,6 +246,8 @@ export const testDefinition = z
           message: "region capture requires a rect",
         });
       }
+      // A `context` checkpoint's `prompt` is OPTIONAL: when omitted it inherits the global default
+      // judge prompt from the Configurations page (enforced at run time, which knows that default).
     });
   });
 
@@ -242,7 +287,13 @@ export function describeStep(step: Step): string {
       return `hover ${fingerprintLabel(step.target)}`;
     case "type":
       return `type into ${fingerprintLabel(step.target)}`;
-    case "screenshot":
-      return `checkpoint "${step.name}" (${step.captureMode ?? "element"})`;
+    case "screenshot": {
+      const mode = step.captureMode ?? "element";
+      // Only annotate the comparison when it's the non-default `context` judge, so
+      // existing pixel checkpoints keep their `(element)` / `(fullpage)` labels.
+      return step.compareMode === "context"
+        ? `checkpoint "${step.name}" (${mode}, context)`
+        : `checkpoint "${step.name}" (${mode})`;
+    }
   }
 }

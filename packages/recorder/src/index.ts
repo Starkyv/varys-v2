@@ -135,12 +135,14 @@ export function createRecording(onStep?: OnStep): Recording {
       // definitions without them are unchanged).
       const masks = spec.masks && spec.masks.length ? { masks: spec.masks } : {};
       const waits = spec.waitBefore && spec.waitBefore.length ? { waitBefore: spec.waitBefore } : {};
+      // The recorder always records pixel comparison; `context` is authored later in the
+      // test-detail editor (it needs a human-written prompt the recorder can't infer).
       if (spec.mode === "fullpage") {
-        push({ type: "screenshot", name, captureMode: "fullpage", ...masks, ...waits });
+        push({ type: "screenshot", name, captureMode: "fullpage", compareMode: "pixel", ...masks, ...waits });
       } else if (spec.mode === "region") {
-        push({ type: "screenshot", name, captureMode: "region", rect: spec.rect, ...masks, ...waits });
+        push({ type: "screenshot", name, captureMode: "region", compareMode: "pixel", rect: spec.rect, ...masks, ...waits });
       } else {
-        push({ type: "screenshot", name, captureMode: "element", target: spec.target, ...masks, ...waits });
+        push({ type: "screenshot", name, captureMode: "element", compareMode: "pixel", target: spec.target, ...masks, ...waits });
       }
     },
     getDefinition(name, viewport) {

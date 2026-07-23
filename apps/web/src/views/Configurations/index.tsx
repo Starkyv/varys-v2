@@ -2,12 +2,27 @@ import {
   DEFAULT_PER_PIXEL_THRESHOLD,
   DEFAULT_RATIO_THRESHOLD,
   type ImageComparisonSettings,
+  JUDGE_PROVIDERS,
+  type JudgeProviderName,
+  type JudgeSettingsView,
 } from "@varys/review-contract";
-import { Badge, Button, ErrorState, Skeleton, Sliders } from "@varys/ui";
+import { Badge, Button, ErrorState, Input, Select, Skeleton, Sliders } from "@varys/ui";
 import { useEffect, useState } from "react";
 import { useToast } from "../../context/toast";
-import { useImageComparisonSettings, useSaveImageComparisonSettings } from "../../queries";
+import {
+  useImageComparisonSettings,
+  useJudgeSettings,
+  useSaveImageComparisonSettings,
+  useSaveJudgeSettings,
+} from "../../queries";
 import styles from "./styles.module.scss";
+
+/** A sensible default model to suggest per provider (placeholder in the model field). */
+const MODEL_PLACEHOLDER: Record<JudgeProviderName, string> = {
+  gemini: "gemini-2.0-flash",
+  anthropic: "claude-sonnet-5",
+  openai: "e.g. llava, qwen2.5-vl, gpt-4o-mini",
+};
 
 /** Floats from a slider vs. a server round-trip — compare with a small tolerance. */
 function near(a: number, b: number): boolean {
@@ -55,10 +70,171 @@ export function Configurations() {
   return (
     <div className={styles.page}>
       <ImageComparisonCard settings={query.data} />
+      <JudgeCard />
       <p className={styles.comingSoon}>
         More settings coming soon — capture, schedules and notifications.
       </p>
     </div>
+  );
+}
+
+/** The context-compare judge config — provider + model + a masked API key. Drives what the worker
+ *  uses to judge `context` checkpoints (Briefs / Wisdom); applies from the next run. */
+function JudgeCard() {
+  const query = useJudgeSettings();
+  if (query.isLoading) return <Skeleton height={320} radius="var(--radius-xl)" />;
+  if (query.isError || !query.data) {
+    return (
+      <ErrorState
+        title="Couldn’t load the AI judge settings"
+        description="Fetching the judge configuration failed."
+        onRetry={() => query.refetch()}
+      />
+    );
+  }
+  return <JudgeCardForm settings={query.data} />;
+}
+
+function JudgeCardForm({ settings }: { settings: JudgeSettingsView }) {
+  const { toast } = useToast();
+  const save = useSaveJudgeSettings();
+
+  const [provider, setProvider] = useState<JudgeProviderName>(settings.provider);
+  const [model, setModel] = useState(settings.model);
+  const [baseUrl, setBaseUrl] = useState(settings.baseUrl ?? "");
+  const [defaultPrompt, setDefaultPrompt] = useState(settings.defaultPrompt);
+  // The key is never returned; the field starts empty and only replaces the stored key if typed.
+  const [apiKey, setApiKey] = useState("");
+  useEffect(() => {
+    setProvider(settings.provider);
+    setModel(settings.model);
+    setBaseUrl(settings.baseUrl ?? "");
+    setDefaultPrompt(settings.defaultPrompt);
+    setApiKey("");
+  }, [settings.provider, settings.model, settings.baseUrl, settings.defaultPrompt]);
+
+  const dirty =
+    provider !== settings.provider ||
+    model !== settings.model ||
+    baseUrl !== (settings.baseUrl ?? "") ||
+    defaultPrompt !== settings.defaultPrompt ||
+    apiKey.trim().length > 0;
+
+  const onSave = () => {
+    const patch: Parameters<typeof save.mutate>[0] = { provider, model: model.trim(), defaultPrompt };
+    if (provider === "openai") patch.baseUrl = baseUrl.trim();
+    if (apiKey.trim().length > 0) patch.apiKey = apiKey.trim();
+    save.mutate(patch, {
+      onSuccess: () => toast("AI judge settings saved — applied from the next run"),
+      onError: (e) => toast(e instanceof Error ? e.message : "Couldn’t save judge settings"),
+    });
+  };
+
+  return (
+    <section className={styles.card}>
+      <header className={styles.header}>
+        <span className={styles.headerIcon}>
+          <Sliders size={19} />
+        </span>
+        <div className={styles.headerText}>
+          <h2 className={styles.title}>AI judge (context comparison)</h2>
+          <p className={styles.subtitle}>
+            For checkpoints set to “AI context”, an LLM compares the current capture against the
+            baseline instead of pixel-diffing. Choose a provider and paste its API key.
+          </p>
+        </div>
+        <Button variant="primary" size="md" loading={save.isPending} disabled={!dirty} onClick={onSave}>
+          Save changes
+        </Button>
+      </header>
+
+      <div className={styles.setting}>
+        <div className={styles.settingHead}>
+          <span className={styles.settingTitle}>Provider</span>
+          {provider === "gemini" && (
+            <Badge tone="primary" size="sm">
+              free tier
+            </Badge>
+          )}
+        </div>
+        <Select
+          options={JUDGE_PROVIDERS}
+          value={provider}
+          onValueChange={(v) => setProvider(v as JudgeProviderName)}
+        />
+      </div>
+
+      <div className={styles.setting}>
+        <div className={styles.settingHead}>
+          <span className={styles.settingTitle}>Model</span>
+        </div>
+        <Input
+          value={model}
+          placeholder={MODEL_PLACEHOLDER[provider]}
+          aria-label="Judge model"
+          onChange={(e) => setModel(e.target.value)}
+        />
+      </div>
+
+      {provider === "openai" && (
+        <div className={styles.setting}>
+          <div className={styles.settingHead}>
+            <span className={styles.settingTitle}>Endpoint (OpenAI-compatible base URL)</span>
+          </div>
+          <p className={styles.settingDesc}>
+            e.g. a local Ollama server (<code>http://localhost:11434/v1</code>) or OpenRouter.
+          </p>
+          <Input
+            value={baseUrl}
+            placeholder="http://localhost:11434/v1"
+            aria-label="OpenAI-compatible endpoint"
+            onChange={(e) => setBaseUrl(e.target.value)}
+          />
+        </div>
+      )}
+
+      <div className={styles.setting}>
+        <div className={styles.settingHead}>
+          <span className={styles.settingTitle}>API key</span>
+          {settings.apiKeySet && (
+            <Badge tone="info" size="sm">
+              set · ····{settings.apiKeyHint}
+            </Badge>
+          )}
+        </div>
+        <p className={styles.settingDesc}>
+          {settings.apiKeySet
+            ? "A key is stored. Leave blank to keep it, or paste a new one to replace it."
+            : "Paste the provider’s API key. It’s stored server-side and never shown again."}
+        </p>
+        <Input
+          type="password"
+          value={apiKey}
+          mono
+          placeholder={settings.apiKeySet ? "•••••••• (unchanged)" : "paste API key"}
+          aria-label="Judge API key"
+          onChange={(e) => setApiKey(e.target.value)}
+        />
+      </div>
+
+      <div className={styles.setting}>
+        <div className={styles.settingHead}>
+          <span className={styles.settingTitle}>Default judge prompt</span>
+        </div>
+        <p className={styles.settingDesc}>
+          The instruction every “AI context” checkpoint uses by default — so you don’t re-type it per
+          test. A checkpoint can still set its own prompt to override this.
+        </p>
+        <textarea
+          className={styles.promptTextarea}
+          rows={4}
+          value={defaultPrompt}
+          aria-label="Default judge prompt"
+          placeholder="e.g. Both images are AI-generated pages. Ignore differences in wording, numbers, and chart values. Fail only if the current one is blank, an error/loading state, or structurally broken versus the baseline."
+          onChange={(e) => setDefaultPrompt(e.target.value)}
+        />
+      </div>
+    </section>
   );
 }
 

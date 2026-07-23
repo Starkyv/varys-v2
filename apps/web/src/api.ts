@@ -11,6 +11,8 @@ import type {
   EnvironmentView,
   FolderSummary,
   ImageComparisonSettings,
+  JudgeSettingsPatch,
+  JudgeSettingsView,
   LocatorVerifyRequest,
   LocatorVerifyResult,
   NeedsReviewItem,
@@ -179,6 +181,25 @@ export async function saveImageComparisonSettings(
     throw new Error(`Failed to save image-comparison settings (${res.status})`);
   }
   return (await res.json()) as ImageComparisonSettings;
+}
+
+/** The judge (context-compare) config — masked (no API key returned, only a set-flag + hint). */
+export async function fetchJudgeSettings(): Promise<JudgeSettingsView> {
+  const res = await fetch(`${API_BASE}/settings/judge`);
+  if (!res.ok) throw new Error(`Failed to load judge settings (${res.status})`);
+  return (await res.json()) as JudgeSettingsView;
+}
+
+/** Save the judge config. A non-empty `apiKey` replaces the stored key; omit it to keep the current
+ *  one. Returns the new masked view. */
+export async function saveJudgeSettings(body: JudgeSettingsPatch): Promise<JudgeSettingsView> {
+  const res = await fetch(`${API_BASE}/settings/judge`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`Failed to save judge settings (${res.status})`);
+  return (await res.json()) as JudgeSettingsView;
 }
 
 /** Whether Claude Code has recently driven the MCP server — an activity-based "connected" proxy

@@ -47,6 +47,9 @@ importers:
       '@varys/diff-engine':
         specifier: workspace:*
         version: link:../../packages/diff-engine
+      '@varys/judge-engine':
+        specifier: workspace:*
+        version: link:../../packages/judge-engine
       '@varys/queue':
         specifier: workspace:*
         version: link:../../packages/queue
@@ -331,6 +334,16 @@ importers:
 
   packages/fixture-app: {}
 
+  packages/judge-engine:
+    dependencies:
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+    devDependencies:
+      vitest:
+        specifier: ^3.0.5
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@25.9.3)(jiti@2.7.0)(jsdom@25.0.1)(lightningcss@1.32.0)(msw@2.14.6(@types/node@25.9.3)(typescript@5.9.3))(sass@1.101.0)(tsx@4.22.4)(yaml@2.9.0)
+
   packages/locator-engine:
     dependencies:
       '@varys/step-schema':
@@ -379,6 +392,9 @@ importers:
       '@varys/diff-engine':
         specifier: workspace:*
         version: link:../diff-engine
+      '@varys/judge-engine':
+        specifier: workspace:*
+        version: link:../judge-engine
       '@varys/locator-engine':
         specifier: workspace:*
         version: link:../locator-engine

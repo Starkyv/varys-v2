@@ -48,6 +48,10 @@ export function CheckpointViewer({
   const isPending = cp.reviewState === "pending-baseline";
   const hasBaseline = !isPending && cp.baselineUrl != null;
   const over = cp.diffScore != null && cp.diffScore > cp.threshold;
+  // Context checkpoints are judged by an LLM, not pixel-diffed: "failing" is a `diff` reviewState,
+  // and the pixel-only knobs (threshold, mask editors, diff-highlight) don't apply.
+  const isContext = cp.compareMode === "context";
+  const failing = isContext ? cp.reviewState === "diff" : over;
 
   const modeOptions: SegmentedOption<DiffMode>[] = [
     { value: "side-by-side", label: "Side by side", icon: <Columns size={14} /> },
@@ -95,26 +99,38 @@ export function CheckpointViewer({
 
       <div className={styles.review}>
         <div
-          className={cx(styles.verdict, isPending ? styles.verdictInfo : over ? styles.verdictDanger : styles.verdictSuccess)}
+          className={cx(styles.verdict, isPending ? styles.verdictInfo : failing ? styles.verdictDanger : styles.verdictSuccess)}
         >
           <span className={styles.verdictLabel}>
-            {isPending ? "First capture — no baseline yet" : over ? "Over threshold" : "Within threshold"}
+            {isPending
+              ? "First capture — no baseline yet"
+              : isContext
+                ? failing
+                  ? "AI judge: fail"
+                  : "AI judge: pass"
+                : over
+                  ? "Over threshold"
+                  : "Within threshold"}
           </span>
-          {!isPending && (
+          {!isPending && !isContext && (
             <span className={styles.verdictScore}>
               Diff <strong className={styles.mono}>{scorePct(cp.diffScore)}</strong> · threshold{" "}
               <strong className={styles.mono}>{scorePct(cp.threshold, 2)}</strong>
             </span>
           )}
+          {!isPending && isContext && cp.judgeReasoning && (
+            <span className={styles.verdictScore}>{cp.judgeReasoning}</span>
+          )}
         </div>
 
-        {isPending && (
+        {isPending && !isContext && (
           // First capture — no baseline to diff yet, so edit the ignore regions directly on the
           // capture that's about to become the baseline (draw / move / resize; saves a version).
           <PendingMaskEditor checkpoint={cp} runId={runId} />
         )}
 
         {hasBaseline &&
+          !isContext &&
           (cp.diffUrl ? (
             // Failing / over threshold — the editor is part of the review, shown inline.
             <MaskTuning checkpoint={cp} runId={runId} />

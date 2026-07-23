@@ -1,5 +1,48 @@
-import type { Fingerprint } from "@varys/step-schema";
-import type { Locator, Page } from "playwright";
+import type { Fingerprint, FrameRef } from "@varys/step-schema";
+import type { Frame, Locator, Page } from "playwright";
+
+/** A search root the scorer can run against — the top page or a descended iframe. Both expose the
+ *  `evaluate` + `locator` the matcher needs; the in-page scorer reads `globalThis.document`, which
+ *  resolves to whichever document the root belongs to. */
+type SearchRoot = Page | Frame;
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** Build a CSS selector for one iframe from its {@link FrameRef} signals (strongest first). Returns
+ *  a bare `iframe` when only an index is available — the caller applies `.nth(index)`. */
+function frameSelector(ref: FrameRef): string {
+  if (ref.testId) return `iframe[data-testid="${ref.testId}"]`;
+  if (ref.id) return `iframe#${ref.id}`;
+  if (ref.name) return `iframe[name="${ref.name}"]`;
+  if (ref.urlContains) return `iframe[src*="${ref.urlContains}"]`;
+  return "iframe";
+}
+
+/**
+ * Descend a fingerprint's `frameChain` from the top page to the innermost frame's document, so the
+ * scorer can match a target that lives inside a (nested) iframe. Returns the innermost {@link Frame},
+ * or null if any hop can't be located — a null makes the caller report not-found (loud fail),
+ * never a silent empty capture. Same-origin `srcDoc` frames (Briefs, Wisdom) are the target case.
+ */
+async function descendToFrame(
+  page: Page,
+  chain: FrameRef[],
+  timeoutMs: number,
+): Promise<Frame | null> {
+  let current: SearchRoot = page;
+  for (const ref of chain) {
+    const base: Locator = current.locator(frameSelector(ref));
+    const onlyIndex =
+      ref.index != null && !ref.testId && !ref.id && !ref.name && !ref.urlContains;
+    const locator: Locator = onlyIndex ? base.nth(ref.index as number) : base.first();
+    const handle = await locator.elementHandle({ timeout: timeoutMs }).catch(() => null);
+    if (!handle) return null;
+    const frame: Frame | null = await handle.contentFrame().catch(() => null);
+    if (!frame) return null;
+    current = frame;
+  }
+  return current === page ? null : (current as Frame);
+}
 
 export interface ResolveResult {
   locator: Locator;
@@ -61,7 +104,7 @@ type PollResult =
  * genuine ambiguity (a tie) or simply nothing matched.
  */
 async function poll(
-  page: Page,
+  root: SearchRoot,
   fp: Fingerprint,
   opts?: { timeoutMs?: number; intervalMs?: number },
 ): Promise<PollResult> {
@@ -90,25 +133,39 @@ async function poll(
     // exactly one element — used as-is. A stale / non-unique / malformed override is ignored,
     // falling through to the scored bundle so the locator still self-heals.
     if (fp.selectorOverride) {
-      const override = page.locator(fp.selectorOverride);
+      const override = root.locator(fp.selectorOverride);
       const count = await override.count().catch(() => -1);
       if (count === 1) {
         return { kind: "win", locator: override.first(), matchedSignal: "override", healed: false };
       }
     }
-    const outcome = await page.evaluate(runInPage, { fp, MARKER, token });
+    const outcome = await root.evaluate(runInPage, { fp, MARKER, token });
     if (outcome && outcome !== "ambiguous") {
       return {
         kind: "win",
-        locator: page.locator(`[${MARKER}="${token}"]`).first(),
+        locator: root.locator(`[${MARKER}="${token}"]`).first(),
         matchedSignal: outcome.matchedSignal,
         healed: outcome.healed,
       };
     }
     lastAmbiguous = outcome === "ambiguous";
-    if (i < attempts - 1) await page.waitForTimeout(intervalMs);
+    if (i < attempts - 1) await sleep(intervalMs);
   }
   return lastAmbiguous ? { kind: "ambiguous" } : { kind: "none" };
+}
+
+/**
+ * Compute the search root for a fingerprint: the top page, or — when the fingerprint carries a
+ * `frameChain` — the innermost iframe it names. Returns null when a frame in the chain can't be
+ * reached, so the caller fails loudly instead of matching against the wrong document.
+ */
+async function rootFor(
+  page: Page,
+  fp: Fingerprint,
+  timeoutMs: number,
+): Promise<SearchRoot | null> {
+  if (!fp.frameChain?.length) return page;
+  return descendToFrame(page, fp.frameChain, timeoutMs);
 }
 
 export async function resolve(
@@ -116,7 +173,9 @@ export async function resolve(
   fp: Fingerprint,
   opts?: { timeoutMs?: number; intervalMs?: number },
 ): Promise<ResolveResult | null> {
-  const r = await poll(page, fp, opts);
+  const root = await rootFor(page, fp, opts?.timeoutMs ?? 5000);
+  if (!root) return null; // a named frame in the chain couldn't be reached
+  const r = await poll(root, fp, opts);
   return r.kind === "win"
     ? { locator: r.locator, matchedSignal: r.matchedSignal, healed: r.healed }
     : null;
@@ -130,7 +189,9 @@ export async function verify(
   fp: Fingerprint,
   opts?: { timeoutMs?: number; intervalMs?: number },
 ): Promise<VerifyOutcome> {
-  const r = await poll(page, fp, opts);
+  const root = await rootFor(page, fp, opts?.timeoutMs ?? 5000);
+  if (!root) return { status: "not-found", matchedSignal: null, healed: false };
+  const r = await poll(root, fp, opts);
   if (r.kind === "win") {
     return { status: "resolved", matchedSignal: r.matchedSignal, healed: r.healed };
   }

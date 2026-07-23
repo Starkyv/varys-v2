@@ -579,6 +579,40 @@
   color: var(--color-text-subtle);
 }
 
+/* --- compare mode (pixel vs. AI context) --- */
+.compareRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  flex-wrap: wrap;
+  padding: var(--space-10) var(--space-12);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-subtle);
+  color: var(--color-text-subtle);
+}
+
+.promptRow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  padding: var(--space-10) var(--space-12);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-subtle);
+}
+
+.promptInput {
+  width: 100%;
+  resize: vertical;
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  line-height: 1.4;
+  padding: var(--space-8);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
 /* --- wait editor --- */
 .waits {
   display: flex;

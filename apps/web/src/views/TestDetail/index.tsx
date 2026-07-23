@@ -1,4 +1,5 @@
 import type {
+  CompareMode,
   ConfigWait,
   EditableWait,
   EnvironmentView,
@@ -262,6 +263,25 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
     setMasksByIndex((prev) => ({ ...prev, [index]: next }));
   }
 
+  // Per-checkpoint comparison mode (pixel diff vs. context/LLM judge) + the judge prompt,
+  // seeded from the read-model. `context` swaps the pixel-diff knobs (threshold/masks) for the
+  // prompt below.
+  const initialCompareModes: Record<number, CompareMode> = {};
+  const initialPrompts: Record<number, string> = {};
+  for (const s of config.steps) {
+    if (s.type === "screenshot") {
+      initialCompareModes[s.index] = s.compareMode ?? "pixel";
+      initialPrompts[s.index] = s.prompt ?? "";
+    }
+  }
+  const [compareModes, setCompareModes] = useState<Record<number, CompareMode>>(initialCompareModes);
+  const [prompts, setPrompts] = useState<Record<number, string>>(initialPrompts);
+  // A context checkpoint's prompt is OPTIONAL — when blank it inherits the global default judge
+  // prompt from the Configurations page. So it never blocks a save.
+  function contextPromptInvalid(_s: TestConfigStep): boolean {
+    return false;
+  }
+
   // Per-step typed value (type steps only), seeded from the read-model — an editable literal.
   const initialValues: Record<number, string> = {};
   for (const s of config.steps) {
@@ -452,6 +472,11 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
       const masksChanged =
         s.type === "screenshot" &&
         JSON.stringify(masksByIndex[s.index] ?? []) !== JSON.stringify(initialMasksByIndex[s.index] ?? []);
+      const compareModeChanged =
+        s.type === "screenshot" &&
+        (compareModes[s.index] ?? "pixel") !== (initialCompareModes[s.index] ?? "pixel");
+      const promptChanged =
+        s.type === "screenshot" && (prompts[s.index] ?? "") !== (initialPrompts[s.index] ?? "");
 
       // Typed value (type steps only): send when the literal actually changed.
       const valueChanged =
@@ -469,13 +494,28 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
         if (Object.keys(fp).length > 0) targetPatch = fp;
       }
 
-      if (!waitsChanged && !thresholdChanged && !masksChanged && !valueChanged && !targetPatch) return;
+      if (
+        !waitsChanged &&
+        !thresholdChanged &&
+        !masksChanged &&
+        !valueChanged &&
+        !targetPatch &&
+        !compareModeChanged &&
+        !promptChanged
+      )
+        return;
       const p: TestConfigStepPatch = { index: s.index };
       if (waitsChanged) p.waitBefore = stepWaits[i];
       if (thresholdChanged) p.threshold = Number(cur);
       if (masksChanged) p.masks = masksByIndex[s.index] ?? [];
       if (valueChanged) p.value = typedValues[s.index] ?? "";
       if (targetPatch) p.target = targetPatch;
+      if (compareModeChanged) p.compareMode = compareModes[s.index];
+      // Always send the prompt when the mode is context (so switching pixel→context carries the
+      // required prompt to the server), plus whenever it changed.
+      if (promptChanged || (compareModeChanged && compareModes[s.index] === "context")) {
+        p.prompt = prompts[s.index] ?? "";
+      }
       steps.push(p);
     });
 
@@ -493,7 +533,9 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
 
   const patch = buildPatch();
   // A removed step's threshold can't block the save.
-  const anyInvalid = config.steps.some((s) => !removed.has(s.index) && thresholdInvalid(s));
+  const anyInvalid = config.steps.some(
+    (s) => !removed.has(s.index) && (thresholdInvalid(s) || contextPromptInvalid(s)),
+  );
   const canSave = patch !== null && !anyInvalid && !save.isPending;
 
   function onSave() {
@@ -891,6 +933,49 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
                       )}
 
                       {s.type === "screenshot" && (
+                        <div className={styles.compareRow}>
+                          <Eye size={13} />
+                          <span className={styles.thresholdLabel}>Comparison</span>
+                          <SegmentedControl<CompareMode>
+                            options={[
+                              { value: "pixel", label: "Pixel" },
+                              { value: "context", label: "AI context" },
+                            ]}
+                            value={compareModes[s.index] ?? "pixel"}
+                            onValueChange={(v) =>
+                              setCompareModes((prev) => ({ ...prev, [s.index]: v }))
+                            }
+                          />
+                          <span className={styles.thresholdHelp}>
+                            {(compareModes[s.index] ?? "pixel") === "context"
+                              ? "an LLM judges the current capture against the baseline"
+                              : "exact pixel diff against the baseline"}
+                          </span>
+                        </div>
+                      )}
+
+                      {s.type === "screenshot" && compareModes[s.index] === "context" && (
+                        <div
+                          className={`${styles.promptRow} ${contextPromptInvalid(s) ? styles.thresholdRowError : ""}`}
+                        >
+                          <span className={styles.thresholdLabel}>Judge prompt (optional)</span>
+                          <textarea
+                            className={styles.promptInput}
+                            rows={3}
+                            placeholder="Leave blank to use the default judge prompt from Configurations — or override it here for this checkpoint."
+                            aria-label={`Judge prompt for ${s.checkpointName ?? "checkpoint"}`}
+                            value={prompts[s.index] ?? ""}
+                            onChange={(e) =>
+                              setPrompts((prev) => ({ ...prev, [s.index]: e.target.value }))
+                            }
+                          />
+                          <span className={styles.thresholdHelp}>
+                            Blank = inherit the global default from Configurations.
+                          </span>
+                        </div>
+                      )}
+
+                      {s.type === "screenshot" && compareModes[s.index] !== "context" && (
                         <div className={`${styles.thresholdRow} ${thresholdInvalid(s) ? styles.thresholdRowError : ""}`}>
                           <Sliders size={13} />
                           <span className={styles.thresholdLabel}>Diff threshold</span>
@@ -918,7 +1003,7 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
                         </div>
                       )}
 
-                      {s.type === "screenshot" && (
+                      {s.type === "screenshot" && compareModes[s.index] !== "context" && (
                         <div className={styles.baselineBlock}>
                           <div className={styles.baselineHead}>
                             <Camera size={13} />
@@ -1408,36 +1493,49 @@ function WaitListEditor({
         </div>
       ))}
 
-      {waits.map((w, i) => (
-        <div key={i} className={styles.waitRow}>
-          <span className={styles.waitKind}>
-            {w.kind === "networkIdle" ? <Activity size={13} /> : <Clock size={13} />}
-            {w.kind === "networkIdle" ? "Network idle" : "Delay"}
-          </span>
-          <Input
-            inputSize="sm"
-            mono
-            type="number"
-            min={w.kind === "networkIdle" ? 1 : 0}
-            step={100}
-            className={styles.waitInput}
-            aria-label={w.kind === "networkIdle" ? "Network-idle timeout (ms)" : "Delay (ms)"}
-            value={String(w.kind === "networkIdle" ? (w.timeoutMs ?? 10000) : w.ms)}
-            onChange={(e) => {
-              const raw = Math.floor(Number(e.target.value));
-              if (w.kind === "networkIdle") {
-                update(i, { kind: "networkIdle", timeoutMs: Number.isFinite(raw) ? Math.max(1, raw) : 1 });
-              } else {
-                update(i, { kind: "delay", ms: Number.isFinite(raw) ? Math.max(0, raw) : 0 });
-              }
-            }}
-          />
-          <span className={styles.waitUnit}>ms</span>
-          <button type="button" className={styles.waitRemove} aria-label="Remove wait" onClick={() => remove(i)}>
-            ×
-          </button>
-        </div>
-      ))}
+      {waits.map((w, i) => {
+        const label =
+          w.kind === "networkIdle" ? "Network idle" : w.kind === "streamIdle" ? "Stream idle" : "Delay";
+        // Editable ms field: delay → ms; networkIdle → timeout; streamIdle → the max cap (timeout).
+        const value =
+          w.kind === "networkIdle"
+            ? (w.timeoutMs ?? 10000)
+            : w.kind === "streamIdle"
+              ? (w.timeoutMs ?? 30000)
+              : w.ms;
+        return (
+          <div key={i} className={styles.waitRow}>
+            <span className={styles.waitKind}>
+              {w.kind === "delay" ? <Clock size={13} /> : <Activity size={13} />}
+              {label}
+            </span>
+            <Input
+              inputSize="sm"
+              mono
+              type="number"
+              min={w.kind === "delay" ? 0 : 1}
+              step={100}
+              className={styles.waitInput}
+              aria-label={`${label} (ms)`}
+              value={String(value)}
+              onChange={(e) => {
+                const raw = Math.floor(Number(e.target.value));
+                if (w.kind === "networkIdle") {
+                  update(i, { kind: "networkIdle", timeoutMs: Number.isFinite(raw) ? Math.max(1, raw) : 1 });
+                } else if (w.kind === "streamIdle") {
+                  update(i, { kind: "streamIdle", timeoutMs: Number.isFinite(raw) ? Math.max(1, raw) : 1 });
+                } else {
+                  update(i, { kind: "delay", ms: Number.isFinite(raw) ? Math.max(0, raw) : 0 });
+                }
+              }}
+            />
+            <span className={styles.waitUnit}>{w.kind === "streamIdle" ? "ms max" : "ms"}</span>
+            <button type="button" className={styles.waitRemove} aria-label="Remove wait" onClick={() => remove(i)}>
+              ×
+            </button>
+          </div>
+        );
+      })}
 
       <div className={styles.waitAdd}>
         <button
@@ -1446,6 +1544,14 @@ function WaitListEditor({
           onClick={() => onChange([...waits, { kind: "networkIdle", timeoutMs: 10000 }])}
         >
           <Activity size={13} /> Network idle
+        </button>
+        <button
+          type="button"
+          className={styles.addChip}
+          onClick={() => onChange([...waits, { kind: "streamIdle", timeoutMs: 30000 }])}
+          title="Wait until streaming/late-rendering content stops changing (best for Wisdom)"
+        >
+          <Activity size={13} /> Stream idle
         </button>
         <button
           type="button"

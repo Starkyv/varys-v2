@@ -17,6 +17,7 @@
     "@varys/capture": "workspace:*",
     "@varys/db": "workspace:*",
     "@varys/diff-engine": "workspace:*",
+    "@varys/judge-engine": "workspace:*",
     "@varys/queue": "workspace:*",
     "@varys/recorder": "workspace:*",
     "@varys/review-contract": "workspace:*",

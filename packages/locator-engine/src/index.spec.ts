@@ -197,4 +197,51 @@ describe("locator resolve", () => {
     const v = await verify(page, fp, { timeoutMs: 300 });
     expect(v.status).toBe("not-found");
   });
+
+  // Frame-aware resolution: the target lives inside a same-origin `srcDoc` iframe (the Brief
+  // report / Wisdom viz shape). `frameChain` descends into it before scoring.
+  describe("frameChain (iframe descent)", () => {
+    it("resolves a target inside a same-origin srcDoc iframe named by testId", async () => {
+      await page.setContent(
+        `<iframe data-testid="report" srcdoc='<div id="t" data-testid="brief-title">Weekly Violations</div>'></iframe>`,
+      );
+      const target: Fingerprint = {
+        tag: "div",
+        testId: "brief-title",
+        frameChain: [{ testId: "report" }],
+      };
+      const r = await resolve(page, target);
+      expect(r).not.toBeNull();
+      expect(r!.matchedSignal).toBe("testId");
+      expect(await r!.locator.textContent()).toBe("Weekly Violations");
+    });
+
+    it("selects the right iframe by index when it carries no stable attribute", async () => {
+      await page.setContent(
+        `<iframe srcdoc='<div data-testid="a">Alpha</div>'></iframe>` +
+          `<iframe srcdoc='<div data-testid="b">Beta</div>'></iframe>`,
+      );
+      const target: Fingerprint = { tag: "div", testId: "b", frameChain: [{ index: 1 }] };
+      const r = await resolve(page, target);
+      expect(r).not.toBeNull();
+      expect(await r!.locator.textContent()).toBe("Beta");
+    });
+
+    it("returns null (loud fail) when a frame in the chain can't be reached", async () => {
+      await page.setContent(`<div data-testid="brief-title">no frames here</div>`);
+      const target: Fingerprint = {
+        tag: "div",
+        testId: "brief-title",
+        frameChain: [{ testId: "missing-frame" }],
+      };
+      expect(await resolve(page, target, { timeoutMs: 300 })).toBeNull();
+    });
+
+    it("verify surfaces not-found when the frame is unreachable", async () => {
+      await page.setContent(`<div>top level only</div>`);
+      const target: Fingerprint = { tag: "div", testId: "x", frameChain: [{ id: "gone" }] };
+      const v = await verify(page, target, { timeoutMs: 300 });
+      expect(v.status).toBe("not-found");
+    });
+  });
 });

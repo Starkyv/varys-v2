@@ -13,6 +13,9 @@ export type ReviewState = "pending-baseline" | "diff" | "passed";
 
 /** How a checkpoint was captured (absent in old definitions ⇒ `element`). */
 export type CaptureMode = "element" | "fullpage" | "region";
+/** How a checkpoint's capture is compared to its baseline: classic pixel diff, or an LLM
+ *  judge for non-deterministic content (Briefs, Wisdom). */
+export type CompareMode = "pixel" | "context";
 
 /** The audited decision a reviewer can take on a checkpoint. */
 export type Resolution = "approved" | "rejected";
@@ -151,20 +154,22 @@ export interface TestSummary {
 /**
  * A wait primitive as surfaced for the test-config editor. Mirrors the step schema's
  * wait union (kept here as a pure type, like Rect/CaptureMode, so the SPA needs no
- * step-schema/zod dependency). `delay` and `networkIdle` are authorable in the editor;
- * `selector` is display-only in v1 — shown as a locked row and preserved untouched on
+ * step-schema/zod dependency). `delay`, `networkIdle`, and `streamIdle` are authorable in the
+ * editor; `selector` is display-only in v1 — shown as a locked row and preserved untouched on
  * save (its target is summarized as `targetLabel`).
  */
 export type ConfigWait =
   | { kind: "delay"; ms: number }
   | { kind: "networkIdle"; timeoutMs?: number }
+  | { kind: "streamIdle"; quietMs?: number; timeoutMs?: number }
   | { kind: "selector"; state: "visible" | "hidden"; timeoutMs?: number; targetLabel: string };
 
 /** The subset of waits the editor writes back. Selector waits are NOT editable in v1
- *  (the server preserves them), so only the two number-only kinds appear here. */
+ *  (the server preserves them), so only the number-only kinds appear here. */
 export type EditableWait =
   | { kind: "delay"; ms: number }
-  | { kind: "networkIdle"; timeoutMs?: number };
+  | { kind: "networkIdle"; timeoutMs?: number }
+  | { kind: "streamIdle"; quietMs?: number; timeoutMs?: number };
 
 /** One step as the test-config editor renders it — label + the waits before it, plus
  *  the screenshot-only knobs (threshold). `supportsWaits` is false for navigate. */
@@ -183,8 +188,14 @@ export interface TestConfigStep {
   checkpointName: string | null;
   /** Screenshot-only: how it's captured. */
   captureMode: CaptureMode | null;
+  /** Screenshot-only: how it's compared to its baseline (`pixel` diff or `context` LLM judge);
+   *  null for non-screenshot steps. */
+  compareMode: CompareMode | null;
+  /** Screenshot-only: the author-written judge prompt when `compareMode` is `context`; null for
+   *  pixel checkpoints and non-screenshot steps. */
+  prompt: string | null;
   /** Screenshot-only: the explicit per-checkpoint threshold, or null when it inherits
-   *  the runner default (shown as a placeholder in the editor). */
+   *  the runner default (shown as a placeholder in the editor). Pixel-mode only. */
   threshold: number | null;
   /** Type-only: the literal value typed into the field (editable on Test Detail). Null for
    *  non-type steps. */
@@ -279,7 +290,12 @@ export interface TestConfigStepPatch {
   /** Replace this step's authorable (delay/networkIdle) waits; any existing selector
    *  waits are preserved server-side. */
   waitBefore?: EditableWait[];
-  /** Screenshot-only: set the per-checkpoint threshold (0..1). */
+  /** Screenshot-only: switch pixel ↔ context comparison. Setting `context` requires a `prompt`
+   *  (on this patch or already on the step), else the save is rejected. */
+  compareMode?: CompareMode;
+  /** Screenshot-only: set the `context` judge prompt. */
+  prompt?: string;
+  /** Screenshot-only: set the per-checkpoint threshold (0..1). Pixel-mode only. */
   threshold?: number;
   /** Screenshot-only: replace this checkpoint's diff-ignore mask regions (full list). */
   masks?: Rect[];
@@ -433,6 +449,48 @@ export const DEFAULT_IMAGE_COMPARISON_SETTINGS: ImageComparisonSettings = {
   perPixel: DEFAULT_PER_PIXEL_THRESHOLD,
   ratio: DEFAULT_RATIO_THRESHOLD,
 };
+
+/** The LLM providers the context-compare judge can use (Configurations dropdown). `gemini` uses
+ *  Google's free-tier vision models; `openai` is any OpenAI-compatible endpoint (Ollama, OpenRouter,
+ *  …) via a custom `baseUrl`. */
+export type JudgeProviderName = "anthropic" | "gemini" | "openai";
+export const JUDGE_PROVIDERS: { value: JudgeProviderName; label: string }[] = [
+  { value: "gemini", label: "Google Gemini (free tier)" },
+  { value: "anthropic", label: "Anthropic Claude" },
+  { value: "openai", label: "OpenAI-compatible (custom)" },
+];
+
+/**
+ * The judge (context-compare) config as the Configurations page reads it. The API **never returns
+ * the API key** — only whether one is stored and a short hint (last 4 chars) so the user can
+ * recognise which key is set. Produced by `GET /settings/judge`.
+ */
+export interface JudgeSettingsView {
+  provider: JudgeProviderName;
+  model: string;
+  /** Custom OpenAI-compatible endpoint (only meaningful for provider `openai`); null otherwise. */
+  baseUrl: string | null;
+  /** Whether an API key is stored. */
+  apiKeySet: boolean;
+  /** Last 4 chars of the stored key, or null when unset — a recognition hint, never the full key. */
+  apiKeyHint: string | null;
+  /** The default judge prompt applied to every `context` checkpoint that doesn't set its own. Empty
+   *  string when unset — a context checkpoint with neither its own prompt nor this fails at run time. */
+  defaultPrompt: string;
+}
+
+/** Config-page edit for the judge. Omitted fields are left untouched; a non-empty `apiKey` replaces
+ *  the stored key (an omitted/empty key leaves the existing one in place). Consumed by
+ *  `PUT /settings/judge`. */
+export interface JudgeSettingsPatch {
+  provider?: JudgeProviderName;
+  model?: string;
+  baseUrl?: string;
+  apiKey?: string;
+  temperature?: number;
+  /** The default judge prompt inherited by context checkpoints that set none. */
+  defaultPrompt?: string;
+}
 
 /**
  * One active Authoring Session, as listed for the live-preview picker
@@ -646,14 +704,21 @@ export interface CheckpointView {
   reviewState: ReviewState;
   /** How this checkpoint was captured (element / full-page / region). */
   captureMode: CaptureMode;
+  /** How the capture was compared to its baseline — `pixel` (diff score) or `context`
+   *  (LLM judge verdict + `judgeReasoning`). */
+  compareMode: CompareMode;
   /** The recorded decision, or null while the checkpoint still needs review. */
   resolution: Resolution | null;
   /** Who recorded that decision (email) and when (ISO) — the audit pair for `resolution`.
    *  Both null while the checkpoint is unresolved (or for decisions made before this). */
   resolvedBy: string | null;
   resolvedAt: string | null;
-  /** Pixel-diff score the server computed; null on a first seed (nothing to diff). */
+  /** Pixel-diff score the server computed; null on a first seed (nothing to diff) or for a
+   *  `context` checkpoint (which is judged, not pixel-scored). */
   diffScore: number | null;
+  /** The LLM judge's one-line rationale for a `context` checkpoint; null for pixel checkpoints
+   *  (and for a `context` first-seed with nothing to judge yet). */
+  judgeReasoning: string | null;
   /** The per-checkpoint threshold the diff was judged against. */
   threshold: number;
   /** Whether the locator fell back to a lower-priority signal during the run. */

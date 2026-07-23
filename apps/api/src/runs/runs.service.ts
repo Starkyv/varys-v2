@@ -18,6 +18,7 @@ import { diffPng } from "@varys/diff-engine";
 import { type Boss, enqueueRun } from "@varys/queue";
 import type {
   CaptureMode,
+  CompareMode,
   CheckpointView,
   FingerprintSummary,
   NeedsReviewItem,
@@ -134,8 +135,14 @@ export class RunsService {
     // Capture mode lives on the screenshot step of the version that ran; map it by
     // checkpoint name (absent ⇒ element, for definitions recorded before capture modes).
     const captureModes = new Map<string, CaptureMode>();
+    // Compare mode likewise lives on the screenshot step of the version that ran (absent ⇒
+    // pixel, for definitions recorded before context compare).
+    const compareModes = new Map<string, CompareMode>();
     for (const s of (row.definition as TestDefinition).steps) {
-      if (s.type === "screenshot") captureModes.set(s.name, s.captureMode ?? "element");
+      if (s.type === "screenshot") {
+        captureModes.set(s.name, s.captureMode ?? "element");
+        compareModes.set(s.name, s.compareMode ?? "pixel");
+      }
     }
 
     // Masks are the *current* ones a reviewer would edit — from the latest version,
@@ -157,6 +164,7 @@ export class RunsService {
         resolvedBy: runResults.resolvedBy,
         resolvedAt: runResults.resolvedAt,
         diffScore: runResults.diffScore,
+        judgeReasoning: runResults.judgeReasoning,
         threshold: runResults.threshold,
         healed: runResults.healed,
         actualArtifactKey: runResults.actualArtifactKey,
@@ -250,10 +258,12 @@ export class RunsService {
         name: r.name,
         reviewState: r.reviewState as ReviewState,
         captureMode: captureModes.get(r.name) ?? "element",
+        compareMode: compareModes.get(r.name) ?? "pixel",
         resolution: r.resolution as Resolution | null,
         resolvedBy: r.resolvedBy,
         resolvedAt: r.resolvedAt ? r.resolvedAt.toISOString() : null,
         diffScore: r.diffScore,
+        judgeReasoning: r.judgeReasoning,
         threshold: r.threshold,
         healed: r.healed,
         masks: masksByName.get(r.name) ?? [],

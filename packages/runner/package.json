@@ -18,6 +18,7 @@
   "dependencies": {
     "@varys/db": "workspace:*",
     "@varys/diff-engine": "workspace:*",
+    "@varys/judge-engine": "workspace:*",
     "@varys/locator-engine": "workspace:*",
     "@varys/step-schema": "workspace:*",
     "@varys/storage-adapter": "workspace:*",
