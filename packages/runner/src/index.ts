@@ -197,17 +197,32 @@ async function resolveWithHoverReveal(page: Page, fp: Fingerprint, timeoutMs: nu
  * `:hover`ed. Playwright's click hit-tests the point BEFORE physically hovering, so such a button
  * reads as "intercepted" and never gets clicked. So: try a normal click; if it can't land, hover the
  * nearest stable ancestor (the card/row) to trip its `:hover` rule — leaving the mouse over it, so
- * the button stays `pointer-events: auto` — then click again.
+ * the button stays `pointer-events: auto` — then click again. If a real click still can't land
+ * (an obstructing overlay, an off-viewport control, or an `aria-hidden` decorative SVG icon that is
+ * only a child of the real button), fall back to a **synthetic click** that bubbles to the handler
+ * and skips hit-testing / viewport actionability.
  */
 async function clickWithReveal(page: Page, fp: Fingerprint, locator: Locator, timeoutMs: number) {
-  const ok = await locator
-    .click({ timeout: Math.min(timeoutMs, 4_000) })
-    .then(() => true)
-    .catch(() => false);
-  if (ok) return;
+  const tryClick = (t: number) =>
+    locator
+      .click({ timeout: t })
+      .then(() => true)
+      .catch(() => false);
+
+  if (await tryClick(Math.min(timeoutMs, 4_000))) return;
+
+  // Reveal a :hover-gated control by hovering its nearest stable ancestor, then retry a real click.
   const anchor = ancestorAnchor(page, fp);
   if (anchor) await anchor.hover({ timeout: 5_000 }).catch(() => undefined);
-  await locator.click({ timeout: timeoutMs });
+  if (await tryClick(Math.min(timeoutMs, 8_000))) return;
+
+  // Last resort: the recorded target is often a decorative / obstructed node in a heavy component
+  // library — an `aria-hidden` SVG icon inside a button, a control an overlay (sticky wrapper /
+  // modal backdrop) intercepts, or one scrolled out of view. A dispatched click fires directly on
+  // the element and bubbles to the real (delegated) handler, bypassing the hit-test + viewport
+  // checks a normal click waits on. It still throws if the element itself can't be found (it was
+  // already resolved), so a genuinely-absent target continues to fail the step honestly.
+  await locator.dispatchEvent("click");
 }
 
 export async function applyWaits(page: Page, waits: Wait[] | undefined): Promise<void> {
@@ -285,8 +300,15 @@ export async function performStepAction(
     const target = await resolveWithHoverReveal(page, step.target, actionResolveTimeoutMs());
     if (!target) throw new Error(`could not locate ${step.type} target`);
     if (step.type === "type") await target.locator.fill(step.value);
-    else if (step.type === "hover") await target.locator.hover();
-    else await clickWithReveal(page, step.target, target.locator, actionResolveTimeoutMs());
+    else if (step.type === "hover") {
+      // A hover is AUXILIARY — it reveals content (a menu/popover) for a LATER step; it is not an
+      // assertion in itself. So it must never hard-fail the run: some recorded hover targets are
+      // spurious — e.g. a full-screen MUI modal backdrop (`MuiBackdrop-*`) that intercepts pointer
+      // events and can never actually be hovered. Best-effort with a short timeout; if the hover
+      // genuinely mattered, the dependent step (its own resolve + click-reveal) is the real gate and
+      // fails with a clearer message than a 30s hover timeout.
+      await target.locator.hover({ timeout: 8_000 }).catch(() => undefined);
+    } else await clickWithReveal(page, step.target, target.locator, actionResolveTimeoutMs());
   }
 }
 

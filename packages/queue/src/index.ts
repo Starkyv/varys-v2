@@ -36,14 +36,25 @@ export async function enqueueRun(boss: PgBoss, runId: string): Promise<void> {
   await boss.send(RUN_QUEUE, { runId } satisfies RunJobData);
 }
 
-/** Subscribe a handler to run jobs. */
+/**
+ * Subscribe handler(s) to run jobs. `concurrency` (default 1) registers that many INDEPENDENT
+ * single-job workers on the queue, giving up to `concurrency` runs in flight at once — picked up as
+ * they arrive (rolling), not batch-at-a-time. pg-boss claims each job atomically (`FOR UPDATE SKIP
+ * LOCKED`), so the workers never double-process a run. Each run gets its own browser/context in the
+ * runner, so concurrent runs are fully isolated; raise `concurrency` only as far as the host's
+ * CPU/RAM allows (each run drives a headless Chromium).
+ */
 export async function workRuns(
   boss: PgBoss,
   handler: (runId: string) => Promise<void>,
+  concurrency = 1,
 ): Promise<void> {
-  await boss.work<RunJobData>(RUN_QUEUE, async (jobs) => {
-    for (const job of jobs) {
-      await handler(job.data.runId);
-    }
-  });
+  const slots = Math.max(1, Math.floor(concurrency));
+  for (let i = 0; i < slots; i += 1) {
+    await boss.work<RunJobData>(RUN_QUEUE, { batchSize: 1 }, async (jobs) => {
+      for (const job of jobs) {
+        await handler(job.data.runId);
+      }
+    });
+  }
 }
