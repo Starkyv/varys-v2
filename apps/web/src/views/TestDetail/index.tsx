@@ -40,16 +40,17 @@ import {
   type SegmentedOption,
   Skeleton,
   Sliders,
-  Switch,
   Trash,
 } from "@varys/ui";
 import { type KeyboardEvent as ReactKeyboardEvent, useRef, useState } from "react";
 import { NotesCard } from "../../components/NotesCard";
+import { ScheduleEditor } from "../../components/ScheduleEditor";
 import { BaselineMaskCanvas } from "./components/BaselineMaskCanvas";
 import { useRouter } from "../../context/router";
 import { useRunDialog } from "../../context/run-dialog";
 import { useToast } from "../../context/toast";
-import { absoluteTime, relativeTime } from "../../lib/format";
+import { draftToInput, scheduleKey, type ScheduleDraft } from "../../lib/cron";
+import { relativeTime } from "../../lib/format";
 import { StatusBadge } from "../../lib/status";
 import {
   useEnvironments,
@@ -60,35 +61,6 @@ import {
   useVerifyLocator,
 } from "../../queries";
 import styles from "./styles.module.scss";
-
-/** Plain-language summary of common cron expressions (display only — the server's
- *  cron-parser is the authoritative validator). Falls back to "Custom schedule". */
-function describeCron(cron: string): string {
-  const map: Record<string, string> = {
-    "0 * * * *": "Every hour, on the hour",
-    "0 2 * * *": "Every day at 02:00",
-    "0 8 * * 1-5": "Weekdays at 08:00",
-    "0 9 * * 1": "Every Monday at 09:00",
-    "*/15 * * * *": "Every 15 minutes",
-    "*/5 * * * *": "Every 5 minutes",
-  };
-  return map[cron.trim()] ?? "Custom schedule";
-}
-
-/** A light client guard — the right field count. The server does the real parse and
- *  returns a 400 on a bad expression. */
-function cronShapeError(cron: string): string | null {
-  const fields = cron.trim().split(/\s+/).filter(Boolean);
-  if (cron.trim() === "") return "Enter a cron expression.";
-  if (fields.length !== 5) return "A cron has 5 fields: min hour day-of-month month day-of-week.";
-  return null;
-}
-
-/** Stable identity for a schedule, so the card remounts (resetting its draft state) when
- *  the server state changes after a save/remove. */
-function scheduleKey(s: TestSchedule | null): string {
-  return s ? `s:${s.cron}|${s.timezone}|${s.enabled}|${s.environmentId}|${s.keepTrace}` : "s:none";
-}
 
 type LockedWait = Extract<ConfigWait, { kind: "selector" }>;
 
@@ -151,49 +123,6 @@ function newStepLabel(step: NewStepInput): string {
       return step.value ? `Type “${step.value}” into ${step.selector}` : `Type into ${step.selector}`;
   }
 }
-
-/** The four scheduling cadences the editor offers; "custom" exposes the raw cron. */
-type Freq = "hourly" | "daily" | "weekly" | "custom";
-
-/** cron day-of-week is 0–6 (Sun–Sat). */
-const DOW_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
-const DOW_TITLES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-
-const isNum = (x: string) => /^\d+$/.test(x);
-
-/** Parse a 5-field cron into a cadence + its parameters (falls back to "custom"). */
-function parseCron(cron: string): { freq: Freq; minute: number; hour: number; days: number[] } {
-  const f = cron.trim().split(/\s+/);
-  if (f.length === 5) {
-    const [m, h, dom, mon, dow] = f;
-    const mn = isNum(m) ? Number(m) : null;
-    const hn = isNum(h) ? Number(h) : null;
-    if (mn != null && h === "*" && dom === "*" && mon === "*" && dow === "*")
-      return { freq: "hourly", minute: mn, hour: 0, days: [] };
-    if (mn != null && hn != null && dom === "*" && mon === "*" && dow === "*")
-      return { freq: "daily", minute: mn, hour: hn, days: [] };
-    if (mn != null && hn != null && dom === "*" && mon === "*" && /^[0-6](,[0-6])*$/.test(dow))
-      return { freq: "weekly", minute: mn, hour: hn, days: dow.split(",").map(Number) };
-  }
-  return { freq: "custom", minute: 0, hour: 2, days: [1] };
-}
-
-/** Build a 5-field cron from a cadence + parameters. */
-function buildCron(freq: Freq, minute: number, hour: number, days: number[], custom: string): string {
-  if (freq === "custom") return custom;
-  if (freq === "hourly") return `${minute} * * * *`;
-  if (freq === "daily") return `${minute} ${hour} * * *`;
-  const d = (days.length ? [...days] : [1]).sort((a, b) => a - b).join(",");
-  return `${minute} ${hour} * * ${d}`;
-}
-
-/** "HH:MM" ⇄ {hour, minute}. */
-const toTime = (hour: number, minute: number) =>
-  `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
-const fromTime = (t: string): { hour: number; minute: number } => {
-  const [h, m] = t.split(":").map((x) => Number(x));
-  return { hour: Number.isFinite(h) ? h : 0, minute: Number.isFinite(m) ? m : 0 };
-};
 
 export function TestDetail({ testId }: { testId: string }) {
   const { navigate } = useRouter();
@@ -1143,66 +1072,15 @@ function RecentRunsCard({ testId }: { testId: string }) {
  */
 function ScheduleCard({ testId, schedule }: { testId: string; schedule: TestSchedule | null }) {
   const { toast } = useToast();
-  const environments = useEnvironments();
   const update = useUpdateTest();
-
-  const initial = parseCron(schedule?.cron ?? "0 2 * * *");
-  // Off by default: a test with no schedule must start paused (an existing schedule keeps
-  // its own enabled state). Defaulting to `true` here turned scheduling on for every new test.
-  const [enabled, setEnabled] = useState(schedule?.enabled ?? false);
-  const [freq, setFreq] = useState<Freq>(initial.freq);
-  const [minute, setMinute] = useState(initial.minute);
-  const [hour, setHour] = useState(initial.hour);
-  const [days, setDays] = useState<number[]>(initial.days.length ? initial.days : [1]);
-  const [customCron, setCustomCron] = useState(schedule?.cron ?? "0 2 * * *");
-  const [timezone, setTimezone] = useState(schedule?.timezone ?? "UTC");
-  const [environmentId, setEnvironmentId] = useState(schedule?.environmentId ?? "");
-  const [keepTrace, setKeepTrace] = useState(schedule?.keepTrace ?? false);
-
-  // The effective cron is built from the cadence controls (or the raw field in Custom).
-  const cron = buildCron(freq, minute, hour, days, customCron);
-  const cronError = cronShapeError(cron);
-  const cadence =
-    freq === "hourly"
-      ? `Every hour at :${String(minute).padStart(2, "0")}`
-      : freq === "daily"
-        ? `Every day at ${toTime(hour, minute)}`
-        : freq === "weekly"
-          ? `Weekly on ${(days.length ? [...days] : [1])
-              .sort((a, b) => a - b)
-              .map((d) => DOW_TITLES[d].slice(0, 3))
-              .join(", ")} at ${toTime(hour, minute)}`
-          : describeCron(cron);
-  const envOptions = [
-    { value: "", label: "— Default baseline —" },
-    ...(environments.data ?? []).map((e) => ({ value: e.id, label: e.name })),
-  ];
-  const FREQS: { value: Freq; label: string }[] = [
-    { value: "hourly", label: "Hourly" },
-    { value: "daily", label: "Daily" },
-    { value: "weekly", label: "Weekly" },
-    { value: "custom", label: "Custom" },
-  ];
-  const toggleDay = (d: number) =>
-    setDays((prev) => (prev.includes(d) ? prev.filter((x) => x !== d) : [...prev, d]));
+  const [draft, setDraft] = useState<ScheduleDraft | null>(null);
 
   function onSave() {
-    if (cronError) return;
+    if (!draft || draft.error) return;
     update.mutate(
+      { id: testId, body: { schedule: draftToInput(draft) } },
       {
-        id: testId,
-        body: {
-          schedule: {
-            cron: cron.trim(),
-            timezone: timezone.trim() || "UTC",
-            enabled,
-            environmentId: environmentId || null,
-            keepTrace,
-          },
-        },
-      },
-      {
-        onSuccess: () => toast(enabled ? "Schedule saved" : "Schedule saved — paused"),
+        onSuccess: () => toast(draft.enabled ? "Schedule saved" : "Schedule saved — paused"),
         onError: (e) => toast(e instanceof Error ? e.message : "Couldn’t save the schedule"),
       },
     );
@@ -1220,164 +1098,12 @@ function ScheduleCard({ testId, schedule }: { testId: string; schedule: TestSche
 
   return (
     <Card>
-      <div className={styles.cardHead}>
-        <span className={styles.cardIcon}>
-          <Clock size={15} />
-        </span>
-        <div className={styles.cardHeadText}>
-          <div className={styles.cardTitle}>Schedule</div>
-          <div className={styles.cardSub}>
-            Run this test automatically on a cron. Off by default; a scheduled run lands in Runs
-            and Needs Review exactly like a manual one.
-          </div>
-        </div>
-        <span className={styles.schedToggle}>
-          <span className={styles.schedToggleLabel}>{enabled ? "On" : "Off"}</span>
-          <Switch checked={enabled} onCheckedChange={setEnabled} aria-label="Enable schedule" />
-        </span>
-      </div>
-
-      <div className={enabled ? styles.schedBody : styles.schedBodyOff}>
-        {enabled && schedule?.nextRunAt && (
-          <div className={styles.nextRun}>
-            <span className={styles.nextRunIcon}>
-              <Clock size={15} />
-            </span>
-            <div className={styles.nextRunText}>
-              <div className={styles.nextRunLabel}>Next run</div>
-              <div className={styles.nextRunAbs}>{absoluteTime(schedule.nextRunAt)}</div>
-            </div>
-            <span className={styles.nextRunRel}>{relativeTime(schedule.nextRunAt)}</span>
-          </div>
-        )}
-
-        <SegmentedControl<Freq> value={freq} onValueChange={setFreq} options={FREQS} />
-
-        <div className={styles.schedContextual}>
-          {freq === "hourly" && (
-            <div className={styles.inlineRow}>
-              <span>Run at minute</span>
-              <Input
-                inputSize="sm"
-                mono
-                type="number"
-                min={0}
-                max={59}
-                className={styles.minuteInput}
-                aria-label="Minute of the hour"
-                value={String(minute)}
-                onChange={(e) => setMinute(Number(e.target.value) || 0)}
-              />
-              <span className={styles.muted}>of every hour</span>
-            </div>
-          )}
-          {freq === "daily" && (
-            <div className={styles.inlineRow}>
-              <span>Run every day at</span>
-              <Input
-                inputSize="sm"
-                mono
-                type="time"
-                aria-label="Time of day"
-                value={toTime(hour, minute)}
-                onChange={(e) => {
-                  const t = fromTime(e.target.value);
-                  setHour(t.hour);
-                  setMinute(t.minute);
-                }}
-              />
-            </div>
-          )}
-          {freq === "weekly" && (
-            <>
-              <div className={styles.dayPills}>
-                {DOW_LABELS.map((lbl, d) => (
-                  <button
-                    key={DOW_TITLES[d]}
-                    type="button"
-                    title={DOW_TITLES[d]}
-                    className={`${styles.dayPill} ${days.includes(d) ? styles.dayPillOn : ""}`}
-                    onClick={() => toggleDay(d)}
-                  >
-                    {lbl}
-                  </button>
-                ))}
-              </div>
-              <div className={styles.inlineRow}>
-                <span>at</span>
-                <Input
-                  inputSize="sm"
-                  mono
-                  type="time"
-                  aria-label="Time of day"
-                  value={toTime(hour, minute)}
-                  onChange={(e) => {
-                    const t = fromTime(e.target.value);
-                    setHour(t.hour);
-                    setMinute(t.minute);
-                  }}
-                />
-              </div>
-            </>
-          )}
-          {freq === "custom" && (
-            <label className={styles.schedField}>
-              <span className={styles.schedLabel}>Cron expression</span>
-              <Input
-                inputSize="sm"
-                mono
-                spellCheck={false}
-                value={customCron}
-                invalid={!!cronError}
-                aria-label="Cron expression"
-                onChange={(e) => setCustomCron(e.target.value)}
-              />
-            </label>
-          )}
-        </div>
-
-        <div className={`${styles.schedSummary} ${cronError ? styles.schedSummaryError : ""}`}>
-          <span>{cronError ?? cadence}</span>
-          <span className={styles.cronReadout}>{cron}</span>
-        </div>
-
-        <div className={styles.schedGrid}>
-          <label className={styles.schedField}>
-            <span className={styles.schedLabel}>Timezone</span>
-            <Input
-              inputSize="sm"
-              mono
-              value={timezone}
-              placeholder="UTC"
-              aria-label="Timezone"
-              onChange={(e) => setTimezone(e.target.value)}
-            />
-          </label>
-          <label className={styles.schedField}>
-            <span className={styles.schedLabel}>Environment</span>
-            <Select
-              ariaLabel="Environment"
-              selectSize="sm"
-              value={environmentId}
-              onValueChange={setEnvironmentId}
-              options={envOptions}
-            />
-          </label>
-        </div>
-
-        <label className={styles.schedTraceField}>
-          <Switch
-            checked={keepTrace}
-            onCheckedChange={setKeepTrace}
-            aria-label="Keep a Playwright trace on scheduled runs"
-          />
-          <span>
-            <span className={styles.schedTraceTitle}>Keep trace</span>
-            <span className={styles.schedTraceHint}>Capture a Playwright trace each run</span>
-          </span>
-        </label>
-      </div>
-
+      <ScheduleEditor
+        initialSchedule={schedule}
+        title="Schedule"
+        subtitle="Run this test automatically on a cron. Off by default; a scheduled run lands in Runs and Needs Review exactly like a manual one."
+        onChange={setDraft}
+      />
       <div className={styles.schedActions}>
         {schedule && (
           <Button variant="ghost" size="sm" disabled={update.isPending} onClick={onRemove}>
@@ -1388,7 +1114,7 @@ function ScheduleCard({ testId, schedule }: { testId: string; schedule: TestSche
         <Button
           variant="primary"
           size="sm"
-          disabled={!!cronError || update.isPending}
+          disabled={!draft || !!draft.error || update.isPending}
           loading={update.isPending}
           onClick={onSave}
         >

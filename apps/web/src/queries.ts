@@ -5,6 +5,7 @@ import type {
   LocatorVerifyRequest,
   PromoteDraftBody,
   TestConfigPatch,
+  TestScheduleInput,
   TuningInput,
 } from "@varys/review-contract";
 import {
@@ -401,7 +402,12 @@ export function useUpdateSuite() {
   return useMutation({
     mutationFn: (vars: {
       id: string;
-      body: { name?: string; testIds?: string[]; folderIds?: string[] };
+      body: {
+        name?: string;
+        testIds?: string[];
+        folderIds?: string[];
+        schedule?: TestScheduleInput | null;
+      };
     }) => updateSuite(vars.id, vars.body),
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: suitesQueryKey() });

@@ -46,6 +46,24 @@
   }
 }
 
+/* Schedule sits at the end, below the member list — a compact section with its own Save,
+   fenced off from the list by a top border. */
+.scheduleSection {
+  padding: var(--space-16) var(--space-20);
+  border-top: 1px solid var(--color-border);
+}
+
+.schedActions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  margin-top: var(--space-16);
+}
+
+.schedActionsSpacer {
+  flex: 1;
+}
+
 .list {
   display: flex;
   flex-direction: column;

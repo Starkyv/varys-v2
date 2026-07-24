@@ -461,10 +461,16 @@ export async function createSuite(body: {
   return (await res.json()) as { id: string };
 }
 
-/** Update a suite — rename and/or replace the member list wholesale. */
+/** Update a suite — rename and/or replace the member list wholesale, and/or set the cron schedule
+ *  (`schedule: null` clears it). */
 export async function updateSuite(
   id: string,
-  body: { name?: string; testIds?: string[]; folderIds?: string[] },
+  body: {
+    name?: string;
+    testIds?: string[];
+    folderIds?: string[];
+    schedule?: TestScheduleInput | null;
+  },
 ): Promise<void> {
   const res = await fetch(`${API_BASE}/suites/${id}`, {
     method: "PUT",

@@ -645,6 +645,9 @@ export interface SuiteView {
   testIds: string[];
   /** The effective, deduped member tests (folders resolved + standalone), newest first. */
   tests: TestSummary[];
+  /** The suite's cron schedule (fires a whole suite run), or null when unscheduled. `lastRunId`
+   *  holds the last fired **suite_run** id. Reuses the TestSchedule shape. */
+  schedule: TestSchedule | null;
 }
 
 /**

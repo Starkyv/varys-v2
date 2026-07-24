@@ -1,8 +1,10 @@
-import type { FolderSummary, TestSummary } from "@varys/review-contract";
+import type { FolderSummary, TestSchedule, TestSummary } from "@varys/review-contract";
 import { Button, Check, cx, Folder, Input, Lock, Skeleton, Squares } from "@varys/ui";
 import { useMemo, useState } from "react";
+import { ScheduleEditor } from "../../../../components/ScheduleEditor";
 import { useConfirm } from "../../../../context/confirm";
 import { useToast } from "../../../../context/toast";
+import { draftToInput, type ScheduleDraft } from "../../../../lib/cron";
 import {
   useCreateSuite,
   useDeleteSuite,
@@ -22,6 +24,7 @@ export function SuiteEditor({ suiteId, onClose }: { suiteId: string | null; onCl
       initialName=""
       initialTestIds={[]}
       initialFolderIds={[]}
+      initialSchedule={null}
       onClose={onClose}
     />
   );
@@ -46,6 +49,7 @@ function EditExisting({ suiteId, onClose }: { suiteId: string; onClose: () => vo
       initialName={suite.data.name}
       initialTestIds={suite.data.testIds}
       initialFolderIds={suite.data.folderIds}
+      initialSchedule={suite.data.schedule}
       onClose={onClose}
     />
   );
@@ -75,12 +79,14 @@ function EditorForm({
   initialName,
   initialTestIds,
   initialFolderIds,
+  initialSchedule,
   onClose,
 }: {
   suiteId: string | null;
   initialName: string;
   initialTestIds: string[];
   initialFolderIds: string[];
+  initialSchedule: TestSchedule | null;
   onClose: () => void;
 }) {
   const tests = useTests();
@@ -275,6 +281,73 @@ function EditorForm({
         })}
         {allTests.length === 0 && <div className={styles.empty}>No tests to add yet.</div>}
       </div>
+
+      {/* Scheduling is a separate concern with its own Save — a schedule can only attach to a
+          saved suite, so it's edit-mode only, and sits at the end as a compact section. */}
+      {suiteId && (
+        <div className={styles.scheduleSection}>
+          <SuiteScheduleCard suiteId={suiteId} schedule={initialSchedule} />
+        </div>
+      )}
     </div>
+  );
+}
+
+/** Cron schedule for a whole suite — fires a suite run (fan-out to every member test) on its
+ *  cadence. Mirrors the test-detail ScheduleCard: it saves independently of the suite's
+ *  membership Save, through the same `PUT /suites/:id` (`schedule` is a partial field). */
+function SuiteScheduleCard({ suiteId, schedule }: { suiteId: string; schedule: TestSchedule | null }) {
+  const { toast } = useToast();
+  const update = useUpdateSuite();
+  const [draft, setDraft] = useState<ScheduleDraft | null>(null);
+
+  function onSave() {
+    if (!draft || draft.error) return;
+    update.mutate(
+      { id: suiteId, body: { schedule: draftToInput(draft) } },
+      {
+        onSuccess: () => toast(draft.enabled ? "Schedule saved" : "Schedule saved — paused"),
+        onError: (e) => toast(e instanceof Error ? e.message : "Couldn’t save the schedule"),
+      },
+    );
+  }
+
+  function onRemove() {
+    update.mutate(
+      { id: suiteId, body: { schedule: null } },
+      {
+        onSuccess: () => toast("Schedule removed"),
+        onError: (e) => toast(e instanceof Error ? e.message : "Couldn’t remove the schedule"),
+      },
+    );
+  }
+
+  return (
+    <>
+      <ScheduleEditor
+        initialSchedule={schedule}
+        title="Schedule"
+        subtitle="Run this whole suite automatically on a cron. Off by default; a scheduled run fans out to every member test, just like a manual suite run."
+        onChange={setDraft}
+        collapseWhenOff
+      />
+      <div className={styles.schedActions}>
+        {schedule && (
+          <Button variant="ghost" size="sm" disabled={update.isPending} onClick={onRemove}>
+            Remove schedule
+          </Button>
+        )}
+        <span className={styles.schedActionsSpacer} />
+        <Button
+          variant="primary"
+          size="sm"
+          disabled={!draft || !!draft.error || update.isPending}
+          loading={update.isPending}
+          onClick={onSave}
+        >
+          Save schedule
+        </Button>
+      </div>
+    </>
   );
 }

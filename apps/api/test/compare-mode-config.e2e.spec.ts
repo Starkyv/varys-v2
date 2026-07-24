@@ -83,6 +83,22 @@ describe("Compare mode — config authoring", () => {
     expect(shot).toMatchObject({ compareMode: "context", prompt: null });
   });
 
+  it("accepts a BLANK prompt string (the editor sends '') without erroring — normalised to inherit", async () => {
+    const id = await mkTest("cm blank prompt");
+    // Reproduces the editor leaving the prompt box empty: it sends prompt:"" (not an absent field),
+    // which previously failed the save (empty string violates the schema's min(1)).
+    await authed(app)
+      .put(`/tests/${id}/config`)
+      .send({ baseVersion: 1, steps: [{ index: 1, compareMode: "context", prompt: "   " }] })
+      .expect(200);
+
+    const cfg = await authed(app).get(`/tests/${id}/config`).expect(200);
+    const shot = (cfg.body.steps as { type: string; compareMode: string; prompt: string | null }[]).find(
+      (s) => s.type === "screenshot",
+    );
+    expect(shot).toMatchObject({ compareMode: "context", prompt: null }); // blank ⇒ omitted
+  });
+
   it("can switch context back to pixel", async () => {
     const id = await mkTest("cm revert");
     await authed(app)

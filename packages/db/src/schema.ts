@@ -319,6 +319,31 @@ export const testSchedules = pgTable("test_schedules", {
 });
 
 /**
+ * A suite's optional cron schedule (1:1 with a suite) — the suite analog of `test_schedules`.
+ * When it fires, the firing tick triggers a normal suite run (fan-out to the suite's effective
+ * tests) against the pinned environment. Dies with its suite (CASCADE); the env pin drops to the
+ * default on env deletion (SET NULL); `last_suite_run_id` clears if that suite run is purged.
+ */
+export const suiteSchedules = pgTable("suite_schedules", {
+  suiteId: uuid("suite_id")
+    .primaryKey()
+    .references(() => suites.id, { onDelete: "cascade" }),
+  cron: text("cron").notNull(),
+  timezone: text("timezone").notNull().default("UTC"),
+  enabled: boolean("enabled").notNull().default(true),
+  /** Environment to run the suite against; null = the default (env-less) baseline. */
+  environmentId: uuid("environment_id").references(() => environments.id, { onDelete: "set null" }),
+  keepTrace: boolean("keep_trace").notNull().default(false),
+  nextRunAt: timestamp("next_run_at", { withTimezone: true }),
+  lastRunAt: timestamp("last_run_at", { withTimezone: true }),
+  /** The suite_run id of the last fire (open in Suite Runs); SET NULL if that run is purged. */
+  lastSuiteRunId: uuid("last_suite_run_id").references(() => suiteRuns.id, { onDelete: "set null" }),
+  createdBy: text("created_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+/**
  * Generic key/value store for runtime-editable app settings — config that the team
  * changes from the UI without a redeploy, rather than env vars baked at boot. First user:
  * the AI authoring instructions (the MCP `initialize` prompt), edited on the Author page.
@@ -533,6 +558,20 @@ CREATE TABLE IF NOT EXISTS test_schedules (
   next_run_at timestamptz,
   last_run_at timestamptz,
   last_run_id uuid REFERENCES runs(id) ON DELETE SET NULL,
+  created_by text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS suite_schedules (
+  suite_id uuid PRIMARY KEY REFERENCES suites(id) ON DELETE CASCADE,
+  cron text NOT NULL,
+  timezone text NOT NULL DEFAULT 'UTC',
+  enabled boolean NOT NULL DEFAULT true,
+  environment_id uuid REFERENCES environments(id) ON DELETE SET NULL,
+  keep_trace boolean NOT NULL DEFAULT false,
+  next_run_at timestamptz,
+  last_run_at timestamptz,
+  last_suite_run_id uuid REFERENCES suite_runs(id) ON DELETE SET NULL,
   created_by text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()

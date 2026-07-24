@@ -775,10 +775,15 @@ export class TestsService {
         out = { ...out, compareMode: p.compareMode };
       }
       if (p.prompt !== undefined && out.type === "screenshot") {
-        out = { ...out, prompt: p.prompt };
+        // A context checkpoint's prompt is optional — when blank it inherits the global default judge
+        // prompt (resolved at run time). Normalise a blank prompt to OMIT the field: storing `""`
+        // would violate the schema's `prompt: string().min(1)` and fail the save.
+        const trimmed = p.prompt.trim();
+        const next = { ...out };
+        if (trimmed) next.prompt = trimmed;
+        else delete next.prompt;
+        out = next;
       }
-      // A context checkpoint's prompt is optional — when blank it inherits the global default judge
-      // prompt from the Configurations page (resolved at run time).
       // Type-only: set the literal value typed into the field.
       if (p.value !== undefined && out.type === "type") {
         out = { ...out, value: p.value };

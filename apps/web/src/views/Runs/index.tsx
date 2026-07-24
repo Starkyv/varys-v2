@@ -5,9 +5,12 @@ import {
   IconButton,
   InfoTip,
   type InfoTipBlock,
+  SegmentedControl,
+  type SegmentedOption,
   Skeleton,
   Trash,
 } from "@varys/ui";
+import { useState } from "react";
 import { LiveIndicator } from "../../components/LiveIndicator";
 import { useConfirm } from "../../context/confirm";
 import { useRouter } from "../../context/router";
@@ -37,12 +40,29 @@ const STATUS_LEGEND: InfoTipBlock[] = [
   },
 ];
 
+/** How a run was triggered, for the source filter + column. Older runs may have null → "Manual". */
+type RunSource = "all" | "manual" | "schedule" | "suite" | "api";
+const SOURCE_OPTIONS: SegmentedOption<RunSource>[] = [
+  { value: "all", label: "All" },
+  { value: "manual", label: "Manual" },
+  { value: "schedule", label: "Scheduled" },
+  // { value: "suite", label: "Suite" },
+];
+const SOURCE_LABEL: Record<string, string> = {
+  manual: "Manual",
+  schedule: "Scheduled",
+  suite: "Suite",
+  api: "API",
+};
+const sourceOf = (triggerSource: string | null): string => triggerSource ?? "manual";
+
 export function Runs() {
   const runs = useRuns();
   const { navigate } = useRouter();
   const { toast } = useToast();
   const confirm = useConfirm();
   const del = useDeleteRun();
+  const [source, setSource] = useState<RunSource>("all");
 
   async function onDelete(runId: string, testName: string) {
     const ok = await confirm({
@@ -91,20 +111,35 @@ export function Runs() {
     );
   }
 
+  const filtered = source === "all" ? data : data.filter((r) => sourceOf(r.triggerSource) === source);
+
   return (
     <div className={styles.card}>
       <header className={styles.header}>
-        <h3 className={styles.title}>All runs</h3>
-        <span className={styles.count}>{data.length} runs</span>
+        <h3 className={styles.title}>{source === "all" ? "All runs" : `${SOURCE_LABEL[source]} runs`}</h3>
+        <span className={styles.count}>{filtered.length} runs</span>
+        <SegmentedControl
+          ariaLabel="Filter runs by trigger source"
+          options={SOURCE_OPTIONS}
+          value={source}
+          onValueChange={setSource}
+        />
         <span className={styles.spacer} />
         <LiveIndicator label="Live · polling every 3s" />
       </header>
+      {filtered.length === 0 ? (
+        <div className={styles.filterEmpty}>
+          No {SOURCE_LABEL[source]?.toLowerCase()} runs yet
+          {source === "schedule" && " — set a cron schedule on a test and it'll appear here when it fires."}
+        </div>
+      ) : (
       <div className={styles.scroll}>
         <table className={styles.table}>
           <thead>
             <tr>
               <th className={styles.thLeft}>Test</th>
               <th>Environment</th>
+              <th>Source</th>
               <th>
                 <span className={styles.statusHead}>
                   Status
@@ -122,7 +157,7 @@ export function Runs() {
             </tr>
           </thead>
           <tbody>
-            {data.map((r) => {
+            {filtered.map((r) => {
               const inFlight = r.status === "queued" || r.status === "running";
               return (
                 <tr
@@ -139,6 +174,7 @@ export function Runs() {
                     {r.error && <div className={styles.error}>{r.error}</div>}
                   </td>
                   <td className={styles.env}>{r.environment}</td>
+                  <td className={styles.env}>{SOURCE_LABEL[sourceOf(r.triggerSource)] ?? "Manual"}</td>
                   <td>
                     <StatusBadge status={r.outcome} />
                   </td>
@@ -163,6 +199,7 @@ export function Runs() {
           </tbody>
         </table>
       </div>
+      )}
     </div>
   );
 }

@@ -29,10 +29,11 @@ export class SuitesController {
     return this.suites.create(body ?? { name: "" }, user.email);
   }
 
-  // Body: { name?, testIds?, folderIds? } — testIds/folderIds each FULL-replace their selection.
+  // Body: { name?, testIds?, folderIds?, schedule? } — testIds/folderIds each FULL-replace their
+  // selection; schedule sets/clears the suite cron (null clears).
   @Put(":id")
-  update(@Param("id") id: string, @Body() body: UpdateSuiteInput) {
-    return this.suites.update(id, body ?? {});
+  update(@Param("id") id: string, @Body() body: UpdateSuiteInput, @CurrentUser() user: AuthUser) {
+    return this.suites.update(id, body ?? {}, user.email);
   }
 
   @Delete(":id")

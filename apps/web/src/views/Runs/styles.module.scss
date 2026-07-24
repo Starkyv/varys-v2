@@ -43,6 +43,13 @@
   flex: 1;
 }
 
+.filterEmpty {
+  padding: var(--space-32) var(--space-20);
+  text-align: center;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-subtle);
+}
+
 .scroll {
   overflow-x: auto;
 }
