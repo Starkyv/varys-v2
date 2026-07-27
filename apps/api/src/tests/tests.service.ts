@@ -35,7 +35,7 @@ import {
 } from "@varys/step-schema";
 import type { StorageAdapter } from "@varys/storage-adapter";
 import parser from "cron-parser";
-import { asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
 import {
   baselines,
@@ -906,6 +906,16 @@ export class TestsService {
         .where(inArray(runs.id, runIds));
       for (const r of traces) if (r.key) keys.add(r.key);
     }
+    // Cancel any in-flight runs FIRST so the worker stops replaying before we remove the rows.
+    // The runner re-checks status between steps and unwinds on `cancelled` (or the row vanishing),
+    // closing the browser instead of grinding through the rest of a test that no longer exists.
+    if (runIds.length) {
+      await this.db
+        .update(runs)
+        .set({ status: "cancelled", updatedAt: new Date() })
+        .where(and(inArray(runs.id, runIds), inArray(runs.status, ["queued", "running"])));
+    }
+
     const baselineRows = await this.db
       .select({ key: baselines.artifactKey })
       .from(baselines)

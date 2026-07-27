@@ -426,6 +426,13 @@ export class RunsService {
       .limit(1);
     if (!run) throw new NotFoundException(`Run ${runId} not found`);
 
+    // If it's still in flight, cancel it FIRST so the worker stops replaying before we remove the
+    // rows (the runner re-checks status between steps and unwinds on `cancelled`/row-gone).
+    await this.db
+      .update(runs)
+      .set({ status: "cancelled", updatedAt: new Date() })
+      .where(and(eq(runs.id, runId), inArray(runs.status, ["queued", "running"])));
+
     // Blobs this run owns: its trace + each result's actual/diff. NOT the baseline key —
     // that blob belongs to the `baselines` table (the golden), shared across runs.
     const results = await this.db

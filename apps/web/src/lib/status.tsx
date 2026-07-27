@@ -29,6 +29,7 @@ export type StatusKey =
   | "failed"
   | "queued"
   | "running"
+  | "cancelled"
   | "none";
 
 interface StatusMeta {
@@ -49,6 +50,7 @@ const META: Record<StatusKey, StatusMeta> = {
   failed: { tone: "danger", label: "Failed" },
   queued: { tone: "neutral", label: "Queued" },
   running: { tone: "neutral", label: "Running" },
+  cancelled: { tone: "neutral", label: "Cancelled" },
   none: { tone: "neutral", label: "No runs" },
 };
 

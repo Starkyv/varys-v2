@@ -93,15 +93,17 @@ export function RunDetail({ runId }: { runId: string }) {
   const inFlight = data.status === "queued" || data.status === "running";
   async function onDelete() {
     const ok = await confirm({
-      title: "Delete run?",
-      message: `This deletes the run of “${data.testName}” — its screenshots and history are removed (baselines are kept). This can’t be undone.`,
-      confirmLabel: "Delete run",
+      title: inFlight ? "Cancel & delete run?" : "Delete run?",
+      message: inFlight
+        ? `“${data.testName}” is still running. This stops its execution and deletes the run (baselines are kept). This can’t be undone.`
+        : `This deletes the run of “${data.testName}” — its screenshots and history are removed (baselines are kept). This can’t be undone.`,
+      confirmLabel: inFlight ? "Cancel & delete" : "Delete run",
       tone: "danger",
     });
     if (!ok) return;
     del.mutate(runId, {
       onSuccess: () => {
-        toast("Run deleted");
+        toast(inFlight ? "Run cancelled & deleted" : "Run deleted");
         navigate({ name: "runs" });
       },
       onError: (e) => toast(e instanceof Error ? e.message : "Couldn’t delete run"),
@@ -144,10 +146,10 @@ export function RunDetail({ runId }: { runId: string }) {
           variant="ghost"
           iconLeft={<Trash size={15} />}
           onClick={() => void onDelete()}
-          disabled={inFlight || del.isPending}
-          title={inFlight ? "Can’t delete a run that’s still in progress" : "Delete this run"}
+          disabled={del.isPending}
+          title={inFlight ? "Cancel this run and delete it" : "Delete this run"}
         >
-          Delete
+          {inFlight ? "Cancel & delete" : "Delete"}
         </Button>
       </header>
 

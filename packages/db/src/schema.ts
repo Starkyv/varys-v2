@@ -138,7 +138,8 @@ export type RunStatus =
   | "running"
   | "passed"
   | "needs_review"
-  | "failed";
+  | "failed"
+  | "cancelled"; // stopped before finishing (e.g. its test was deleted mid-run)
 
 export const runs = pgTable("runs", {
   id: uuid("id").defaultRandom().primaryKey(),

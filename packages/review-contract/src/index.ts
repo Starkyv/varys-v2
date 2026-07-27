@@ -949,6 +949,7 @@ export interface RunView {
 export type RunOutcome =
   | "queued"
   | "running"
+  | "cancelled" // stopped before finishing (e.g. its test was deleted mid-run)
   | "passed" // had a baseline and the capture matched — a real verification pass
   | "baseline" // this run set or updated the golden baseline (first approval or "set as baseline")
   | "pending-baseline" // first run — no baseline yet, awaiting approval (NOT a failure)
@@ -983,6 +984,7 @@ export function deriveRunOutcome(
   run: { status: string; error?: string | null },
 ): RunOutcome {
   if (run.status === "queued" || run.status === "running") return run.status;
+  if (run.status === "cancelled") return "cancelled";
   if (run.error != null && run.error !== "") return "failed";
 
   let failing = false;
@@ -1050,6 +1052,7 @@ export type MatrixCellStatus =
   | "regression"
   | "failed"
   | "running"
+  | "cancelled"
   | "none";
 
 /** One cell of the dashboard matrix: the latest run's status for a (test, env). */

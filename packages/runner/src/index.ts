@@ -410,14 +410,45 @@ const RESULT_CONFLICT = {
   },
 };
 
+/** Thrown by the cooperative-cancel check to unwind the replay when the run has been cancelled
+ *  or its test deleted mid-flight. Caught in processRun's catch, where it is NOT recorded as a
+ *  failure — it just closes the browser and stops. */
+class RunCancelledError extends Error {
+  constructor() {
+    super("run cancelled");
+    this.name = "RunCancelledError";
+  }
+}
+
+/** True when the run should stop: the row is gone (its test was hard-deleted) or an operator
+ *  marked it `cancelled`. Checked between steps so a long replay stops promptly instead of
+ *  grinding through every remaining step against a test that no longer exists. */
+async function isRunCancelled(db: Db, runId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ status: runs.status })
+    .from(runs)
+    .where(eq(runs.id, runId))
+    .limit(1);
+  return !row || row.status === "cancelled";
+}
+
 /**
  * Replay a run server-side: launch pinned chromium, walk the recorded steps,
  * and for each screenshot checkpoint either seed a pending baseline (no prior
  * baseline) or diff against the active baseline. Determinism: fixed
  * viewport/DPR, reduced motion. Errors mark the run failed and rethrow.
+ *
+ * Cooperative cancel: before each step (and once before finalizing) the run's status is
+ * re-checked; if it was cancelled or its test deleted, the replay unwinds, closes the browser,
+ * and records no failure — see {@link isRunCancelled}.
  */
 export async function processRun(deps: ReplayDeps, runId: string): Promise<void> {
   const { db, storage } = deps;
+
+  // If the run was cancelled or its test deleted before the worker even picked up the job, stop
+  // cleanly — this is not a job failure, so the queue acks it (no retry storm). Guarded before
+  // the `running` write so a queued-then-cancelled run isn't flipped back to running.
+  if (await isRunCancelled(db, runId)) return;
 
   // Team-wide diff defaults (Configurations page). Read once per run; a per-checkpoint
   // `step.threshold` still overrides the ratio below.
@@ -426,7 +457,7 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
   await db
     .update(runs)
     .set({ status: "running", updatedAt: new Date() })
-    .where(eq(runs.id, runId));
+    .where(and(eq(runs.id, runId), inArray(runs.status, ["queued", "running"])));
 
   const [row] = await db
     .select({
@@ -439,7 +470,8 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
     .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
     .where(eq(runs.id, runId))
     .limit(1);
-  if (!row) throw new Error(`Run ${runId} not found`);
+  // Deleted in the tiny window since the check above — nothing left to replay, stop cleanly.
+  if (!row) return;
   const { testId } = row;
   const recorded = row.definition as TestDefinition;
 
@@ -488,6 +520,9 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
   // with the context still open when tracing stops.
   let context: BrowserContext | undefined;
   let tracingStarted = false;
+  // Set when the run was cancelled/deleted mid-flight — the `finally` then skips persisting the
+  // step timeline and trace (the run row is gone, so those writes would only orphan blobs / noise).
+  let cancelled = false;
   try {
     // Load the run's environment (if any) — just the base URL for `{{baseUrl}}`, plus cookies +
     // localStorage seeded below. `{{baseUrl}}` is substituted per step in the loop below.
@@ -545,6 +580,10 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
     const resolvedDefaultWaits = profile ? resolveWaits(defaultWaits, profile) : defaultWaits;
 
     for (let i = 0; i < recorded.steps.length; i++) {
+      // Cooperative cancel: bail before doing this step's work if the run was cancelled or its
+      // test deleted while we were replaying. Keeps a long test from grinding on after a delete.
+      if (await isRunCancelled(db, runId)) throw new RunCancelledError();
+
       const raw = recorded.steps[i];
       // Optimistically blame this step; the catch reads these if anything throws
       // (resolution OR execution). Cleared after the loop. The same fields time
@@ -760,6 +799,21 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
       .set({ status, updatedAt: new Date() })
       .where(eq(runs.id, runId));
   } catch (err) {
+    // Cancelled (or its test deleted) mid-run: not a failure. Best-effort mark it `cancelled`
+    // if the row still exists (a delete already removed it → the update no-ops), and stop —
+    // no failed-status write, no step recorded. The browser is closed in `finally`.
+    if (err instanceof RunCancelledError) {
+      cancelled = true;
+      try {
+        await db
+          .update(runs)
+          .set({ status: "cancelled", updatedAt: new Date() })
+          .where(and(eq(runs.id, runId), inArray(runs.status, ["queued", "running"])));
+      } catch {
+        // The row was already deleted (the common case) — nothing to mark. Ignore.
+      }
+      return;
+    }
     // Persist why it failed so the viewer can show it. A failed run captures no
     // checkpoints, so this message + the failed step index are all the reviewer has —
     // prefix the step ("Step 2/5 — click "Submit": …") when a step was running.
@@ -789,9 +843,9 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
       throw finalizeErr;
     }
   } finally {
-    // Persist the per-step timeline (every run). Best-effort — a valuable record,
-    // but not worth masking the run outcome or crashing the worker.
-    if (stepRuns.length > 0) {
+    // Persist the per-step timeline (every run except a cancelled one, whose run row is gone).
+    // Best-effort — a valuable record, but not worth masking the run outcome or crashing the worker.
+    if (!cancelled && stepRuns.length > 0) {
       try {
         await db
           .insert(runSteps)
@@ -815,7 +869,7 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
     // trigger explicitly asked for it, so it's kept on every outcome (incl.
     // failure, where it's most useful). Best-effort: a trace stop/upload/persist
     // failure must never mask the replay outcome already recorded above.
-    if (tracingStarted && context) {
+    if (tracingStarted && context && !cancelled) {
       let traceDir: string | undefined;
       try {
         traceDir = await mkdtemp(join(tmpdir(), "varys-trace-"));

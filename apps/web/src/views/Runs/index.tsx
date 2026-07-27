@@ -64,16 +64,18 @@ export function Runs() {
   const del = useDeleteRun();
   const [source, setSource] = useState<RunSource>("all");
 
-  async function onDelete(runId: string, testName: string) {
+  async function onDelete(runId: string, testName: string, inFlight: boolean) {
     const ok = await confirm({
-      title: "Delete run?",
-      message: `This deletes the run of “${testName}” — its screenshots and history are removed (baselines are kept). This can’t be undone.`,
-      confirmLabel: "Delete run",
+      title: inFlight ? "Cancel & delete run?" : "Delete run?",
+      message: inFlight
+        ? `“${testName}” is still running. This stops its execution and deletes the run (baselines are kept). This can’t be undone.`
+        : `This deletes the run of “${testName}” — its screenshots and history are removed (baselines are kept). This can’t be undone.`,
+      confirmLabel: inFlight ? "Cancel & delete" : "Delete run",
       tone: "danger",
     });
     if (!ok) return;
     del.mutate(runId, {
-      onSuccess: () => toast("Run deleted"),
+      onSuccess: () => toast(inFlight ? "Run cancelled & deleted" : "Run deleted"),
       onError: (e) => toast(e instanceof Error ? e.message : "Couldn’t delete run"),
     });
   }
@@ -184,12 +186,12 @@ export function Runs() {
                       variant="ghost"
                       size="sm"
                       icon={<Trash size={15} />}
-                      label={inFlight ? "Can’t delete a run that’s still in progress" : "Delete run"}
+                      label={inFlight ? "Cancel & delete run" : "Delete run"}
                       className={styles.deleteBtn}
-                      disabled={inFlight || del.isPending}
+                      disabled={del.isPending}
                       onClick={(e) => {
                         e.stopPropagation();
-                        void onDelete(r.runId, r.testName);
+                        void onDelete(r.runId, r.testName, inFlight);
                       }}
                     />
                   </td>
