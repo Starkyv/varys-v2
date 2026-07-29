@@ -493,6 +493,45 @@ export interface JudgeSettingsPatch {
 }
 
 /**
+ * Slack completion-notification config (Configurations page). When enabled + configured, the
+ * worker posts a message to `channel` after every run finishes — a single test (manual or
+ * scheduled) and, via fan-in, once per suite run. Masked on read (never returns the bot token).
+ */
+export interface SlackSettingsView {
+  /** Per-source toggles — the ONLY on/off control (no separate master switch): Slack is "on" when
+   *  any source is enabled and a token+channel are set; all-off = no notifications. Manual =
+   *  on-demand runs (the Run button / API); scheduled = cron test-schedules; suite = a suite run's
+   *  single fan-in summary (manual or cron). Each defaults ON. */
+  notifyManual: boolean;
+  notifySchedule: boolean;
+  notifySuite: boolean;
+  /** Attach a rendered PDF flow-report to each notification (needs the bot's `files:write` scope). */
+  attachPdf: boolean;
+  /** Target channel (id like `C0…` or a `#name`). */
+  channel: string;
+  /** Base URL of the Varys web app, used to build the "View run" deep link; null when unset
+   *  (the message then omits the link). */
+  baseUrl: string | null;
+  /** Whether a bot token is stored. */
+  tokenSet: boolean;
+  /** Last 4 chars of the stored token, or null when unset — a recognition hint, never the token. */
+  tokenHint: string | null;
+}
+
+/** Editable Slack config — an omitted or blank field is left untouched; a non-empty `token`
+ *  replaces the stored one (a blank token never clears it, so re-saving the masked form keeps it). */
+export interface SlackSettingsPatch {
+  notifyManual?: boolean;
+  notifySchedule?: boolean;
+  notifySuite?: boolean;
+  attachPdf?: boolean;
+  channel?: string;
+  baseUrl?: string;
+  /** The Slack bot token (`xoxb-…`). Write-only — never returned by the masked view. */
+  token?: string;
+}
+
+/**
  * One active Authoring Session, as listed for the live-preview picker
  * (`GET /authoring/sessions`, Slice 15 — Author with AI). An Authoring Session is the live
  * server-side browser Claude drives; this is just enough to identify and choose one to watch.

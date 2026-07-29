@@ -1,11 +1,14 @@
-import { Inject, Injectable } from "@nestjs/common";
+import { BadRequestException, Inject, Injectable } from "@nestjs/common";
 import { appSettings } from "@varys/db";
+import { sendSlackMessage, SLACK_SETTINGS_KEYS } from "@varys/notify";
 import {
   DEFAULT_IMAGE_COMPARISON_SETTINGS,
   type ImageComparisonSettings,
   type JudgeProviderName,
   type JudgeSettingsPatch,
   type JudgeSettingsView,
+  type SlackSettingsPatch,
+  type SlackSettingsView,
 } from "@varys/review-contract";
 import { inArray } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
@@ -141,5 +144,101 @@ export class SettingsService {
         });
     }
     return this.getJudge();
+  }
+
+  // ── Slack notifications ───────────────────────────────────────────────────────────────────
+  // The worker (@varys/notify) reads these same `app_settings` keys after every run, so an edit
+  // here takes effect on the next completion — no restart. GET is masked (never returns the token).
+
+  /** The effective Slack config, token masked. */
+  async getSlack(): Promise<SlackSettingsView> {
+    const rows = await this.db
+      .select({ key: appSettings.key, value: appSettings.value })
+      .from(appSettings)
+      .where(inArray(appSettings.key, Object.values(SLACK_SETTINGS_KEYS)));
+    const v = new Map(rows.map((r) => [r.key, r.value]));
+    const token = v.get(SLACK_SETTINGS_KEYS.token) ?? "";
+    return {
+      // Per-source gates default ON (absent or "true"); only an explicit "false" mutes. There is no
+      // master switch — all-off means no notifications.
+      notifyManual: v.get(SLACK_SETTINGS_KEYS.notifyManual) !== "false",
+      notifySchedule: v.get(SLACK_SETTINGS_KEYS.notifySchedule) !== "false",
+      notifySuite: v.get(SLACK_SETTINGS_KEYS.notifySuite) !== "false",
+      attachPdf: v.get(SLACK_SETTINGS_KEYS.attachPdf) === "true",
+      channel: v.get(SLACK_SETTINGS_KEYS.channel) ?? "",
+      baseUrl: v.get(SLACK_SETTINGS_KEYS.baseUrl) || null,
+      tokenSet: token.length > 0,
+      tokenHint: token.length >= 4 ? token.slice(-4) : token.length > 0 ? "••••" : null,
+    };
+  }
+
+  /** Upsert whichever Slack fields are present; a blank/absent `token` never clears the stored one
+   *  (so re-saving from the masked view keeps it). Returns the new masked view. */
+  async saveSlack(patch: SlackSettingsPatch): Promise<SlackSettingsView> {
+    const writes: { key: string; value: string }[] = [];
+    if (typeof patch.attachPdf === "boolean") {
+      writes.push({ key: SLACK_SETTINGS_KEYS.attachPdf, value: String(patch.attachPdf) });
+    }
+    if (typeof patch.notifyManual === "boolean") {
+      writes.push({ key: SLACK_SETTINGS_KEYS.notifyManual, value: String(patch.notifyManual) });
+    }
+    if (typeof patch.notifySchedule === "boolean") {
+      writes.push({ key: SLACK_SETTINGS_KEYS.notifySchedule, value: String(patch.notifySchedule) });
+    }
+    if (typeof patch.notifySuite === "boolean") {
+      writes.push({ key: SLACK_SETTINGS_KEYS.notifySuite, value: String(patch.notifySuite) });
+    }
+    if (typeof patch.channel === "string") {
+      writes.push({ key: SLACK_SETTINGS_KEYS.channel, value: patch.channel.trim() });
+    }
+    if (typeof patch.baseUrl === "string") {
+      writes.push({ key: SLACK_SETTINGS_KEYS.baseUrl, value: patch.baseUrl.trim() });
+    }
+    if (typeof patch.token === "string" && patch.token.trim().length > 0) {
+      writes.push({ key: SLACK_SETTINGS_KEYS.token, value: patch.token.trim() });
+    }
+    for (const w of writes) {
+      await this.db
+        .insert(appSettings)
+        .values(w)
+        .onConflictDoUpdate({ target: appSettings.key, set: { value: w.value, updatedAt: new Date() } });
+    }
+    return this.getSlack();
+  }
+
+  /** Post a test message using the STORED token + channel (regardless of the enabled toggle, so a
+   *  user can verify credentials before switching notifications on). 400 if unconfigured. */
+  async sendSlackTest(): Promise<{ ok: true }> {
+    const rows = await this.db
+      .select({ key: appSettings.key, value: appSettings.value })
+      .from(appSettings)
+      .where(inArray(appSettings.key, Object.values(SLACK_SETTINGS_KEYS)));
+    const v = new Map(rows.map((r) => [r.key, r.value]));
+    const token = (v.get(SLACK_SETTINGS_KEYS.token) ?? "").trim();
+    const channel = (v.get(SLACK_SETTINGS_KEYS.channel) ?? "").trim();
+    if (!token) throw new BadRequestException("Add a Slack bot token first.");
+    if (!channel) throw new BadRequestException("Add a Slack channel first.");
+    const res = await sendSlackMessage(
+      {
+        token,
+        channel,
+        baseUrl: (v.get(SLACK_SETTINGS_KEYS.baseUrl) ?? "").trim(),
+        attachPdf: false,
+        notifyManual: true,
+        notifySchedule: true,
+        notifySuite: true,
+      },
+      {
+        text: "✅ Varys is connected",
+        blocks: [
+          {
+            type: "section",
+            text: { type: "mrkdwn", text: "*✅ Varys is connected* — run notifications will post here." },
+          },
+        ],
+      },
+    );
+    if (!res.ok) throw new BadRequestException(`Slack rejected the test message: ${res.error}`);
+    return { ok: true };
   }
 }

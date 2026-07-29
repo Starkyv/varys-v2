@@ -19,6 +19,7 @@ import {
   type JudgeProviderName,
 } from "@varys/judge-engine";
 import { resolve, verify } from "@varys/locator-engine";
+import { notifyRunComplete } from "@varys/notify";
 import {
   describeStep,
   type Fingerprint,
@@ -237,30 +238,53 @@ export async function applyWaits(page: Page, waits: Wait[] | undefined): Promise
       // wait when you need a hard gate on a specific element.
       await page.waitForLoadState("networkidle", { timeout: w.timeoutMs }).catch(() => undefined);
     } else if (w.kind === "streamIdle") {
-      // Wait until the DOM has been mutation-free for `quietMs` — i.e. a streamed Wisdom answer /
-      // late-rendering chart has SETTLED — capped at `timeoutMs`. Best-effort: resolves at the cap
-      // if the page never fully quiesces, so a perpetually-animating page can't hang the step.
-      // Passed as a RAW STRING expression (not a serialized function) so esbuild/tsx `keepNames`
-      // can't rewrite it to call a `__name` helper that doesn't exist in the page — the same reason
-      // `seedLocalStorage` builds its init script from a string.
+      // Wait until streamed content has SETTLED, capped at `timeoutMs`. The hard part is that the
+      // work often hasn't STARTED yet when this wait begins (the click that submits a Wisdom query
+      // is the previous step, and the loading skeleton appears a beat later). A naive "quiet for
+      // `quietMs`" therefore fires in that pre-work calm and captures the skeleton that appears just
+      // after. So we track a small state machine over a poll + MutationObserver:
+      //   • `busy()`  — a loading marker is on the page (skeleton / spinner / progressbar / aria-busy).
+      //   • activity  — a loading marker OR any DOM mutation (streaming text, late chart) — resets idle.
+      // We settle only when idle for `quietMs` AND either we have SEEN a loading state that has since
+      // cleared (`sawBusy` — the answer loaded and finished), or nothing async ever happened within
+      // `graceMs` (a static page — nothing to wait for). This reads signals the app already renders —
+      // no app-side markup. `busySelector` overrides the default marker set.
+      //
+      // Raw STRING expression (not a serialized function) so esbuild/tsx `keepNames` can't inject a
+      // `__name` helper that doesn't exist in the page — same reason `seedLocalStorage` uses a string.
       const quietMs = w.quietMs ?? 800;
-      const timeoutMs = w.timeoutMs ?? 30_000;
+      // Generous cap: with the loading gate it resolves as soon as the answer finishes; the cap only
+      // bites if a marker never clears. Wisdom answers with tool calls can run ~1min+.
+      const timeoutMs = w.timeoutMs ?? 120_000;
+      // How long to wait for loading to APPEAR before concluding there's nothing async to wait for.
+      // Covers the submit→skeleton latency; any DOM mutation in this window also counts as activity.
+      const graceMs = 6_000;
+      // Common "still working" markers. `data-testid*="skeleton"` catches Wisdom's answer/section
+      // skeletons (testids survive CSS-module hashing, unlike class names). JSON-encoded to embed safely.
+      const busySelector =
+        w.busySelector?.trim() ||
+        '[aria-busy="true"],[role="progressbar"],[data-testid*="skeleton" i],[data-testid*="spinner" i],[data-testid*="loading" i],[class*="animate-pulse"]';
       const src = `(function () {
   return new Promise(function (resolve) {
-    var quiet = ${quietMs}, max = ${timeoutMs}, t = null, obs = null;
-    var hard = setTimeout(done, max);
-    function done() {
-      try { if (obs) obs.disconnect(); } catch (e) {}
-      if (t) clearTimeout(t);
-      clearTimeout(hard);
-      resolve(true);
+    var quiet = ${quietMs}, max = ${timeoutMs}, grace = ${graceMs}, sel = ${JSON.stringify(busySelector)}, obs = null;
+    var start = Date.now(), lastActivity = Date.now(), sawBusy = false;
+    var hard = setTimeout(finish, max);
+    function busy() { try { return !!document.querySelector(sel); } catch (e) { return false; } }
+    function finish() { try { if (obs) obs.disconnect(); } catch (e) {} clearTimeout(hard); resolve(true); }
+    function tick() {
+      var now = Date.now();
+      if (busy()) { sawBusy = true; lastActivity = now; return setTimeout(tick, 150); }
+      if (now - lastActivity < quiet) return setTimeout(tick, 150);
+      // Idle long enough. Settle if a loading state came and went (answer finished), or the grace
+      // window elapsed with nothing async ever happening (a static page — nothing to wait for).
+      if (sawBusy || (now - start) >= grace) return finish();
+      return setTimeout(tick, 150);
     }
-    function bump() { if (t) clearTimeout(t); t = setTimeout(done, quiet); }
     try {
-      obs = new MutationObserver(bump);
+      obs = new MutationObserver(function () { lastActivity = Date.now(); });
       obs.observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true });
     } catch (e) {}
-    bump();
+    setTimeout(tick, 150);
   });
 })()`;
       await page.evaluate(src).catch(() => undefined);
@@ -430,6 +454,48 @@ async function isRunCancelled(db: Db, runId: string): Promise<boolean> {
     .where(eq(runs.id, runId))
     .limit(1);
   return !row || row.status === "cancelled";
+}
+
+/**
+ * Capture an element's FULL height even when it lives inside a shorter inner `overflow:auto` scroll
+ * pane (Wisdom: a ~1900px answer inside a 704px `.scroll`). The element is already fully laid out —
+ * only the pane hides it — so the reliable fix is to GROW THE BROWSER VIEWPORT until no scroll
+ * ancestor still clips the target. In a viewport-height flex app the pane then expands and the whole
+ * element becomes genuinely on-screen (so even off-screen-painted content like ECharts canvases
+ * renders), and a normal `locator.screenshot()` gets everything. No DOM surgery — an earlier attempt
+ * that rewrote ancestor `flex/height` reflowed the page and produced blank bands + wrong heights.
+ * Viewport is restored afterwards. Capped for Chromium's screenshot-size limit.
+ */
+async function captureFullElement(page: Page, locator: Locator, selector?: string): Promise<Buffer> {
+  const orig = page.viewportSize();
+  if (!orig) return locator.screenshot();
+  const CAP = 16_000; // device px; keeps the DPR-scaled bitmap under Chromium's ~32767 limit
+  // Total clip deficit across the target's scroll ancestors — how much taller the viewport must be
+  // so nothing clips it. Raw-string expression (browser context, no DOM lib / `__name` issues).
+  const deficitSrc = selector
+    ? `(function(){var el=document.querySelector(${JSON.stringify(selector)});if(!el)return 0;var d=0;for(var n=el.parentElement;n;n=n.parentElement){var cs=getComputedStyle(n);if(/(auto|scroll)/.test(cs.overflowY)&&n.scrollHeight>n.clientHeight+1)d+=n.scrollHeight-n.clientHeight;}return d;})()`
+    : null;
+  try {
+    if (deficitSrc) {
+      // Iterate: grow by the deficit, remeasure (reflow can reveal more), until nothing clips it.
+      for (let i = 0; i < 4; i += 1) {
+        const deficit = (await page.evaluate(deficitSrc).catch(() => 0)) as number;
+        const cur = page.viewportSize()?.height ?? orig.height;
+        if (!deficit || deficit <= 1 || cur >= CAP) break;
+        await page.setViewportSize({ width: orig.width, height: Math.min(CAP, cur + deficit + 120) });
+        await page.waitForTimeout(350); // reflow + any container-resize-driven chart re-render
+      }
+    } else {
+      // No stable selector to measure — grow once by a generous amount as a best-effort.
+      await page.setViewportSize({ width: orig.width, height: CAP });
+      await page.waitForTimeout(350);
+    }
+    await locator.scrollIntoViewIfNeeded().catch(() => undefined);
+    await page.waitForTimeout(150);
+    return await locator.screenshot();
+  } finally {
+    await page.setViewportSize(orig).catch(() => undefined);
+  }
 }
 
 /**
@@ -611,13 +677,25 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
 
       // Screenshot: apply the same waits the run always did (defaults + own), then settle
       // the network before capturing the checkpoint.
-      await applyWaits(page, [...resolvedDefaultWaits, ...(step.waitBefore ?? [])]);
-      await page.waitForLoadState("networkidle").catch(() => undefined);
+      const screenshotWaits = [...resolvedDefaultWaits, ...(step.waitBefore ?? [])];
+      await applyWaits(page, screenshotWaits);
+      // A `streamIdle` wait is the authoritative "content settled" gate; the extra networkidle would
+      // only burn its full timeout on a streaming page (SSE/poll never idles) AFTER the content is
+      // already there, so skip it. Otherwise settle the network, but briefly — a busy SPA may never
+      // idle, and this is only a best-effort top-up.
+      if (!screenshotWaits.some((w) => w.kind === "streamIdle")) {
+        await page.waitForLoadState("networkidle", { timeout: 5_000 }).catch(() => undefined);
+      }
 
-      // Capture by mode (absent ⇒ element, for back-compat). Element resolves the
-      // fingerprint locator; full-page captures the scrollable page; region clips a rect.
+      // Capture by mode (absent ⇒ element, for back-compat). Element resolves the fingerprint
+      // locator and captures its FULL height even when it lives inside a shorter inner `overflow`
+      // scroll pane (see {@link captureFullElement} — grows the viewport, no DOM surgery); full-page
+      // captures the scrollable page; region clips a rect.
       let actual: Buffer;
       let healed = false;
+      const elementSelector = step.target?.testId
+        ? `[data-testid="${step.target.testId}"]`
+        : (step.target?.cssPath ?? undefined);
       if (step.captureMode === "fullpage") {
         actual = await page.screenshot({ fullPage: true });
       } else if (step.captureMode === "region") {
@@ -627,7 +705,7 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
         if (!step.target) throw new Error(`element checkpoint "${step.name}" has no target`);
         const found = await resolveWithHoverReveal(page, step.target, actionResolveTimeoutMs());
         if (found) {
-          actual = await found.locator.screenshot();
+          actual = await captureFullElement(page, found.locator, elementSelector);
           healed = found.healed;
         } else {
           // The scored matcher couldn't confidently resolve. For a screenshot a wrong
@@ -639,7 +717,7 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
           if (cssPath) {
             try {
               const loc = page.locator(cssPath).first();
-              if ((await loc.count()) > 0) fallbackShot = await loc.screenshot();
+              if ((await loc.count()) > 0) fallbackShot = await captureFullElement(page, loc, cssPath);
             } catch {
               fallbackShot = null; // malformed selector → treat as no fallback
             }
@@ -890,6 +968,37 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
     }
     await context?.close();
     await browser?.close();
+
+    // Slack completion notification (best-effort, off unless configured). Skipped for a cancelled/
+    // deleted run — there's nothing to report and the row may be gone. A standalone run posts one
+    // message; a suite child triggers the one-shot suite summary only when it's the last to finish.
+    if (!cancelled) {
+      try {
+        // renderPdf launches a fresh headless chromium to turn the report HTML into a PDF. It's only
+        // INVOKED when the Slack config has attachPdf on (notify decides), so a message-only setup
+        // pays nothing. A separate browser (not the just-closed run context) keeps it isolated from
+        // whatever state the replay ended in.
+        const renderPdf = async (html: string): Promise<Buffer> => {
+          const b = await chromium.launch({ args: browserLaunchArgs() });
+          try {
+            const p = await b.newPage();
+            await p.setContent(html, { waitUntil: "networkidle" });
+            return await p.pdf({
+              format: "A4",
+              printBackground: true,
+              margin: { top: "0", bottom: "0", left: "0", right: "0" },
+            });
+          } finally {
+            await b.close();
+          }
+        };
+        const { sent, error } = await notifyRunComplete(db, runId, { renderPdf });
+        if (error) console.error(`[runner] Slack notify for run ${runId}: ${error}`);
+        else if (sent) console.log(`[runner] Slack notification sent for run ${runId}`);
+      } catch (notifyErr) {
+        console.error(`[runner] Slack notify threw for run ${runId}:`, notifyErr);
+      }
+    }
   }
 }
 

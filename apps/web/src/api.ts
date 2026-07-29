@@ -13,6 +13,8 @@ import type {
   ImageComparisonSettings,
   JudgeSettingsPatch,
   JudgeSettingsView,
+  SlackSettingsPatch,
+  SlackSettingsView,
   LocatorVerifyRequest,
   LocatorVerifyResult,
   NeedsReviewItem,
@@ -200,6 +202,33 @@ export async function saveJudgeSettings(body: JudgeSettingsPatch): Promise<Judge
   });
   if (!res.ok) throw new Error(`Failed to save judge settings (${res.status})`);
   return (await res.json()) as JudgeSettingsView;
+}
+
+export async function fetchSlackSettings(): Promise<SlackSettingsView> {
+  const res = await fetch(`${API_BASE}/settings/slack`);
+  if (!res.ok) throw new Error(`Failed to load Slack settings (${res.status})`);
+  return (await res.json()) as SlackSettingsView;
+}
+
+export async function saveSlackSettings(body: SlackSettingsPatch): Promise<SlackSettingsView> {
+  const res = await fetch(`${API_BASE}/settings/slack`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`Failed to save Slack settings (${res.status})`);
+  return (await res.json()) as SlackSettingsView;
+}
+
+/** Post a test message with the stored credentials. Surfaces the API's error message (e.g. Slack's
+ *  `channel_not_found` / `invalid_auth`) so the user can fix the config. */
+export async function sendSlackTest(): Promise<{ ok: true }> {
+  const res = await fetch(`${API_BASE}/settings/slack/test`, { method: "POST" });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { message?: string };
+    throw new Error(body.message ?? `Slack test failed (${res.status})`);
+  }
+  return (await res.json()) as { ok: true };
 }
 
 /** Whether Claude Code has recently driven the MCP server — an activity-based "connected" proxy

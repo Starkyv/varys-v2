@@ -5,8 +5,9 @@ import {
   JUDGE_PROVIDERS,
   type JudgeProviderName,
   type JudgeSettingsView,
+  type SlackSettingsView,
 } from "@varys/review-contract";
-import { Badge, Button, ErrorState, Input, Select, Skeleton, Sliders } from "@varys/ui";
+import { Badge, Button, ErrorState, Input, Select, Skeleton, Sliders, Switch } from "@varys/ui";
 import { useEffect, useState } from "react";
 import { useToast } from "../../context/toast";
 import {
@@ -14,6 +15,9 @@ import {
   useJudgeSettings,
   useSaveImageComparisonSettings,
   useSaveJudgeSettings,
+  useSaveSlackSettings,
+  useSendSlackTest,
+  useSlackSettings,
 } from "../../queries";
 import styles from "./styles.module.scss";
 
@@ -71,9 +75,8 @@ export function Configurations() {
     <div className={styles.page}>
       <ImageComparisonCard settings={query.data} />
       <JudgeCard />
-      <p className={styles.comingSoon}>
-        More settings coming soon — capture, schedules and notifications.
-      </p>
+      <SlackCard />
+      <p className={styles.comingSoon}>More settings coming soon — capture and schedules.</p>
     </div>
   );
 }
@@ -386,6 +389,251 @@ function ImageComparisonCard({ settings }: { settings: ImageComparisonSettings }
           <span className={styles.scaleMid}>{changeWord(ratio)}</span>
           <span>25% · very relaxed</span>
         </div>
+      </div>
+    </section>
+  );
+}
+
+/** Slack run-completion notifications — a bot token + channel. When configured (with at least one
+ *  source on), the worker posts a message after every run: a single test (manual/scheduled) and,
+ *  via fan-in, once per suite run. */
+function SlackCard() {
+  const query = useSlackSettings();
+  if (query.isLoading) return <Skeleton height={320} radius="var(--radius-xl)" />;
+  if (query.isError || !query.data) {
+    return (
+      <ErrorState
+        title="Couldn’t load the Slack settings"
+        description="Fetching the Slack configuration failed."
+        onRetry={() => query.refetch()}
+      />
+    );
+  }
+  return <SlackCardForm settings={query.data} />;
+}
+
+/** One label+description row with a trailing switch, for the Slack "Notify on" group. */
+function ToggleRow({
+  title,
+  hint,
+  checked,
+  onChange,
+}: {
+  title: string;
+  hint: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <div className={styles.toggleRow}>
+      <div className={styles.toggleRowText}>
+        <div className={styles.toggleRowTitle}>{title}</div>
+        <div className={styles.toggleRowHint}>{hint}</div>
+      </div>
+      <Switch checked={checked} onCheckedChange={onChange} aria-label={`Notify on ${title.toLowerCase()}`} />
+    </div>
+  );
+}
+
+function SlackCardForm({ settings }: { settings: SlackSettingsView }) {
+  const { toast } = useToast();
+  const save = useSaveSlackSettings();
+  const test = useSendSlackTest();
+
+  const [notifyManual, setNotifyManual] = useState(settings.notifyManual);
+  const [notifySchedule, setNotifySchedule] = useState(settings.notifySchedule);
+  const [notifySuite, setNotifySuite] = useState(settings.notifySuite);
+  const [attachPdf, setAttachPdf] = useState(settings.attachPdf);
+  const [channel, setChannel] = useState(settings.channel);
+  const [baseUrl, setBaseUrl] = useState(settings.baseUrl ?? "");
+  // The token is never returned; the field starts empty and only replaces the stored one if typed.
+  const [token, setToken] = useState("");
+  useEffect(() => {
+    setNotifyManual(settings.notifyManual);
+    setNotifySchedule(settings.notifySchedule);
+    setNotifySuite(settings.notifySuite);
+    setAttachPdf(settings.attachPdf);
+    setChannel(settings.channel);
+    setBaseUrl(settings.baseUrl ?? "");
+    setToken("");
+  }, [
+    settings.notifyManual,
+    settings.notifySchedule,
+    settings.notifySuite,
+    settings.attachPdf,
+    settings.channel,
+    settings.baseUrl,
+  ]);
+
+  const dirty =
+    notifyManual !== settings.notifyManual ||
+    notifySchedule !== settings.notifySchedule ||
+    notifySuite !== settings.notifySuite ||
+    attachPdf !== settings.attachPdf ||
+    channel !== settings.channel ||
+    baseUrl !== (settings.baseUrl ?? "") ||
+    token.trim().length > 0;
+
+  const buildPatch = () => {
+    const patch: Parameters<typeof save.mutate>[0] = {
+      notifyManual,
+      notifySchedule,
+      notifySuite,
+      attachPdf,
+      channel: channel.trim(),
+      baseUrl: baseUrl.trim(),
+    };
+    if (token.trim().length > 0) patch.token = token.trim();
+    return patch;
+  };
+
+  const allMuted = !notifyManual && !notifySchedule && !notifySuite;
+
+  const onSave = () => {
+    save.mutate(buildPatch(), {
+      onSuccess: () => toast("Slack settings saved — applied from the next run"),
+      onError: (e) => toast(e instanceof Error ? e.message : "Couldn’t save Slack settings"),
+    });
+  };
+
+  // Save the current form first (so the test uses exactly what's on screen), then post the test.
+  const onTest = async () => {
+    try {
+      if (dirty) await save.mutateAsync(buildPatch());
+      await test.mutateAsync();
+      toast("Test message sent — check your Slack channel");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Slack test failed");
+    }
+  };
+
+  const canTest = settings.tokenSet || token.trim().length > 0;
+
+  return (
+    <section className={styles.card}>
+      <header className={styles.header}>
+        <span className={styles.headerIcon}>
+          <Sliders size={19} />
+        </span>
+        <div className={styles.headerText}>
+          <h2 className={styles.title}>Slack notifications</h2>
+          <p className={styles.subtitle}>
+            Post a message to Slack when a run finishes — a single test (manual or scheduled) and,
+            once per suite run. Needs a Slack app bot token with <code>chat:write</code>.
+          </p>
+        </div>
+        <Button variant="primary" size="md" loading={save.isPending} disabled={!dirty} onClick={onSave}>
+          Save changes
+        </Button>
+      </header>
+
+      <div className={styles.setting}>
+        <div className={styles.settingHead}>
+          <span className={styles.settingTitle}>Notify on</span>
+          {allMuted && (
+            <Badge tone="neutral" size="sm">
+              all off — no notifications
+            </Badge>
+          )}
+        </div>
+        <p className={styles.settingDesc}>
+          Which runs post a message — each is independent. There’s no separate on/off: turning every
+          source off disables Slack entirely.
+        </p>
+        <div className={styles.toggleGroup}>
+          <ToggleRow
+            title="Manual runs"
+            hint="On-demand — the Run button or API"
+            checked={notifyManual}
+            onChange={setNotifyManual}
+          />
+          <ToggleRow
+            title="Scheduled runs"
+            hint="Cron test schedules"
+            checked={notifySchedule}
+            onChange={setNotifySchedule}
+          />
+          <ToggleRow
+            title="Suite runs"
+            hint="One summary per suite run (manual or cron)"
+            checked={notifySuite}
+            onChange={setNotifySuite}
+          />
+        </div>
+      </div>
+
+      <div className={styles.setting}>
+        <div className={styles.settingHead}>
+          <span className={styles.settingTitle}>Attach PDF report</span>
+          <Switch checked={attachPdf} onCheckedChange={setAttachPdf} aria-label="Attach PDF report" />
+        </div>
+        <p className={styles.settingDesc}>
+          Render a flow-report PDF (status, counts, per-checkpoint/test breakdown) and attach it to
+          each message.
+        </p>
+      </div>
+
+      <div className={styles.setting}>
+        <div className={styles.settingHead}>
+          <span className={styles.settingTitle}>Bot token</span>
+          {settings.tokenSet && (
+            <Badge tone="info" size="sm">
+              set · ····{settings.tokenHint}
+            </Badge>
+          )}
+        </div>
+        <p className={styles.settingDesc}>
+          {settings.tokenSet
+            ? "A token is stored. Leave blank to keep it, or paste a new one to replace it."
+            : "Paste your Slack app’s bot token (starts with xoxb-). Stored server-side, never shown again."}
+        </p>
+        <Input
+          type="password"
+          value={token}
+          mono
+          placeholder={settings.tokenSet ? "•••••••• (unchanged)" : "xoxb-…"}
+          aria-label="Slack bot token"
+          onChange={(e) => setToken(e.target.value)}
+        />
+      </div>
+
+      <div className={styles.setting}>
+        <div className={styles.settingHead}>
+          <span className={styles.settingTitle}>Channel</span>
+        </div>
+        <p className={styles.settingDesc}>
+          The channel id (e.g. <code>C0123ABCD</code>) or <code>#name</code>. Invite the bot to it first.
+        </p>
+        <Input
+          value={channel}
+          mono
+          placeholder="#qa-varys or C0123ABCD"
+          aria-label="Slack channel"
+          onChange={(e) => setChannel(e.target.value)}
+        />
+      </div>
+
+      <div className={styles.setting}>
+        <div className={styles.settingHead}>
+          <span className={styles.settingTitle}>Varys base URL</span>
+        </div>
+        <p className={styles.settingDesc}>
+          Where this app is reached (e.g. <code>https://varys.internal</code>) — used for the “View run”
+          link in each message. Leave blank to omit the link.
+        </p>
+        <Input
+          value={baseUrl}
+          mono
+          placeholder="https://varys.internal"
+          aria-label="Varys base URL"
+          onChange={(e) => setBaseUrl(e.target.value)}
+        />
+      </div>
+
+      <div className={styles.setting}>
+        <Button variant="secondary" size="sm" loading={test.isPending || save.isPending} disabled={!canTest} onClick={() => void onTest()}>
+          Send test message
+        </Button>
       </div>
     </section>
   );

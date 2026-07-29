@@ -211,3 +211,35 @@
   font-size: var(--font-size-xs);
   color: var(--color-text-subtle);
 }
+
+/* Slack "Notify on" — a bordered, divided list of label+switch rows. */
+.toggleGroup {
+  margin-top: var(--space-12);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.toggleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-16);
+  padding: var(--space-12) var(--space-16);
+
+  & + & {
+    border-top: 1px solid var(--color-border);
+  }
+}
+.toggleRowText {
+  min-width: 0;
+}
+.toggleRowTitle {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-strong);
+}
+.toggleRowHint {
+  margin-top: 2px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}

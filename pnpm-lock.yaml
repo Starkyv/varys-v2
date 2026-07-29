@@ -50,6 +50,9 @@ importers:
       '@varys/judge-engine':
         specifier: workspace:*
         version: link:../../packages/judge-engine
+      '@varys/notify':
+        specifier: workspace:*
+        version: link:../../packages/notify
       '@varys/queue':
         specifier: workspace:*
         version: link:../../packages/queue
@@ -357,6 +360,19 @@ importers:
         specifier: ^3.0.5
         version: 3.2.6(@types/debug@4.1.13)(@types/node@25.9.3)(jiti@2.7.0)(jsdom@25.0.1)(lightningcss@1.32.0)(msw@2.14.6(@types/node@25.9.3)(typescript@5.9.3))(sass@1.101.0)(tsx@4.22.4)(yaml@2.9.0)
 
+  packages/notify:
+    dependencies:
+      '@varys/db':
+        specifier: workspace:*
+        version: link:../db
+      drizzle-orm:
+        specifier: ^0.39.1
+        version: 0.39.3(@types/pg@8.20.0)(kysely@0.29.2)(pg@8.21.0)
+    devDependencies:
+      vitest:
+        specifier: ^3.0.5
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@25.9.3)(jiti@2.7.0)(jsdom@25.0.1)(lightningcss@1.32.0)(msw@2.14.6(@types/node@25.9.3)(typescript@5.9.3))(sass@1.101.0)(tsx@4.22.4)(yaml@2.9.0)
+
   packages/queue:
     dependencies:
       pg-boss:
@@ -398,6 +414,9 @@ importers:
       '@varys/locator-engine':
         specifier: workspace:*
         version: link:../locator-engine
+      '@varys/notify':
+        specifier: workspace:*
+        version: link:../notify
       '@varys/step-schema':
         specifier: workspace:*
         version: link:../step-schema

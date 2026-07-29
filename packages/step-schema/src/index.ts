@@ -115,13 +115,16 @@ export const wait = z.discriminatedUnion("kind", [
     kind: z.literal("networkIdle"),
     timeoutMs: z.number().int().positive().optional(),
   }),
-  /** Wait until the DOM has been mutation-free for `quietMs` — i.e. streaming/late-rendering
-   *  content (Wisdom answers, late d3 layout) has settled — capped at `timeoutMs`. Best-effort:
-   *  proceeds at the cap even if the page never fully quiesces. */
+  /** Wait until streamed/late-rendering content (Wisdom answers, late d3 layout) has SETTLED —
+   *  the DOM has been mutation-free for `quietMs` AND no loading indicator (skeleton / spinner /
+   *  progressbar / `aria-busy`) remains — capped at `timeoutMs`. Best-effort: proceeds at the cap
+   *  even if the page never fully quiesces. `busySelector` overrides the built-in loading-indicator
+   *  selector for an app whose marker the default doesn't catch. */
   z.object({
     kind: z.literal("streamIdle"),
     quietMs: z.number().int().positive().optional(),
     timeoutMs: z.number().int().positive().optional(),
+    busySelector: z.string().min(1).optional(),
   }),
   z.object({
     kind: z.literal("selector"),

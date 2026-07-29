@@ -1,8 +1,10 @@
-import { Body, Controller, Get, Inject, Put } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, Inject, Post, Put } from "@nestjs/common";
 import type {
   ImageComparisonSettings,
   JudgeSettingsPatch,
   JudgeSettingsView,
+  SlackSettingsPatch,
+  SlackSettingsView,
 } from "@varys/review-contract";
 import { SettingsService } from "./settings.service";
 
@@ -40,5 +42,23 @@ export class SettingsController {
   @Put("judge")
   putJudge(@Body() body: JudgeSettingsPatch): Promise<JudgeSettingsView> {
     return this.settings.saveJudge(body ?? {});
+  }
+
+  // Slack run-completion notifications. GET is masked (never returns the bot token). POST /test
+  // posts a message with the stored credentials so the user can verify before enabling.
+  @Get("slack")
+  getSlack(): Promise<SlackSettingsView> {
+    return this.settings.getSlack();
+  }
+
+  @Put("slack")
+  putSlack(@Body() body: SlackSettingsPatch): Promise<SlackSettingsView> {
+    return this.settings.saveSlack(body ?? {});
+  }
+
+  @Post("slack/test")
+  @HttpCode(200)
+  testSlack(): Promise<{ ok: true }> {
+    return this.settings.sendSlackTest();
   }
 }

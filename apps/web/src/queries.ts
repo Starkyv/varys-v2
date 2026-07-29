@@ -4,6 +4,7 @@ import type {
   JudgeSettingsPatch,
   LocatorVerifyRequest,
   PromoteDraftBody,
+  SlackSettingsPatch,
   TestConfigPatch,
   TestScheduleInput,
   TuningInput,
@@ -25,10 +26,13 @@ import {
   fetchAuthoringSessions,
   fetchImageComparisonSettings,
   fetchJudgeSettings,
+  fetchSlackSettings,
   fetchMcpStatus,
   saveAuthoringInstructions,
   saveImageComparisonSettings,
   saveJudgeSettings,
+  saveSlackSettings,
+  sendSlackTest,
   fetchDashboard,
   fetchDraft,
   fetchDrafts,
@@ -260,6 +264,32 @@ export function useSaveJudgeSettings() {
     mutationFn: (body: JudgeSettingsPatch) => saveJudgeSettings(body),
     onSuccess: (next) => qc.setQueryData(judgeSettingsQueryKey(), next),
   });
+}
+
+export function slackSettingsQueryKey() {
+  return ["settings", "slack"] as const;
+}
+
+/** The Slack notification config — masked (no bot token). */
+export function useSlackSettings() {
+  return useQuery({
+    queryKey: slackSettingsQueryKey(),
+    queryFn: fetchSlackSettings,
+  });
+}
+
+/** Save the Slack config; seeds the cache with the server's new masked view. */
+export function useSaveSlackSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: SlackSettingsPatch) => saveSlackSettings(body),
+    onSuccess: (next) => qc.setQueryData(slackSettingsQueryKey(), next),
+  });
+}
+
+/** Post a test message to the configured channel (uses stored credentials). */
+export function useSendSlackTest() {
+  return useMutation({ mutationFn: () => sendSlackTest() });
 }
 
 export function draftQueryKey(id: string) {

@@ -118,6 +118,9 @@ export const suiteRuns = pgTable("suite_runs", {
   /** Trigger-time snapshot of the suite's name. */
   suiteName: text("suite_name").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  /** When the one-shot Slack completion notification was claimed+sent (fan-in). NULL until the
+   *  LAST child finishes and one worker atomically claims it — so a suite notifies exactly once. */
+  notifiedAt: timestamp("notified_at", { withTimezone: true }),
 });
 
 export const testVersions = pgTable("test_versions", {
@@ -440,6 +443,8 @@ CREATE TABLE IF NOT EXISTS suite_runs (
   suite_name text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+-- Fan-in Slack notification claim: set once when the last child finishes (exactly-once notify).
+ALTER TABLE suite_runs ADD COLUMN IF NOT EXISTS notified_at timestamptz;
 CREATE TABLE IF NOT EXISTS test_versions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   test_id uuid NOT NULL REFERENCES tests(id),
