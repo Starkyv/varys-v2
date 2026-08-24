@@ -33,7 +33,7 @@ export type NavKey =
 
 export type Route =
   | { name: "dashboard" }
-  | { name: "tests" }
+  | { name: "tests"; folderId?: string }
   | { name: "drafts" }
   | { name: "author" }
   | { name: "suites" }
@@ -74,6 +74,11 @@ export function parseRoute(loc: Location = window.location): Route {
   const view = q.get("view");
   const nav = view ? PARAM_VIEW[view] : undefined;
   if (nav === "suiteRuns") return { name: "suiteRuns" };
+  if (nav === "tests") {
+    // Persist the open folder in the URL so a shared link reopens the same folder.
+    const folder = q.get("folder");
+    return folder ? { name: "tests", folderId: folder } : { name: "tests" };
+  }
   if (nav) return { name: nav } as Route;
   return { name: "dashboard" };
 }
@@ -88,6 +93,10 @@ export function routeToUrl(route: Route): string {
       return route.suiteRunId
         ? `?view=suite-runs&suiteRun=${encodeURIComponent(route.suiteRunId)}`
         : "?view=suite-runs";
+    case "tests":
+      return route.folderId
+        ? `?view=tests&folder=${encodeURIComponent(route.folderId)}`
+        : "?view=tests";
     default:
       return `?view=${VIEW_PARAM[route.name as NavKey]}`;
   }

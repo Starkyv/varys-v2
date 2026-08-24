@@ -175,11 +175,21 @@ function toConfigWait(w: Wait): ConfigWait {
   return w; // delay / networkIdle are structurally identical to ConfigWait
 }
 
-/** Replace the authorable (delay/networkIdle) waits while preserving any selector waits
- *  the editor can't author — selectors keep their relative order, ahead of the new set. */
-function mergeWaits(existing: Wait[] | undefined, editable: EditableWait[]): Wait[] {
-  const preserved = (existing ?? []).filter((w) => w.kind === "selector");
-  return [...preserved, ...editable];
+/** Replace the authorable (delay/networkIdle/streamIdle) waits while preserving selector waits the
+ *  editor can't author — selectors keep their relative order, ahead of the authorable set.
+ *  `editable === undefined` keeps the step's existing authorable waits (used when only dropping a
+ *  selector wait). `dropSelectors` removes selector waits by their 0-based position (matching the
+ *  editor's locked-row order). */
+function mergeWaits(
+  existing: Wait[] | undefined,
+  editable: EditableWait[] | undefined,
+  dropSelectors?: Set<number>,
+): Wait[] {
+  const selectors = (existing ?? []).filter((w) => w.kind === "selector");
+  const keptSelectors = dropSelectors ? selectors.filter((_, i) => !dropSelectors.has(i)) : selectors;
+  const authorable: Wait[] =
+    editable !== undefined ? editable : (existing ?? []).filter((w) => w.kind !== "selector");
+  return [...keptSelectors, ...authorable];
 }
 
 
@@ -762,8 +772,10 @@ export class TestsService {
       // Removals are applied in the interleave below; navigate has no waits/threshold.
       if (!p || p.remove || s.type === "navigate") return s;
       let out = s;
-      if (p.waitBefore !== undefined) {
-        out = { ...out, waitBefore: mergeWaits(out.waitBefore, p.waitBefore) };
+      const dropLocked =
+        p.dropLockedWaits && p.dropLockedWaits.length ? new Set(p.dropLockedWaits) : undefined;
+      if (p.waitBefore !== undefined || dropLocked) {
+        out = { ...out, waitBefore: mergeWaits(out.waitBefore, p.waitBefore, dropLocked) };
       }
       if (p.threshold !== undefined && out.type === "screenshot") {
         out = { ...out, threshold: p.threshold };

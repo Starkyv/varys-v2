@@ -1,4 +1,4 @@
-import { ArrowLeft, Button, Check, ErrorState, ExternalLink, IconButton, Skeleton, Trash } from "@varys/ui";
+import { ArrowLeft, Button, Check, ErrorState, ExternalLink, Flask, IconButton, Skeleton, Trash } from "@varys/ui";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { createElement, useEffect, useMemo, useState } from "react";
 import { useConfirm } from "../../context/confirm";
@@ -132,6 +132,13 @@ export function RunDetail({ runId }: { runId: string }) {
             )}
           </div>
         </div>
+        <Button
+          variant="secondary"
+          iconLeft={<Flask size={15} />}
+          onClick={() => navigate({ name: "testDetail", testId: data.testId })}
+        >
+          View test
+        </Button>
         {data.traceUrl && (
           <Button variant="secondary" iconLeft={<ExternalLink size={15} />} onClick={openTrace}>
             Open Playwright trace

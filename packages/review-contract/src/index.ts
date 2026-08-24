@@ -299,6 +299,10 @@ export interface TestConfigStepPatch {
   threshold?: number;
   /** Screenshot-only: replace this checkpoint's diff-ignore mask regions (full list). */
   masks?: Rect[];
+  /** Drop recorded `selector` waits by their 0-based position among this step's selector waits
+   *  (the order shown as locked rows in the editor). Normally selector waits are preserved on save;
+   *  this lets the editor remove one. Absent = keep all. */
+  dropLockedWaits?: number[];
   /** Type-only: set the literal value typed into the field. */
   value?: string;
   /** Edit the step's element locator signals (click / type / element-mode screenshot).
@@ -800,6 +804,8 @@ export interface NeedsReviewItem {
  */
 export interface RunSummary {
   runId: string;
+  /** The test this run belongs to — lets the Runs list link straight to its Test Detail page. */
+  testId: string;
   testName: string;
   /** Environment name the run executed against ("default" when none). */
   environment: string;
@@ -941,6 +947,8 @@ export interface RunView {
    *  `status="passed"`. Computed server-side via {@link deriveRunOutcome}; the client only
    *  displays it (never recomputes). */
   outcome: RunOutcome;
+  /** The test this run belongs to — lets Run Detail link straight to its Test Detail page. */
+  testId: string;
   /** Test name, for display without a separate lookup. */
   testName: string;
   /** Environment name the run executed against ("default" when none was chosen). */

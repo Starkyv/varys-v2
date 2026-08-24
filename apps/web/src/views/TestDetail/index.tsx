@@ -174,6 +174,14 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
 
   const [defaultWaits, setDefaultWaits] = useState<EditableWait[]>(initialDefaults.editable);
   const [stepWaits, setStepWaits] = useState<EditableWait[][]>(initialStepEditable);
+  // Recorded selector waits the user chose to remove, per step index → the 0-based positions among
+  // that step's selector (locked) waits. Sent as `dropLockedWaits` so the save actually drops them.
+  const [droppedLocked, setDroppedLocked] = useState<Record<number, number[]>>({});
+  const removeLocked = (stepIndex: number, lockedIndex: number) =>
+    setDroppedLocked((prev) => ({
+      ...prev,
+      [stepIndex]: [...(prev[stepIndex] ?? []), lockedIndex],
+    }));
   const [thresholds, setThresholds] = useState<Record<number, string>>(() => {
     const m: Record<number, string> = {};
     for (const s of config.steps) {
@@ -406,6 +414,8 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
         (compareModes[s.index] ?? "pixel") !== (initialCompareModes[s.index] ?? "pixel");
       const promptChanged =
         s.type === "screenshot" && (prompts[s.index] ?? "") !== (initialPrompts[s.index] ?? "");
+      const droppedForStep = droppedLocked[s.index] ?? [];
+      const lockedRemoved = droppedForStep.length > 0;
 
       // Typed value (type steps only): send when the literal actually changed.
       const valueChanged =
@@ -430,7 +440,8 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
         !valueChanged &&
         !targetPatch &&
         !compareModeChanged &&
-        !promptChanged
+        !promptChanged &&
+        !lockedRemoved
       )
         return;
       const p: TestConfigStepPatch = { index: s.index };
@@ -440,6 +451,7 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
       if (valueChanged) p.value = typedValues[s.index] ?? "";
       if (targetPatch) p.target = targetPatch;
       if (compareModeChanged) p.compareMode = compareModes[s.index];
+      if (lockedRemoved) p.dropLockedWaits = droppedForStep;
       // Always send the prompt when the mode is context (so switching pixel→context carries the
       // required prompt to the server), plus whenever it changed.
       if (promptChanged || (compareModeChanged && compareModes[s.index] === "context")) {
@@ -784,6 +796,8 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
                           waits={stepWaits[i]}
                           locked={locked}
                           onChange={(next) => setStepWait(i, next)}
+                          removedLocked={droppedLocked[s.index] ?? []}
+                          onRemoveLocked={(li) => removeLocked(s.index, li)}
                           emptyHint="Only the test defaults run here."
                         />
                       ) : (
@@ -1192,11 +1206,17 @@ function WaitListEditor({
   locked,
   onChange,
   emptyHint,
+  removedLocked,
+  onRemoveLocked,
 }: {
   waits: EditableWait[];
   locked: LockedWait[];
   onChange: (next: EditableWait[]) => void;
   emptyHint: string;
+  /** 0-based positions among `locked` the user has removed (hidden until save). */
+  removedLocked?: number[];
+  /** Remove a recorded selector wait by its position among `locked`. Absent = not removable. */
+  onRemoveLocked?: (index: number) => void;
 }) {
   function update(i: number, next: EditableWait) {
     onChange(waits.map((w, idx) => (idx === i ? next : w)));
@@ -1204,20 +1224,34 @@ function WaitListEditor({
   function remove(i: number) {
     onChange(waits.filter((_, idx) => idx !== i));
   }
+  const removedSet = new Set(removedLocked ?? []);
 
   return (
     <div className={styles.waits}>
-      {locked.map((w, i) => (
-        <div key={`locked-${i}`} className={`${styles.waitRow} ${styles.lockedRow}`}>
-          <span className={styles.waitKind}>
-            <Lock size={13} />
-            <span className={styles.lockedText}>
-              Wait for {w.targetLabel} {w.state}
+      {locked.map((w, i) =>
+        removedSet.has(i) ? null : (
+          <div key={`locked-${i}`} className={`${styles.waitRow} ${styles.lockedRow}`}>
+            <span className={styles.waitKind}>
+              <Lock size={13} />
+              <span className={styles.lockedText}>
+                Wait for {w.targetLabel} {w.state}
+              </span>
             </span>
-          </span>
-          <span className={styles.waitLockedNote}>recorded · kept on save</span>
-        </div>
-      ))}
+            <span className={styles.waitLockedNote}>recorded{onRemoveLocked ? "" : " · kept on save"}</span>
+            {onRemoveLocked && (
+              <button
+                type="button"
+                className={styles.waitRemove}
+                aria-label={`Remove recorded wait for ${w.targetLabel}`}
+                title="Remove this recorded wait (applies on save)"
+                onClick={() => onRemoveLocked(i)}
+              >
+                ×
+              </button>
+            )}
+          </div>
+        ),
+      )}
 
       {waits.map((w, i) => {
         const label =

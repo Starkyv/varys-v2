@@ -43,14 +43,23 @@
   color: var(--color-text-strong);
 }
 
+/* Toolbar row: breadcrumb on the left, Icons/List switch on the right. */
+.paneToolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  padding: var(--space-8) var(--space-12) var(--space-8) var(--space-8);
+  border-bottom: 1px solid var(--color-border);
+}
+
 /* Content-pane path bar — drill up from the main view. */
 .pathBar {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 2px;
-  padding: var(--space-10) var(--space-16);
-  border-bottom: 1px solid var(--color-border);
 }
 
 .crumbWrap {
@@ -91,9 +100,9 @@
 /* Subfolders as desktop-style folder icons — double-click to open. */
 .subfolders {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
-  gap: var(--space-8);
-  padding: var(--space-16);
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: var(--space-10);
+  padding: var(--space-16) var(--space-16) var(--space-20);
   border-bottom: 1px solid var(--color-border);
 }
 
@@ -124,7 +133,8 @@
 .folderGlyph {
   position: relative;
   display: inline-flex;
-  color: var(--color-text-muted);
+  // Subtle drop shadow so the blue folders read as objects on the surface, like Finder icons.
+  filter: drop-shadow(0 1px 1px rgba(16, 24, 40, 0.18));
 }
 
 /* Test-count badge, top-right of the folder glyph — a ring in the tile background keeps it legible
@@ -163,6 +173,97 @@
   text-align: center;
   font-size: var(--font-size-sm);
   color: var(--color-text-subtle);
+}
+
+/* Finder-style icon grid — folders and test "files" share one wrapped grid. */
+.iconGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: var(--space-8);
+  padding: var(--space-16);
+}
+
+/* A test rendered as a file icon (mirrors .folderIconTile, with a hover Run action). */
+.fileIconTile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-6);
+  padding: var(--space-12) var(--space-8);
+  border: 1px solid transparent;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard), opacity var(--duration-fast) var(--ease-standard);
+
+  &:hover {
+    background: var(--color-bg-subtle);
+  }
+  &:focus-visible {
+    outline: none;
+    border-color: var(--color-border);
+    background: var(--color-bg-inset);
+  }
+}
+
+.fileDragging {
+  opacity: 0.5;
+}
+
+.fileGlyph {
+  position: relative;
+  display: inline-flex;
+  color: var(--color-text-subtle);
+  filter: drop-shadow(0 1px 1px rgba(16, 24, 40, 0.12));
+}
+
+/* "Needs an environment" marker on a test tile — bottom-right of the glyph. */
+.fileEnvBadge {
+  position: absolute;
+  bottom: -4px;
+  right: -6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 999px;
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  box-shadow: 0 0 0 1.5px var(--color-bg), inset 0 0 0 1px var(--color-border);
+}
+
+/* Hover Run button, top-right of the tile. */
+.fileRun {
+  position: absolute;
+  top: var(--space-6);
+  right: var(--space-6);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard), border-color var(--duration-fast) var(--ease-standard);
+
+  &:hover {
+    color: var(--color-accent-fg, var(--color-text-strong));
+    border-color: var(--color-border-strong);
+  }
+}
+.fileIconTile:hover .fileRun,
+.fileRun:focus-visible {
+  opacity: 1;
 }
 
 .recorderHint {

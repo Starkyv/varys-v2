@@ -280,6 +280,7 @@ export class RunsService {
       status: row.status,
       // Derived display refinement — baseline-creation vs verification (see deriveRunOutcome).
       outcome: deriveRunOutcome(checkpoints, { status: row.status, error: row.error }),
+      testId: row.testId,
       testName: row.testName,
       environment,
       runTimestamp: row.createdAt.toISOString(),
@@ -338,6 +339,7 @@ export class RunsService {
         createdAt: runs.createdAt,
         triggeredBy: runs.triggeredBy,
         triggerSource: runs.triggerSource,
+        testId: testVersions.testId,
         testName: tests.name,
       })
       .from(runs)
@@ -385,6 +387,7 @@ export class RunsService {
     return rows.map(
       (r): RunSummary => ({
         runId: r.runId,
+        testId: r.testId,
         testName: r.testName,
         environment: r.environmentId ? (envNames.get(r.environmentId) ?? ENVIRONMENT) : ENVIRONMENT,
         status: r.status,
