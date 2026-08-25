@@ -350,12 +350,14 @@ export class McpController {
         inputSchema: {
           type: "object",
           properties: {
+            testId: { type: "string", description: "Optional: only this test's failures (the id in the test's web-app URL)." },
             testName: { type: "string", description: "Optional: only runs whose test name contains this (case-insensitive)." },
             limit: { type: "number", description: "How many to return (default 10, max 50)." },
           },
         },
         handler: (args) =>
           a.recentFailures({
+            testId: args.testId ? String(args.testId) : undefined,
             testName: args.testName ? String(args.testName) : undefined,
             limit: args.limit !== undefined ? Number(args.limit) : undefined,
           }),
@@ -363,30 +365,35 @@ export class McpController {
       {
         name: "open_repair_session",
         description:
-          "Diagnose a failed run by re-driving it yourself. Launches a browser, seeds the run's environment, replays the test's OWN steps (the exact version that ran, with the same drive a Run uses) up to the step that failed, and PARKS there — so the page the failing step faced is live in front of you. Returns why it failed: the run's error, what the recorded locator was looking for (`recordedLocator`), the matcher's verdict on that locator against the page as it is now (`diagnosis`), every element actually on the page (`nodes`, with testId/id/duplicate flags), and a screenshot. Then investigate with observe/hover, and test fixes with try_locator. IMPORTANT: a repair session RECORDS NOTHING and cannot save anything — checkpoint and finish_session are refused. Your output is a diagnosis: say what broke and the exact edit to make (step number, which field, which value); the user applies it in the test's locator editor. Read `replay.note` first — if the drive broke EARLIER than the run did, the step you were sent to was never reached and you must diagnose the earlier step instead (re-open with that stepIndex). Close with close_repair_session when done.",
+          "Diagnose a failed test by re-driving it yourself. Takes either a `runId` (a specific failure) or a `testId` (that test's most recent failure — use this when the user names a test rather than a run). Launches a browser, seeds the run's environment, replays the test's OWN steps (the exact version that ran, with the same drive a Run uses) up to the step that failed, and PARKS there — so the page the failing step faced is live in front of you. Returns why it failed: the run's error, what the recorded locator was looking for (`recordedLocator`), the matcher's verdict on that locator against the page as it is now (`diagnosis`), every element actually on the page (`nodes`, with testId/id/duplicate flags), and a screenshot. Then investigate with observe/hover, and test fixes with try_locator. IMPORTANT: a repair session records no new test — checkpoint and finish_session are refused. What it CAN do is fix the existing one: once try_locator confirms a candidate, apply_fix writes it to the test as a new version. Always verify with try_locator before applying, and always tell the user what you changed and the new version number. Read `replay.note` first — if the drive broke EARLIER than the run did, the step you were sent to was never reached and you must diagnose the earlier step instead (re-open with that stepIndex). Close with close_repair_session when done.",
         inputSchema: {
           type: "object",
           properties: {
             runId: { type: "string", description: "The failed run to diagnose (from failed_runs, or the run's URL in the web app)." },
+            testId: {
+              type: "string",
+              description:
+                "Instead of a runId: diagnose this test's MOST RECENT failure. Use this when the user names a test or gives a test id (the id in the test's web-app URL) rather than a specific run. runId wins if both are given.",
+            },
             stepIndex: {
               type: "number",
               description:
                 "Optional 0-based step to park on. Defaults to the run's own failedStepIndex — override it to diagnose an earlier step, which is exactly what `replay.note` tells you to do when the path broke upstream.",
             },
           },
-          required: ["runId"],
         },
         handler: (args) =>
           a.openRepair({
             owner: { id: user.id, email: user.email },
-            runId: String(args.runId ?? ""),
+            runId: args.runId ? String(args.runId) : undefined,
+            testId: args.testId ? String(args.testId) : undefined,
             stepIndex: args.stepIndex !== undefined ? Number(args.stepIndex) : undefined,
           }),
       },
       {
         name: "try_locator",
         description:
-          "Test a candidate fix for the step under repair, against the parked page. Your patch is merged onto the step's REAL recorded fingerprint — every other captured signal is preserved, so this is the same edit the locator editor would make — and run through the same matcher a Run uses. A `resolved` + `deterministic` verdict means it would resolve at replay. Cheap to repeat: the replay prefix was driven once when the session opened, so each candidate costs one page scan, not a whole re-run. Iterate until `recommend` is true, then report THAT patch to the user as the edit to apply. Fields: set one to that value, pass an empty string to clear it. `testId` and `selectorOverride` are the strong fixes; `accessibleName`/`text`/`role` correct a locator whose recorded copy went stale.",
+          "Test a candidate fix for the step under repair, against the parked page. Your patch is merged onto the step's REAL recorded fingerprint — every other captured signal is preserved, so this is the same edit the locator editor would make — and run through the same matcher a Run uses. A `resolved` + `deterministic` verdict means it would resolve at replay. Cheap to repeat: the replay prefix was driven once when the session opened, so each candidate costs one page scan, not a whole re-run. Iterate until `recommend` is true, then write THAT patch with apply_fix. Fields: set one to that value, pass an empty string to clear it. `testId` and `selectorOverride` are the strong fixes; `accessibleName`/`text`/`role` correct a locator whose recorded copy went stale.",
         inputSchema: {
           type: "object",
           properties: {
@@ -414,6 +421,35 @@ export class McpController {
             );
           }
           return a.tryLocator(String(args.sessionId ?? ""), patch);
+        },
+      },
+      {
+        name: "apply_fix",
+        description:
+          "WRITE the fix onto the test. Applies your locator patch to the step under repair and saves it as a new test version — the same operation, validation and audit trail as editing it by hand in the web app. Two things are enforced before anything is written: the candidate is re-verified against the live page (a patch that is not-found or ambiguous is REFUSED — this can only ever replace a broken locator with one that demonstrably resolves), and the step at that index must still be the step you diagnosed (if the test changed since the session opened, the write is refused rather than landing on the wrong step). The previous version is retained, so this appends rather than overwrites. Use try_locator to find the right patch FIRST — apply the one that came back `recommend: true`. A patch that resolves on a weak signal is still written, but comes back with a `warning`: report that caveat instead of declaring the test fixed. Tell the user the new version number afterwards.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sessionId: { type: "string" },
+            testId: { type: "string", description: "Set the target's data-testid (strongest, self-healing)." },
+            selectorOverride: { type: "string", description: "Set a raw CSS/Playwright selector, used as-is when unique." },
+            role: { type: "string", description: "Set the expected ARIA role." },
+            accessibleName: { type: "string", description: "Set the expected accessible name." },
+            text: { type: "string", description: "Set the expected visible text." },
+          },
+          required: ["sessionId"],
+        },
+        handler: (args) => {
+          const patch: Record<string, string> = {};
+          for (const key of ["role", "accessibleName", "text", "testId", "selectorOverride"] as const) {
+            if (args[key] !== undefined) patch[key] = String(args[key]);
+          }
+          if (Object.keys(patch).length === 0) {
+            throw new Error(
+              "apply_fix needs at least one field to change (testId, selectorOverride, role, accessibleName, or text). Pass an empty string to CLEAR a field.",
+            );
+          }
+          return a.applyFix(String(args.sessionId ?? ""), patch);
         },
       },
       {

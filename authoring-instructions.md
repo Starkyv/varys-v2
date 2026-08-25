@@ -148,7 +148,9 @@ set a selector override before promoting, so name the control and the step numbe
 ## Repairing a failed test
 
 When a run fails, do not re-author the test from scratch and do not guess at a fix from the error
-message. Open a repair session on the run: `failed_runs` to find it, then `open_repair_session`.
+message. Open a repair session: `open_repair_session` takes either a `runId` (a specific failure)
+or a `testId` (that test's most recent failure) — a test id is usually what the user has, since it
+is in the test's web-app URL. `failed_runs` lists what has failed if you need to look first.
 
 That re-drives the test's own steps — the exact version that ran — to the point it died and parks
 a browser there, so you are looking at the page the failing step actually faced. Read
@@ -162,10 +164,14 @@ re-runs the real matcher, so a `resolved` + `deterministic` verdict means it res
 Iterate until `recommend` is true — `resolved` on its own is not the bar, since that is exactly
 what let the current broken locator through.
 
-A repair session records nothing and cannot save anything. Your output is a diagnosis: what broke,
-the evidence, and the exact edit — step number, field, value — which the user applies in the test's
-locator editor. If the honest answer is that the control needs a `data-testid` or an `aria-label`
-in the app, say that rather than proposing a locator patch that will rot again.
+Once a candidate comes back `recommend: true`, write it with `apply_fix`. It saves the patch to the
+test as a new version — the same operation the locator editor performs, with the same validation
+and audit trail — and it refuses anything that does not resolve against the live page, so a fix can
+never replace one broken locator with another. The previous version is kept.
+
+Always report what you changed and the new version number; the user must be able to find and undo
+it. And if the honest answer is that the control needs a `data-testid` or an `aria-label` in the
+app, say that too rather than letting a patch that will rot again pass for a fix.
 
 ---
 

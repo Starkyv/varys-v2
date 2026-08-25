@@ -350,6 +350,26 @@ export interface TryLocatorResult extends LocatorAssessment {
   recommend: boolean;
 }
 
+/** The result of writing a verified fix onto the test. */
+export interface ApplyFixResult {
+  ok: true;
+  testId: string;
+  stepIndex: number;
+  /** The new test_version the fix was written as. The version it replaced is retained, so the
+   *  edit is auditable and recoverable rather than destructive. */
+  version: number;
+  /** The version it was applied on top of. */
+  baseVersion: number;
+  patch: FingerprintPatch;
+  /** The verdict that authorised the write — an unresolvable candidate is never written. */
+  verdict: LocatorVerdict;
+  matchedSignal: string | null;
+  /** Set when the fix resolves but on a signal that will not last, so the caller reports the
+   *  caveat instead of declaring the test fixed. */
+  warning: string | null;
+  summary: string;
+}
+
 /**
  * A hover awaiting a verdict. The human recorder emits a hover step only when hovering a
  * trigger REVEALED content the user then interacted with (`dom.ts` → `openerForRevealed`);
@@ -632,11 +652,35 @@ export class AuthoringSessionService implements OnApplicationShutdown {
     return { sessionId, url: href, title: await page.title(), nodes, mode, guidance: modeGuidance(mode) };
   }
 
+  /** The newest failed Run for a test — how `openRepair` accepts a test id instead of a run id.
+   *  Throws (rather than returning null) so the caller gets the real reason: no such test, or a
+   *  test that has simply never failed. */
+  private async latestFailedRun(testId: string | undefined): Promise<string> {
+    const id = testId?.trim();
+    if (!id) {
+      throw new BadRequestException("Pass a runId, or a testId to diagnose that test's most recent failure.");
+    }
+    const [row] = await this.db
+      .select({ runId: runs.id, name: testsTable.name })
+      .from(runs)
+      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
+      .innerJoin(testsTable, eq(testsTable.id, testVersions.testId))
+      .where(and(eq(testVersions.testId, id), eq(runs.status, "failed")))
+      .orderBy(desc(runs.updatedAt))
+      .limit(1);
+    if (!row) {
+      throw new NotFoundException(
+        `No failed run found for test ${id} — either the id is wrong, or this test has not failed. Use failed_runs to see what has.`,
+      );
+    }
+    return row.runId;
+  }
+
   /**
    * Recent failed Runs, so a repair can start from "the dashboard test that broke last night"
    * rather than from a run id someone has to go and find. Read-only.
    */
-  async recentFailures(opts?: { testName?: string; limit?: number }): Promise<
+  async recentFailures(opts?: { testId?: string; testName?: string; limit?: number }): Promise<
     Array<{
       runId: string;
       testId: string;
@@ -648,6 +692,7 @@ export class AuthoringSessionService implements OnApplicationShutdown {
     }>
   > {
     const name = opts?.testName?.trim();
+    const forTest = opts?.testId?.trim();
     const rows = await this.db
       .select({
         runId: runs.id,
@@ -662,9 +707,11 @@ export class AuthoringSessionService implements OnApplicationShutdown {
       .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
       .innerJoin(testsTable, eq(testsTable.id, testVersions.testId))
       .where(
-        name
-          ? and(eq(runs.status, "failed"), ilike(testsTable.name, `%${name}%`))
-          : eq(runs.status, "failed"),
+        and(
+          eq(runs.status, "failed"),
+          ...(forTest ? [eq(testVersions.testId, forTest)] : []),
+          ...(name ? [ilike(testsTable.name, `%${name}%`)] : []),
+        ),
       )
       .orderBy(desc(runs.updatedAt))
       .limit(Math.min(Math.max(opts?.limit ?? 10, 1), 50));
@@ -703,11 +750,13 @@ export class AuthoringSessionService implements OnApplicationShutdown {
    */
   async openRepair(input: {
     owner: { id: string; email: string };
-    runId: string;
+    runId?: string;
+    /** Alternative entry point: diagnose this test's MOST RECENT failure. The test id is what a
+     *  user has to hand (it is in the web app's URL); a run id usually means going to look one up. */
+    testId?: string;
     stepIndex?: number;
   }): Promise<RepairSessionResult> {
-    const runId = (input.runId ?? "").trim();
-    if (!runId) throw new BadRequestException("runId is required");
+    const runId = (input.runId ?? "").trim() || (await this.latestFailedRun(input.testId));
 
     const [row] = await this.db
       .select({
@@ -923,6 +972,97 @@ export class AuthoringSessionService implements OnApplicationShutdown {
         assessment.status === "resolved" &&
         (assessment.verdict === "deterministic" || assessment.verdict === "row-scoped"),
       ...assessment,
+    };
+  }
+
+  /**
+   * Write a verified fix onto the test — a new audited `test_version` with the patched locator.
+   *
+   * Two gates stand between a suggestion and the stored test, and neither is optional:
+   *
+   *  1. **It must work.** The candidate is re-verified against the parked page through the same
+   *     matcher a Run uses, immediately before the write. A candidate that is `not-found` or
+   *     `ambiguous` is refused outright — this can only ever replace a broken locator with one
+   *     that demonstrably resolves, never with another guess.
+   *  2. **It must be the same step.** The patch is applied to the test's LATEST version, which may
+   *     have moved on since the Run failed. If the step at that index is no longer the step being
+   *     repaired, the write is refused rather than silently landing on someone else's step.
+   *
+   * The write itself goes through `TestsService.saveConfig` — the exact path the web locator
+   * editor uses — so an MCP-applied fix and a hand-applied one are the same operation, with the
+   * same validation, the same optimistic-concurrency check, and the same audit trail. The prior
+   * version is retained; this appends, it never overwrites.
+   */
+  async applyFix(sessionId: string, patch: FingerprintPatch): Promise<ApplyFixResult> {
+    const s = this.require(sessionId);
+    const repair = s.repair;
+    if (!repair) {
+      throw new BadRequestException(
+        "apply_fix only works in a repair session — open one with open_repair_session on the failed run.",
+      );
+    }
+    // Gate 1: prove it resolves, right now, against the page the step actually faces. `tryLocator`
+    // re-runs the real matcher, so this is the same verdict the caller saw — not a stale one they
+    // could have moved on from.
+    const tried = await this.tryLocator(sessionId, patch);
+    if (tried.status !== "resolved") {
+      throw new BadRequestException(
+        `Refusing to write this fix: it is ${tried.status} against the live page, so it would replace one broken locator with another. ${tried.advice}`,
+      );
+    }
+
+    // Gate 2: the test may have changed since the run. Patch the LATEST version, and only if the
+    // step at this index is still the one under repair.
+    const [latest] = await this.db
+      .select({ version: testVersions.version, definition: testVersions.definition })
+      .from(testVersions)
+      .where(eq(testVersions.testId, repair.testId))
+      .orderBy(desc(testVersions.version))
+      .limit(1);
+    if (!latest) throw new NotFoundException(`Test ${repair.testId} not found`);
+    const latestDef = latest.definition as TestDefinition;
+    const target = latestDef.steps[repair.stepIndex];
+    const expected = repair.definition.steps[repair.stepIndex];
+    if (!target || describeStep(target) !== describeStep(expected)) {
+      throw new BadRequestException(
+        `The test has changed since this repair session opened: step ${repair.stepIndex + 1} is now "${target ? describeStep(target) : "gone"}", not "${describeStep(expected)}". Not writing — re-open the repair session so you are diagnosing the current test.`,
+      );
+    }
+
+    const { version } = await this.tests.saveConfig(
+      repair.testId,
+      { baseVersion: latest.version, steps: [{ index: repair.stepIndex, target: patch }] },
+      `${s.ownerEmail} (Claude repair)`,
+    );
+
+    // Keep the session honest about what the test now says, so a second fix in the same session
+    // patches the new state rather than the one that failed.
+    const [written] = await this.db
+      .select({ definition: testVersions.definition })
+      .from(testVersions)
+      .where(and(eq(testVersions.testId, repair.testId), eq(testVersions.version, version)))
+      .limit(1);
+    if (written) repair.definition = written.definition as TestDefinition;
+
+    // A fix can resolve and still be built on something that will not last. Say so rather than
+    // let "applied" read as "fixed for good".
+    const warning = tried.recommend
+      ? null
+      : `Applied, but this locator matched on ${tried.matchedSignal ?? "a weak signal"} (${tried.verdict}) — ${tried.advice}`;
+    this.log.log(
+      `repair ${sessionId}: wrote v${version} of test ${repair.testId} (step ${repair.stepIndex}, ${tried.matchedSignal}) for ${s.ownerEmail}`,
+    );
+    return {
+      ok: true,
+      testId: repair.testId,
+      stepIndex: repair.stepIndex,
+      version,
+      baseVersion: latest.version,
+      patch,
+      verdict: tried.verdict,
+      matchedSignal: tried.matchedSignal,
+      warning,
+      summary: `Step ${repair.stepIndex + 1} of "${repair.testName}" now matches on ${tried.matchedSignal}. Saved as v${version} (was v${latest.version}); the previous version is retained.`,
     };
   }
 

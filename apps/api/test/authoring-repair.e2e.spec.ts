@@ -147,7 +147,87 @@ describe("Repair session → diagnose a failed run", () => {
     await callTool("close_repair_session", { sessionId: sid });
   }, 90_000);
 
+  it("starts from a test id too, resolving it to that test's most recent failure", async () => {
+    // A test id is what a user actually has to hand — it is in the test's web-app URL, whereas a
+    // run id means going to look one up.
+    const failures = await callTool("failed_runs", { testId });
+    expect(failures.map((f: { runId: string }) => f.runId)).toEqual([runId]);
+
+    const opened = await callTool("open_repair_session", { testId });
+    expect(opened.run.id).toBe(runId);
+    expect(opened.step.index).toBe(1);
+    await callTool("close_repair_session", { sessionId: opened.sessionId });
+
+    // A test that exists but has never failed says so, rather than reporting "not found".
+    const clean = await rpc("tools/call", {
+      name: "open_repair_session",
+      arguments: { testId: "00000000-0000-0000-0000-000000000000" },
+    }).expect(200);
+    expect(clean.body.result.isError).toBe(true);
+    expect(clean.body.result.content[0].text).toMatch(/no failed run/i);
+
+    // And neither id at all is a usable message, not a crash.
+    const neither = await rpc("tools/call", { name: "open_repair_session", arguments: {} }).expect(200);
+    expect(neither.body.result.isError).toBe(true);
+    expect(neither.body.result.content[0].text).toMatch(/runId, or a testId/i);
+  }, 90_000);
+
+  it("writes the verified fix to the test, and refuses to write one that does not resolve", async () => {
+    const opened = await callTool("open_repair_session", { runId });
+    const sid: string = opened.sessionId;
+
+    // A candidate that does not resolve is never written — the whole point is that this cannot
+    // swap one broken locator for another.
+    const refused = await rpc("tools/call", {
+      name: "apply_fix",
+      arguments: { sessionId: sid, accessibleName: "Still not here" },
+    }).expect(200);
+    expect(refused.body.result.isError).toBe(true);
+    expect(refused.body.result.content[0].text).toMatch(/refusing to write/i);
+    const afterRefusal = await pool.query(
+      `SELECT count(*)::int AS n FROM test_versions WHERE test_id = $1`,
+      [testId],
+    );
+    expect(afterRefusal.rows[0].n).toBe(1);
+
+    // The verified fix IS written — as a new version, on top of the one that failed.
+    const applied = await callTool("apply_fix", { sessionId: sid, selectorOverride: "#new-report" });
+    expect(applied).toMatchObject({
+      testId,
+      stepIndex: 1,
+      baseVersion: 1,
+      version: 2,
+      verdict: "deterministic",
+      warning: null,
+    });
+
+    // The stored definition now carries the fix, and the previous version is retained.
+    const versions = await pool.query(
+      `SELECT version, definition, created_by FROM test_versions WHERE test_id = $1 ORDER BY version`,
+      [testId],
+    );
+    expect(versions.rows).toHaveLength(2);
+    expect(versions.rows[1].definition.steps[1].target.selectorOverride).toBe("#new-report");
+    // Every other captured signal survives the edit — a locator fix must not collapse the bundle.
+    expect(versions.rows[1].definition.steps[1].target.tag).toBe("button");
+    // Attributed to the human whose Claude Code did it, not to an anonymous "ai".
+    expect(versions.rows[1].created_by).toMatch(/Claude repair/);
+    // v1 — the version the failed run used — is untouched.
+    expect(versions.rows[0].definition.steps[1].target.selectorOverride).toBeUndefined();
+
+    // A second apply in the same session builds on what it just wrote (v2), rather than
+    // re-applying to the stale definition it opened with.
+    const again = await callTool("apply_fix", { sessionId: sid, accessibleName: "New report" });
+    expect(again).toMatchObject({ baseVersion: 2, version: 3 });
+
+    await callTool("close_repair_session", { sessionId: sid });
+  }, 90_000);
+
   it("judges candidate fixes against the parked page, and only recommends durable ones", async () => {
+    const before = await pool.query(`SELECT count(*)::int AS n FROM test_versions WHERE test_id = $1`, [
+      testId,
+    ]);
+    const versionsBefore: number = before.rows[0].n;
     const opened = await callTool("open_repair_session", { runId });
     const sid: string = opened.sessionId;
 
@@ -176,11 +256,11 @@ describe("Repair session → diagnose a failed run", () => {
     expect(fixed.patch).toEqual({ selectorOverride: "#new-report" });
     expect(fixed.stepIndex).toBe(1);
 
-    // Nothing was written: the test still has exactly the one version it started with.
-    const versions = await pool.query(`SELECT count(*)::int AS n FROM test_versions WHERE test_id = $1`, [
+    // try_locator writes nothing: the test has exactly as many versions as before these probes.
+    const after = await pool.query(`SELECT count(*)::int AS n FROM test_versions WHERE test_id = $1`, [
       testId,
     ]);
-    expect(versions.rows[0].n).toBe(1);
+    expect(after.rows[0].n).toBe(versionsBefore);
 
     await callTool("close_repair_session", { sessionId: sid });
   }, 90_000);
