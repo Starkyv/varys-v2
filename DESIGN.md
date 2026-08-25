@@ -303,6 +303,13 @@ replays.** The recording's screenshot is a *target + preview + mask surface*, no
   secrets remain encrypted-at-rest + scrubbed regardless. *(Accepted risk #2 — see below.)*
 - **Authentication:** **both** Google SSO (domain-restricted) **and** email/password,
   **OIDC-ready**. Use a **proven auth library/provider, never hand-rolled.**
+- **MCP authentication:** the `/mcp` server is **OAuth 2.1** (dynamic client registration +
+  PKCE, via better-auth's `mcp` plugin) — Claude Code is a separate process with no browser
+  cookie, so it authenticates with a **bearer token tied to a real Varys user**. That identity
+  scopes the authoring surface **per user**: your Authoring Sessions are invisible and
+  undrivable to anyone else, your drafts are attributed to you, and the "Claude Code
+  connected" indicator reflects only your own client. Supersedes the earlier
+  anonymous-MCP decision (which made all of the above global). See ADR 0002.
 
 ---
 

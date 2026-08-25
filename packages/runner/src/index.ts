@@ -24,6 +24,7 @@ import {
   describeStep,
   type Fingerprint,
   type Step,
+  streamIdleExpression,
   type TestDefinition,
   type Wait,
 } from "@varys/step-schema";
@@ -238,56 +239,9 @@ export async function applyWaits(page: Page, waits: Wait[] | undefined): Promise
       // wait when you need a hard gate on a specific element.
       await page.waitForLoadState("networkidle", { timeout: w.timeoutMs }).catch(() => undefined);
     } else if (w.kind === "streamIdle") {
-      // Wait until streamed content has SETTLED, capped at `timeoutMs`. The hard part is that the
-      // work often hasn't STARTED yet when this wait begins (the click that submits a Wisdom query
-      // is the previous step, and the loading skeleton appears a beat later). A naive "quiet for
-      // `quietMs`" therefore fires in that pre-work calm and captures the skeleton that appears just
-      // after. So we track a small state machine over a poll + MutationObserver:
-      //   • `busy()`  — a loading marker is on the page (skeleton / spinner / progressbar / aria-busy).
-      //   • activity  — a loading marker OR any DOM mutation (streaming text, late chart) — resets idle.
-      // We settle only when idle for `quietMs` AND either we have SEEN a loading state that has since
-      // cleared (`sawBusy` — the answer loaded and finished), or nothing async ever happened within
-      // `graceMs` (a static page — nothing to wait for). This reads signals the app already renders —
-      // no app-side markup. `busySelector` overrides the default marker set.
-      //
-      // Raw STRING expression (not a serialized function) so esbuild/tsx `keepNames` can't inject a
-      // `__name` helper that doesn't exist in the page — same reason `seedLocalStorage` uses a string.
-      const quietMs = w.quietMs ?? 800;
-      // Generous cap: with the loading gate it resolves as soon as the answer finishes; the cap only
-      // bites if a marker never clears. Wisdom answers with tool calls can run ~1min+.
-      const timeoutMs = w.timeoutMs ?? 120_000;
-      // How long to wait for loading to APPEAR before concluding there's nothing async to wait for.
-      // Covers the submit→skeleton latency; any DOM mutation in this window also counts as activity.
-      const graceMs = 6_000;
-      // Common "still working" markers. `data-testid*="skeleton"` catches Wisdom's answer/section
-      // skeletons (testids survive CSS-module hashing, unlike class names). JSON-encoded to embed safely.
-      const busySelector =
-        w.busySelector?.trim() ||
-        '[aria-busy="true"],[role="progressbar"],[data-testid*="skeleton" i],[data-testid*="spinner" i],[data-testid*="loading" i],[class*="animate-pulse"]';
-      const src = `(function () {
-  return new Promise(function (resolve) {
-    var quiet = ${quietMs}, max = ${timeoutMs}, grace = ${graceMs}, sel = ${JSON.stringify(busySelector)}, obs = null;
-    var start = Date.now(), lastActivity = Date.now(), sawBusy = false;
-    var hard = setTimeout(finish, max);
-    function busy() { try { return !!document.querySelector(sel); } catch (e) { return false; } }
-    function finish() { try { if (obs) obs.disconnect(); } catch (e) {} clearTimeout(hard); resolve(true); }
-    function tick() {
-      var now = Date.now();
-      if (busy()) { sawBusy = true; lastActivity = now; return setTimeout(tick, 150); }
-      if (now - lastActivity < quiet) return setTimeout(tick, 150);
-      // Idle long enough. Settle if a loading state came and went (answer finished), or the grace
-      // window elapsed with nothing async ever happening (a static page — nothing to wait for).
-      if (sawBusy || (now - start) >= grace) return finish();
-      return setTimeout(tick, 150);
-    }
-    try {
-      obs = new MutationObserver(function () { lastActivity = Date.now(); });
-      obs.observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true });
-    } catch (e) {}
-    setTimeout(tick, 150);
-  });
-})()`;
-      await page.evaluate(src).catch(() => undefined);
+      // Shared with the authoring server via `streamIdleExpression` — one definition of
+      // "settled", so what Claude authors against is what replay asserts against.
+      await page.evaluate(streamIdleExpression(w)).catch(() => undefined);
     } else {
       await waitLocator(page, w.target).waitFor({
         state: w.state,

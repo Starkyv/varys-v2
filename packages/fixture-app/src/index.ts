@@ -18,8 +18,10 @@ export type Variant =
   | "hovermenu"
   | "checkbox"
   | "busy"
+  | "streaming"
   | "editor"
-  | "iframe";
+  | "iframe"
+  | "twins";
 
 function html(variant: Variant): string {
   // A stable hero with one volatile sub-region (#stamp, top-left) — stampA/stampB
@@ -132,6 +134,54 @@ function html(variant: Variant): string {
     });
     // Keep the network busy forever so 'networkidle' is never reached.
     setInterval(function () { fetch("/ping?t=" + Date.now()).catch(function () {}); }, 200);
+  </script>
+</body>
+</html>`;
+  }
+
+  if (variant === "streaming") {
+    // A streamed answer, the shape `streamIdle` exists for: a skeleton appears first, then text
+    // arrives in chunks, then the skeleton is removed. Nothing here is gate-able by a selector
+    // wait on the final content (its text keeps changing as it streams) and the page never
+    // reaches network idle behaviour worth waiting on — only "the loading marker came and went,
+    // and the DOM has gone quiet" identifies the end.
+    return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Varys Fixture — Streaming</title>
+<style>
+  * { margin: 0; }
+  body { background:#fff; font-family: Arial, sans-serif; padding: 24px; }
+  #skeleton { width: 240px; height: 16px; background: #ddd; }
+  #answer { width: 400px; font-size: 16px; }
+</style>
+</head>
+<body>
+  <div id="skeleton" data-testid="skeleton" aria-busy="true"></div>
+  <div id="answer" data-testid="answer"></div>
+  <script>
+    var words = ["Revenue", "grew", "12%", "quarter", "over", "quarter."];
+    var answer = document.getElementById("answer");
+    var i = 0;
+    // Chunks land every 120ms; when the last one has, the skeleton clears and the
+    // post-completion action appears — the common "you can act on it now it's finished"
+    // pattern, and the observable proof that a wait really settled rather than firing early.
+    var t = setInterval(function () {
+      if (i >= words.length) {
+        clearInterval(t);
+        var sk = document.getElementById("skeleton");
+        if (sk) sk.parentNode.removeChild(sk);
+        var copy = document.createElement("button");
+        copy.id = "copy";
+        copy.type = "button";
+        copy.setAttribute("data-testid", "copy-answer");
+        copy.textContent = "Copy answer";
+        document.body.appendChild(copy);
+        return;
+      }
+      answer.textContent += (i ? " " : "") + words[i++];
+    }, 120);
   </script>
 </body>
 </html>`;
@@ -267,6 +317,41 @@ function html(variant: Variant): string {
 </head>
 <body>
   <iframe id="report-frame" data-testid="report-frame" srcdoc='${inner}'></iframe>
+</body>
+</html>`;
+  }
+
+  // Two rows of IDENTICAL controls, plus an unlabelled icon button — the shapes an
+  // AI-authored test dies on. Nothing here carries a data-testid or a stable id, so the replay
+  // matcher can only separate the twins by the row text around them, and cannot separate the
+  // icon buttons at all. Used to prove the authoring snapshot FLAGS them (`duplicate`) and that
+  // the locator probe refuses to bless them.
+  if (variant === "twins") {
+    return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Varys Fixture — Twins</title>
+<style>
+  * { margin: 0; }
+  body { background: #ffffff; font-family: Arial, sans-serif; padding: 24px; }
+  li { list-style: none; margin: 12px 0; display: flex; gap: 12px; align-items: center; }
+  button { font-size: 14px; }
+  .icon { width: 24px; height: 24px; background: #888888; border: 0; }
+  .tile { width: 160px; height: 90px; background: #dddddd; margin: 12px 0; cursor: pointer; }
+  .card { width: 200px; height: 60px; background: #eeeeee; margin: 12px 0; cursor: pointer; }
+</style>
+</head>
+<body>
+  <ul>
+    <li><span>Acme Corporation</span><button type="button">Edit</button><button type="button" class="icon"></button></li>
+    <li><span>Globex Industries</span><button type="button">Edit</button><button type="button" class="icon"></button></li>
+  </ul>
+  <div class="tile" onclick="void 0"></div>
+  <div class="tile" onclick="void 0"></div>
+  <div><div class="card" onclick="void 0"></div></div>
+  <div><div class="card" onclick="void 0"></div></div>
+  <button id="new-report" type="button">New report</button>
 </body>
 </html>`;
   }

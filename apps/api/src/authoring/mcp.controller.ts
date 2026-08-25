@@ -1,13 +1,16 @@
-import { Body, Controller, Get, HttpException, Inject, Post, Res } from "@nestjs/common";
+import type { IncomingHttpHeaders } from "node:http";
+import { Body, Controller, Get, Headers, HttpException, Inject, Post, Res } from "@nestjs/common";
 import { Public } from "../auth/public.decorator";
 import { AuthoringInstructionsService } from "./authoring-instructions.service";
 import { AuthoringSessionService, type CheckpointInput } from "./authoring-session.service";
+import { McpAuthService, type McpPrincipal, McpUnauthorized } from "./mcp-auth.service";
 import { McpStatusService } from "./mcp-status.service";
 
 /** The slice of the HTTP response we touch — avoids depending on express types directly
  *  (it's only available transitively via @nestjs/platform-express). */
 interface HttpRes {
   status(code: number): unknown;
+  setHeader(name: string, value: string): unknown;
 }
 
 /**
@@ -15,6 +18,11 @@ interface HttpRes {
  * HTTP (JSON-response mode) that Claude Code connects to at `/mcp`. It exposes the
  * authoring session as MCP tools that delegate to `AuthoringSessionService`; the same
  * tools are what a deterministic test drives (no LLM).
+ *
+ * Authentication (Slice 16): every request must carry an OAuth 2.1 bearer token issued by
+ * better-auth's `mcp` plugin, which resolves to the Varys user who authorized this Claude
+ * Code install. That identity scopes everything the connection can see or drive —
+ * authoring sessions and the "Claude Code active" indicator are per-user, not global.
  *
  * Hand-rolled rather than via `@modelcontextprotocol/sdk` deliberately: the SDK ships
  * ESM/CJS under a package `exports` map that the API's `moduleResolution: "node"`
@@ -48,14 +56,17 @@ interface McpTool {
 
 class MethodNotFound extends Error {}
 
-// Unauthenticated this slice (locked decision): Claude Code is a separate process with
-// no browser cookie, and per-client tokens were declined. Accepted risk, DESIGN §11.
+// `@Public()` exempts this route from the COOKIE guard only — Claude Code is a separate
+// process with no browser cookie. It is not unauthenticated: `rpc` below requires an OAuth
+// bearer token on every request and 401s without one (Slice 16, superseding the earlier
+// anonymous-MCP decision in DESIGN §11).
 @Public()
 @Controller("mcp")
 export class McpController {
   constructor(
     @Inject(AuthoringSessionService) private readonly authoring: AuthoringSessionService,
     @Inject(McpStatusService) private readonly mcpStatus: McpStatusService,
+    @Inject(McpAuthService) private readonly mcpAuth: McpAuthService,
     @Inject(AuthoringInstructionsService) private readonly instructions: AuthoringInstructionsService,
   ) {}
 
@@ -69,17 +80,28 @@ export class McpController {
   @Post()
   async rpc(
     @Body() body: JsonRpcMessage | JsonRpcMessage[],
+    @Headers() headers: IncomingHttpHeaders,
     @Res({ passthrough: true }) res: HttpRes,
   ): Promise<unknown> {
-    this.mcpStatus.touch(); // record activity so the web app can show "Claude Code active"
+    // Authenticate BEFORE anything else — including before touching the status service, so
+    // an unauthenticated caller can't light up someone's "Claude Code active" indicator.
+    let user: McpPrincipal;
+    try {
+      user = await this.mcpAuth.principal(headers);
+    } catch (err) {
+      if (!(err instanceof McpUnauthorized)) throw err;
+      return this.unauthorized(body, res);
+    }
+
+    this.mcpStatus.touch(user.id); // record activity so THIS user's web app shows "active"
     let result: unknown;
     if (Array.isArray(body)) {
-      const out = (await Promise.all(body.map((m) => this.handle(m)))).filter(
+      const out = (await Promise.all(body.map((m) => this.handle(m, user)))).filter(
         (r): r is JsonRpcResponse => r !== undefined,
       );
       result = out.length ? out : undefined;
     } else {
-      result = await this.handle(body);
+      result = await this.handle(body, user);
     }
     // Streamable HTTP: a POST carrying only notifications/responses (nothing to answer)
     // gets 202 Accepted with no body; a request gets its JSON-RPC response with 200.
@@ -87,11 +109,37 @@ export class McpController {
     return result;
   }
 
-  private async handle(msg: JsonRpcMessage): Promise<JsonRpcResponse | undefined> {
+  /**
+   * The 401 that BOOTSTRAPS the OAuth flow. `WWW-Authenticate` points at the
+   * protected-resource metadata, which is how Claude Code discovers the authorization
+   * server, registers itself, and opens the browser — so this response is the feature, not
+   * just an error. The body is a JSON-RPC error too, for clients that read it instead.
+   */
+  private unauthorized(body: JsonRpcMessage | JsonRpcMessage[], res: HttpRes): unknown {
+    const challenge = this.mcpAuth.challenge();
+    res.setHeader("WWW-Authenticate", challenge);
+    res.setHeader("Access-Control-Expose-Headers", "WWW-Authenticate");
+    res.status(401);
+    const first = Array.isArray(body) ? body[0] : body;
+    return {
+      jsonrpc: "2.0",
+      id: first?.id ?? null,
+      error: {
+        code: -32000,
+        message: "Unauthorized: sign in to Varys to use the authoring MCP server",
+        "www-authenticate": challenge,
+      },
+    };
+  }
+
+  private async handle(
+    msg: JsonRpcMessage,
+    user: McpPrincipal,
+  ): Promise<JsonRpcResponse | undefined> {
     const id = msg?.id ?? null;
     const isNotification = msg?.id === undefined || msg?.id === null;
     try {
-      const result = await this.dispatch(msg?.method, msg?.params ?? {});
+      const result = await this.dispatch(msg?.method, msg?.params ?? {}, user);
       return isNotification ? undefined : { jsonrpc: "2.0", id, result };
     } catch (err) {
       if (isNotification) return undefined;
@@ -100,7 +148,11 @@ export class McpController {
     }
   }
 
-  private async dispatch(method: string | undefined, params: Record<string, unknown>): Promise<unknown> {
+  private async dispatch(
+    method: string | undefined,
+    params: Record<string, unknown>,
+    user: McpPrincipal,
+  ): Promise<unknown> {
     switch (method) {
       case "initialize": {
         const requested = params.protocolVersion;
@@ -121,14 +173,14 @@ export class McpController {
         return {};
       case "tools/list":
         return {
-          tools: this.tools().map((t) => ({
+          tools: this.tools(user).map((t) => ({
             name: t.name,
             description: t.description,
             inputSchema: t.inputSchema,
           })),
         };
       case "tools/call":
-        return this.callTool(params);
+        return this.callTool(params, user);
       default:
         throw new MethodNotFound(`Method not found: ${method}`);
     }
@@ -136,14 +188,21 @@ export class McpController {
 
   /** Run a tool; tool-execution failures surface as an `isError` result (not a JSON-RPC
    *  error), per the MCP spec, so Claude sees the message and can recover. */
-  private async callTool(params: Record<string, unknown>): Promise<unknown> {
+  private async callTool(params: Record<string, unknown>, user: McpPrincipal): Promise<unknown> {
     const name = params.name as string | undefined;
-    const tool = this.tools().find((t) => t.name === name);
+    const tool = this.tools(user).find((t) => t.name === name);
     if (!tool) {
       return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
     }
+    const args = (params.arguments as Record<string, unknown>) ?? {};
     try {
-      const result = await tool.handler((params.arguments as Record<string, unknown>) ?? {});
+      // The single cross-user choke point: every tool but `open_session` addresses an
+      // existing session by id, so verifying ownership once here covers all of them —
+      // a session id leaked or guessed from another user resolves as not-found.
+      if (args.sessionId !== undefined) {
+        this.authoring.assertOwner(String(args.sessionId), user.id);
+      }
+      const result = await tool.handler(args);
       // Surface a screenshot (`observe` with screenshot=true) as a viewable MCP image block
       // so Claude can SEE the page — e.g. to compare it against a reference design you gave
       // it — with the rest of the snapshot as JSON text. Other results are a text block.
@@ -169,7 +228,7 @@ export class McpController {
   /** The MCP tool surface. Slice 2 = open/finish; Slices 3/4 add perception, interaction,
    *  and checkpoint tools to this list. Promotion is deliberately NOT a tool (web-UI only;
    *  Claude must not be able to self-promote — ADR 0001 / PRD safety). */
-  private tools(): McpTool[] {
+  private tools(user: McpPrincipal): McpTool[] {
     const a = this.authoring;
     return [
       {
@@ -193,6 +252,9 @@ export class McpController {
         },
         handler: (args) =>
           a.open({
+            // Ownership comes from the bearer token, never from tool arguments — the model
+            // has no way to open a session as somebody else.
+            owner: { id: user.id, email: user.email },
             startUrl: String(args.startUrl ?? ""),
             name: args.name ? String(args.name) : undefined,
             intent: args.intent ? String(args.intent) : undefined,
@@ -202,7 +264,7 @@ export class McpController {
       {
         name: "observe",
         description:
-          "Perceive the current page: a list of interactive/landmark elements, each with a stable `ref`, role, name, and (for fields) value. Target later actions by `ref`. Set screenshot=true to also get a base64 PNG for visual disambiguation. This screenshot is for YOUR perception only — it is NOT a checkpoint and records nothing in the test; if the user asks you to take or capture a screenshot, use the checkpoint tool instead.",
+          "Perceive the current page: a list of interactive/landmark elements, each with a stable `ref`, role, name, and (for fields) value. Target later actions by `ref`. Nodes also carry the signals that decide whether a step can be RE-LOCATED on replay: `testId` (the element's data-testid — the strongest signal by far), `id` (only when author-stable; generated ids are omitted), and `duplicate: true` when another node shares this one's role+name with nothing to tell them apart — acting on a duplicate records a step that hard-fails on replay as ambiguous. Prefer targets with a `testId` or `id`; treat a blank `name` with no `testId`/`id` as unaddressable, and a `duplicate` as needing disambiguation. Use verify_locator when you want the matcher\'s actual verdict on a target. Set screenshot=true to also get a base64 PNG for visual disambiguation. This screenshot is for YOUR perception only — it is NOT a checkpoint and records nothing in the test; if the user asks you to take or capture a screenshot, use the checkpoint tool instead.",
         inputSchema: {
           type: "object",
           properties: {
@@ -235,7 +297,7 @@ export class McpController {
       {
         name: "hover",
         description:
-          "Hover an element (by ref or text) to reveal hover-only affordances (dropdown menus, a 'Read more →' link), then get a fresh snapshot so the revealed elements get refs. Reveal aid only — hovers are NOT recorded as steps; if a control only appears on hover, prefer clicking a stable container.",
+          "Hover an element (by ref or text) to reveal hover-only affordances (dropdown menus, a 'Read more →' link), then get a fresh snapshot so the revealed elements get refs. The hover is recorded as a step ONLY if your next action targets something it revealed — which is exactly what makes replay re-open the menu before clicking into it. So: to click an item inside a hover menu, hover the trigger and then click the item; do NOT try to click the item directly, and do not worry about hovering to explore (an exploratory hover records nothing).",
         inputSchema: {
           type: "object",
           properties: {
@@ -282,16 +344,139 @@ export class McpController {
           a.type(String(args.sessionId ?? ""), String(args.ref ?? ""), String(args.value ?? "")),
       },
       {
-        name: "wait",
+        name: "failed_runs",
         description:
-          "Add a wait before the next step (performed live now, and recorded so replay waits too), ONLY when a specific element is still loading. Prefer kind 'selector' (wait until the element at `ref` is visible/hidden). 'delay' (fixed ms) is a last resort. Avoid 'networkIdle' — replay already settles navigation on network idle, so it is redundant and should not be added by default.",
+          "List recent FAILED runs — run id, test, when it failed, which step, and the error. The starting point for repairing a broken test: pick the run, then open_repair_session on it. Read-only.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            testName: { type: "string", description: "Optional: only runs whose test name contains this (case-insensitive)." },
+            limit: { type: "number", description: "How many to return (default 10, max 50)." },
+          },
+        },
+        handler: (args) =>
+          a.recentFailures({
+            testName: args.testName ? String(args.testName) : undefined,
+            limit: args.limit !== undefined ? Number(args.limit) : undefined,
+          }),
+      },
+      {
+        name: "open_repair_session",
+        description:
+          "Diagnose a failed run by re-driving it yourself. Launches a browser, seeds the run's environment, replays the test's OWN steps (the exact version that ran, with the same drive a Run uses) up to the step that failed, and PARKS there — so the page the failing step faced is live in front of you. Returns why it failed: the run's error, what the recorded locator was looking for (`recordedLocator`), the matcher's verdict on that locator against the page as it is now (`diagnosis`), every element actually on the page (`nodes`, with testId/id/duplicate flags), and a screenshot. Then investigate with observe/hover, and test fixes with try_locator. IMPORTANT: a repair session RECORDS NOTHING and cannot save anything — checkpoint and finish_session are refused. Your output is a diagnosis: say what broke and the exact edit to make (step number, which field, which value); the user applies it in the test's locator editor. Read `replay.note` first — if the drive broke EARLIER than the run did, the step you were sent to was never reached and you must diagnose the earlier step instead (re-open with that stepIndex). Close with close_repair_session when done.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            runId: { type: "string", description: "The failed run to diagnose (from failed_runs, or the run's URL in the web app)." },
+            stepIndex: {
+              type: "number",
+              description:
+                "Optional 0-based step to park on. Defaults to the run's own failedStepIndex — override it to diagnose an earlier step, which is exactly what `replay.note` tells you to do when the path broke upstream.",
+            },
+          },
+          required: ["runId"],
+        },
+        handler: (args) =>
+          a.openRepair({
+            owner: { id: user.id, email: user.email },
+            runId: String(args.runId ?? ""),
+            stepIndex: args.stepIndex !== undefined ? Number(args.stepIndex) : undefined,
+          }),
+      },
+      {
+        name: "try_locator",
+        description:
+          "Test a candidate fix for the step under repair, against the parked page. Your patch is merged onto the step's REAL recorded fingerprint — every other captured signal is preserved, so this is the same edit the locator editor would make — and run through the same matcher a Run uses. A `resolved` + `deterministic` verdict means it would resolve at replay. Cheap to repeat: the replay prefix was driven once when the session opened, so each candidate costs one page scan, not a whole re-run. Iterate until `recommend` is true, then report THAT patch to the user as the edit to apply. Fields: set one to that value, pass an empty string to clear it. `testId` and `selectorOverride` are the strong fixes; `accessibleName`/`text`/`role` correct a locator whose recorded copy went stale.",
         inputSchema: {
           type: "object",
           properties: {
             sessionId: { type: "string" },
-            kind: { type: "string", enum: ["delay", "networkIdle", "selector"] },
+            testId: { type: "string", description: "Set the target's data-testid (strongest signal)." },
+            selectorOverride: {
+              type: "string",
+              description:
+                "A raw CSS/Playwright selector tried FIRST and used as-is when it matches exactly one element. The escape hatch when no captured signal survives — but prefer a testId, which self-heals; an override that goes stale is simply ignored.",
+            },
+            role: { type: "string", description: "Set the expected ARIA role." },
+            accessibleName: { type: "string", description: "Set the expected accessible name." },
+            text: { type: "string", description: "Set the expected visible text." },
+          },
+          required: ["sessionId"],
+        },
+        handler: (args) => {
+          const patch: Record<string, string> = {};
+          for (const key of ["role", "accessibleName", "text", "testId", "selectorOverride"] as const) {
+            if (args[key] !== undefined) patch[key] = String(args[key]);
+          }
+          if (Object.keys(patch).length === 0) {
+            throw new Error(
+              "try_locator needs at least one field to change (testId, selectorOverride, role, accessibleName, or text). Pass an empty string to CLEAR a field.",
+            );
+          }
+          return a.tryLocator(String(args.sessionId ?? ""), patch);
+        },
+      },
+      {
+        name: "close_repair_session",
+        description:
+          "Close a repair session and shut its browser down. Nothing is lost — a repair session never recorded anything. Call it once you have reported the diagnosis.",
+        inputSchema: {
+          type: "object",
+          properties: { sessionId: { type: "string" } },
+          required: ["sessionId"],
+        },
+        handler: (args) => a.discard(String(args.sessionId ?? "")),
+      },
+      {
+        name: "verify_locator",
+        description:
+          "Dry-run the REPLAY matcher against a target BEFORE you act on it, and read the verdict. Costs one call and prevents the most common way an AI-authored test dies: a step that records fine and then cannot be re-located on the next run. You hold a `ref`, which is an attribute Varys stamped on the live page — it always resolves. Replay has no refs: it re-finds the element by scoring the fingerprint's signals (data-testid > stable id > role+accessible name > row scope > name > classes > bounding-box size), and it refuses to act when nothing carries real identity or when two elements tie. This tool captures the fingerprint exactly as the action would, runs that same matcher, and returns: `status` (resolved | ambiguous | not-found), `matchedSignal`, `verdict` (deterministic | row-scoped | text-bound | fragile | ambiguous | not-found), one line of `advice`, and `recorded` — the signals the step would actually carry. Note `status: \"resolved\"` is NOT the question: a `fragile` verdict resolves right now and breaks the moment the data or layout shifts. Record the step when the verdict is `deterministic`; check the echoed text is stable UI copy (not data) when it is `row-scoped` or `text-bound`; pick a different target when it is `fragile`, `ambiguous`, or `not-found`. Nothing is recorded and the page is unchanged, so this is always safe to call.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sessionId: { type: "string" },
+            ref: { type: "string", description: "The element ref (from observe) you are about to act on." },
+            action: {
+              type: "string",
+              enum: ["click", "type", "checkpoint"],
+              description:
+                "Which action you intend, so the probe captures the same element that action would: click/type rise to the actionable control, checkpoint frames the exact node. Default 'click'.",
+            },
+          },
+          required: ["sessionId", "ref"],
+        },
+        handler: (args) =>
+          a.verifyLocator(
+            String(args.sessionId ?? ""),
+            String(args.ref ?? ""),
+            args.action === "type" || args.action === "checkpoint" ? args.action : "click",
+          ),
+      },
+      {
+        name: "wait",
+        description:
+          "Add a wait before the next step (performed live now, and recorded so replay waits too), ONLY when something is still loading. Prefer kind 'selector' (wait until the element at `ref` is visible/hidden) when you can name the element. Use 'streamIdle' for content that streams in or renders late — an LLM-generated answer, a chart that draws after its data arrives — where there is no single element to gate on: it waits until the DOM has been quiet AND no loading indicator (skeleton/spinner/progressbar/aria-busy) remains. 'delay' (fixed ms) is a last resort. Avoid 'networkIdle' — replay already settles navigation on network idle, so it is redundant and should not be added by default.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sessionId: { type: "string" },
+            kind: { type: "string", enum: ["delay", "networkIdle", "streamIdle", "selector"] },
             ms: { type: "number", description: "For kind=delay: milliseconds to wait." },
-            timeoutMs: { type: "number" },
+            timeoutMs: {
+              type: "number",
+              description:
+                "Cap on the wait. For streamIdle this is a generous ceiling, not a target (default 120000) — it settles as soon as content finishes.",
+            },
+            quietMs: {
+              type: "number",
+              description:
+                "For kind=streamIdle: how long the DOM must be mutation-free to count as settled (default 800).",
+            },
+            busySelector: {
+              type: "string",
+              description:
+                "For kind=streamIdle: override the loading-indicator selector, for an app whose 'still working' marker the defaults don't catch.",
+            },
             ref: { type: "string", description: "For kind=selector: the element ref to wait on." },
             state: { type: "string", enum: ["visible", "hidden"], description: "For kind=selector." },
           },
@@ -302,6 +487,14 @@ export class McpController {
           const timeoutMs = args.timeoutMs ? Number(args.timeoutMs) : undefined;
           if (args.kind === "delay") return a.wait(sessionId, { kind: "delay", ms: Number(args.ms ?? 0) });
           if (args.kind === "networkIdle") return a.wait(sessionId, { kind: "networkIdle", timeoutMs });
+          if (args.kind === "streamIdle") {
+            return a.wait(sessionId, {
+              kind: "streamIdle",
+              quietMs: args.quietMs ? Number(args.quietMs) : undefined,
+              timeoutMs,
+              busySelector: args.busySelector ? String(args.busySelector) : undefined,
+            });
+          }
           if (args.kind === "selector") {
             return a.wait(sessionId, {
               kind: "selector",
@@ -316,7 +509,7 @@ export class McpController {
       {
         name: "checkpoint",
         description:
-          "Add a visual checkpoint (a screenshot diffed against a baseline on replay) — the test's actual assertion. Call this ONLY when the instruction explicitly asks for one: \"take a screenshot\", \"capture\", \"snapshot\", \"checkpoint\", or \"check/verify this screen\". Do NOT add a checkpoint on your own initiative, after every step, or just to make the test 'assert something' — most actions are not assertions. When asked, record it here (not as an observe screenshot). mode 'fullpage' (the whole screen), 'element' (a specific component, by ref), or 'region' (a rect). Pass masks (rects) over volatile areas (timestamps, ids) as a best-effort proposal; a human finalizes them in review. Give a stable, meaningful name.",
+          "Add a visual checkpoint (compared against a baseline on replay) — the test's actual assertion. Call this ONLY when the instruction explicitly asks for one: \"take a screenshot\", \"capture\", \"snapshot\", \"checkpoint\", or \"check/verify this screen\". Do NOT add a checkpoint on your own initiative, after every step, or just to make the test 'assert something' — most actions are not assertions. When asked, record it here (not as an observe screenshot). Give a stable, meaningful name.\n\nTWO independent choices:\n• WHAT to capture — mode 'element' (a specific component, by ref), 'fullpage' (the whole screen), or 'region' (a rect).\n• HOW to compare — compareMode 'pixel' (default: exact pixel-to-pixel diff) or 'context' (an LLM judge reads both screenshots). Pick 'pixel' for deterministic UI, and add masks over volatile sub-areas (timestamps, ids) or raise threshold slightly for minor rendering noise. Pick 'context' when the content legitimately differs every run — LLM-generated text, live figures, anything you could not mask into determinism — and say in `prompt` what counts as broken. Getting this wrong is the most common cause of a useless test: a pixel checkpoint over generated content fails every run, and a context checkpoint over static UI misses real regressions.",
         inputSchema: {
           type: "object",
           properties: {
@@ -332,12 +525,29 @@ export class McpController {
             },
             masks: {
               type: "array",
-              description: "Regions (rects) the diff should ignore — volatile sub-areas.",
+              description:
+                "Regions (rects) the diff should ignore — volatile sub-areas. Pixel mode only (the context judge ignores them; describe what to overlook in `prompt` instead).",
               items: {
                 type: "object",
                 properties: { x: { type: "number" }, y: { type: "number" }, width: { type: "number" }, height: { type: "number" } },
                 required: ["x", "y", "width", "height"],
               },
+            },
+            compareMode: {
+              type: "string",
+              enum: ["pixel", "context"],
+              description:
+                "How to compare against the baseline. 'pixel' (default) = exact pixel-to-pixel diff, for deterministic UI. 'context' = an LLM judge, for content that is different every run.",
+            },
+            prompt: {
+              type: "string",
+              description:
+                "For compareMode=context: what the judge should check, phrased so that legitimate variation passes and real breakage fails — e.g. \"both are AI-generated summaries; ignore that the wording and numbers differ; fail only if the current one is empty, truncated, an error, or visibly malformed\". Omit to use the team's default judge prompt.",
+            },
+            threshold: {
+              type: "number",
+              description:
+                "Pixel mode only: max mismatched-pixel ratio (0..1) tolerated before the diff is flagged. Omit unless a specific rendering wobble needs slack — prefer a mask over a loose threshold, which hides real regressions everywhere on the screen.",
             },
           },
           required: ["sessionId", "name"],
@@ -352,6 +562,9 @@ export class McpController {
             ref: args.ref ? String(args.ref) : undefined,
             rect: args.rect as CheckpointInput["rect"],
             masks: args.masks as CheckpointInput["masks"],
+            compareMode: args.compareMode === "context" ? "context" : args.compareMode === "pixel" ? "pixel" : undefined,
+            prompt: args.prompt ? String(args.prompt) : undefined,
+            threshold: args.threshold !== undefined ? Number(args.threshold) : undefined,
           }),
       },
       {
@@ -371,6 +584,31 @@ export class McpController {
           required: ["sessionId"],
         },
         handler: (args) => a.finish(String(args.sessionId ?? ""), { confirm: Boolean(args.confirm) }),
+      },
+      {
+        name: "discard_session",
+        description:
+          "Throw the session away WITHOUT saving anything: close the browser and drop every recorded step. Use this instead of finish_session when the session went wrong and its steps are not worth keeping — the wrong app or page, a flow that turned out to be a dead end, or a restart after a mistake. Saving a junk draft just to end the session makes work for whoever reviews the queue, so discard it instead. This is NOT how you end a good session (use finish_session) and it cannot be undone. As with finishing, do not discard an interactive session on your own initiative — ask the user first.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sessionId: { type: "string" },
+            confirm: {
+              type: "boolean",
+              description:
+                "Must be true — attests that you intend to lose the recorded steps. The server refuses without it.",
+            },
+          },
+          required: ["sessionId", "confirm"],
+        },
+        handler: (args) => {
+          if (!args.confirm) {
+            throw new Error(
+              "discard_session throws away every recorded step and cannot be undone. If that is really what you want, call it again with confirm: true; if you meant to KEEP the work, call finish_session instead.",
+            );
+          }
+          return a.discard(String(args.sessionId ?? ""));
+        },
       },
     ];
   }

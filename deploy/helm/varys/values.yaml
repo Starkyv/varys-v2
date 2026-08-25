@@ -81,6 +81,14 @@ ingress:
   # Keep in sync with apps/web/vite.config.ts.
   apiPaths:
     - /api/auth
+    # OAuth discovery for the MCP server. Claude Code probes these at the ORIGIN ROOT, so they
+    # must reach the API — unrouted, they fall through to the SPA and it gets index.html back,
+    # which surfaces as "JSON Parse error: Unrecognized token '<'" when it tries to authenticate.
+    # Listed individually rather than as a bare `/.well-known` prefix so cert-manager's
+    # HTTP-01 solver keeps `/.well-known/acme-challenge/...`. The protected-resource entry is a
+    # Prefix, so it also covers the `/mcp`-suffixed form newer clients request first.
+    - /.well-known/oauth-authorization-server
+    - /.well-known/oauth-protected-resource
     - /auth-config
     - /health
     - /dashboard

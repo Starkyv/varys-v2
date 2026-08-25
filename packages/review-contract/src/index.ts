@@ -129,8 +129,10 @@ export interface TestSummary {
   status: TestStatus;
   /** Who authored it (a promoted AI test keeps `origin: "ai"`). */
   origin: TestOrigin;
-  /** Who created the test — the uploader's email for a human recording, or "ai" for an
-   *  AI draft. Null for tests created before attribution was recorded. */
+  /** Who created the test — the uploader's email for a human recording, and (since
+   *  per-user MCP auth) the email of the user whose Claude Code authored an AI draft.
+   *  Literal "ai" for AI drafts authored before that. Null for tests created before
+   *  attribution was recorded at all. */
   createdBy: string | null;
   /** For a promoted AI draft: who promoted it into the active corpus, and when (ISO).
    *  Null for human recordings and tests promoted before attribution was recorded. */
@@ -405,7 +407,10 @@ export interface PromoteDraftBody {
  * Chosen when the session opens (`open_session`'s `mode`); steers Claude's behavior and the
  * checkpoint cadence, and drives a badge in the live view. Defaults to `interactive`.
  */
-export type AuthoringMode = "interactive" | "batch";
+/** How an Authoring Session is being driven. `interactive` / `batch` RECORD a new test;
+ *  `repair` records nothing — it re-drives an existing test's steps to the point a Run failed
+ *  and parks there so a locator can be diagnosed against the live page. */
+export type AuthoringMode = "interactive" | "batch" | "repair";
 
 /**
  * The AI authoring instructions (the MCP `initialize` prompt), as read/edited from the Author

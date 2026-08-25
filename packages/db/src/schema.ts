@@ -654,4 +654,51 @@ CREATE TABLE IF NOT EXISTS "verification" (
 CREATE INDEX IF NOT EXISTS "session_userId_idx" ON "session" ("userId");
 CREATE INDEX IF NOT EXISTS "account_userId_idx" ON "account" ("userId");
 CREATE INDEX IF NOT EXISTS "verification_identifier_idx" ON "verification" ("identifier");
+-- OAuth 2.1 provider tables (Slice 16 — per-user MCP auth). better-auth's "mcp" plugin
+-- turns Varys into an OAuth authorization server so each Claude Code client authenticates
+-- as a REAL Varys user instead of connecting anonymously: "oauthApplication" holds
+-- dynamically-registered MCP clients (DCR — Claude Code registers itself on first
+-- connect), "oauthAccessToken" the issued bearer/refresh tokens the /mcp guard resolves
+-- to a user, "oauthConsent" a remembered consent grant. Same convention as the tables
+-- above: better-auth owns them, quoted camelCase identifiers are REQUIRED.
+CREATE TABLE IF NOT EXISTS "oauthApplication" (
+  "id" text NOT NULL PRIMARY KEY,
+  "name" text NOT NULL,
+  "icon" text,
+  "metadata" text,
+  "clientId" text NOT NULL UNIQUE,
+  "clientSecret" text,
+  "redirectUrls" text NOT NULL,
+  "type" text NOT NULL,
+  "disabled" boolean NOT NULL DEFAULT false,
+  "userId" text REFERENCES "user" ("id") ON DELETE CASCADE,
+  "createdAt" timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt" timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS "oauthAccessToken" (
+  "id" text NOT NULL PRIMARY KEY,
+  "accessToken" text NOT NULL UNIQUE,
+  "refreshToken" text NOT NULL UNIQUE,
+  "accessTokenExpiresAt" timestamptz NOT NULL,
+  "refreshTokenExpiresAt" timestamptz NOT NULL,
+  "clientId" text NOT NULL REFERENCES "oauthApplication" ("clientId") ON DELETE CASCADE,
+  "userId" text REFERENCES "user" ("id") ON DELETE CASCADE,
+  "scopes" text NOT NULL,
+  "createdAt" timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt" timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS "oauthConsent" (
+  "id" text NOT NULL PRIMARY KEY,
+  "clientId" text NOT NULL REFERENCES "oauthApplication" ("clientId") ON DELETE CASCADE,
+  "userId" text NOT NULL REFERENCES "user" ("id") ON DELETE CASCADE,
+  "scopes" text NOT NULL,
+  "consentGiven" boolean NOT NULL,
+  "createdAt" timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt" timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS "oauthApplication_userId_idx" ON "oauthApplication" ("userId");
+CREATE INDEX IF NOT EXISTS "oauthAccessToken_clientId_idx" ON "oauthAccessToken" ("clientId");
+CREATE INDEX IF NOT EXISTS "oauthAccessToken_userId_idx" ON "oauthAccessToken" ("userId");
+CREATE INDEX IF NOT EXISTS "oauthConsent_clientId_idx" ON "oauthConsent" ("clientId");
+CREATE INDEX IF NOT EXISTS "oauthConsent_userId_idx" ON "oauthConsent" ("userId");
 `;

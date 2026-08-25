@@ -304,7 +304,13 @@ export class TestsService {
    */
   async createDraft(
     input: unknown,
-    opts?: { intent?: string | null; previews?: { checkpointName: string; bytes: Buffer }[] },
+    opts?: {
+      intent?: string | null;
+      previews?: { checkpointName: string; bytes: Buffer }[];
+      /** The MCP-authenticated user whose Claude Code authored this draft (Slice 16).
+       *  Falls back to `"ai"` when there is no identity to attribute it to. */
+      createdBy?: string;
+    },
   ): Promise<CreatedTest> {
     const definition = parseTestDefinition(input);
     const [created] = await this.db
@@ -313,8 +319,10 @@ export class TestsService {
         name: definition.name,
         status: "draft",
         origin: "ai",
-        // The author is the AI; the human who promotes it is recorded as promotedBy.
-        createdBy: "ai",
+        // The AI authored it, on behalf of the signed-in user who drove Claude Code —
+        // recorded as that user's email so drafts are attributable. The human who
+        // promotes it is recorded separately as promotedBy.
+        createdBy: opts?.createdBy ?? "ai",
         intent: opts?.intent ?? null,
       })
       .returning({ id: tests.id });

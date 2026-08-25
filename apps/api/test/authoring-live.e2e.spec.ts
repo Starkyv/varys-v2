@@ -11,7 +11,14 @@ import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
 import { AuthoringSessionService } from "../src/authoring/authoring-session.service";
-import { authed, prepareAuth } from "./auth-harness";
+import {
+  authed,
+  cookieAuthed,
+  mcpAuthed,
+  mintUser,
+  prepareAuth,
+  type TestIdentity,
+} from "./auth-harness";
 import { startTestDb, type TestDb } from "./db-harness";
 
 /**
@@ -49,8 +56,10 @@ describe("Authoring → live frames", () => {
     if (storageDir) await rm(storageDir, { recursive: true, force: true });
   });
 
+  // `/mcp` takes the OAuth bearer token; the web surfaces below take the session cookie.
+  // Both resolve to the SAME user, which is what makes the live preview find the session.
   const callTool = async (name: string, args: unknown) => {
-    const res = await authed(app)
+    const res = await mcpAuthed(app)
       .post("/mcp")
       .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } })
       .expect(200);
@@ -124,11 +133,82 @@ describe("Authoring → live frames", () => {
     await request(app.getHttpServer()).get("/authoring/sessions/whatever/stream").expect(401);
   });
 
+  /**
+   * Slice 16 — the isolation this whole slice exists for. Two real users, two OAuth tokens:
+   * a session opened by one must be invisible AND undrivable to the other, and each user's
+   * "Claude Code active" indicator must reflect only their own traffic.
+   */
+  it("scopes sessions, tools and MCP status to the authenticating user", async () => {
+    const other: TestIdentity = await mintUser("Other user");
+
+    fixture.setVariant("login");
+    const opened = await mcpAuthed(app)
+      .post("/mcp")
+      .send({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "open_session",
+          arguments: { startUrl: fixture.url, name: "owned by user one", mode: "interactive" },
+        },
+      })
+      .expect(200);
+    const sid: string = JSON.parse(opened.body.result.content[0].text).sessionId;
+
+    try {
+      // The owner sees it; the other user's list is empty of it.
+      const mine = await authed(app).get("/authoring/sessions").expect(200);
+      expect((mine.body as AuthoringSessionSummary[]).some((s) => s.sessionId === sid)).toBe(true);
+      const theirs = await cookieAuthed(app, other).get("/authoring/sessions").expect(200);
+      expect((theirs.body as AuthoringSessionSummary[]).some((s) => s.sessionId === sid)).toBe(false);
+
+      // Streaming someone else's session reads as not-found — no existence leak.
+      await cookieAuthed(app, other).get(`/authoring/sessions/${sid}/stream`).expect(404);
+
+      // Snapshot the owner's status BEFORE the other user generates any MCP traffic, so the
+      // assertion below is about isolation, not about clock resolution.
+      const ownerBefore = await authed(app).get("/authoring/mcp-status").expect(200);
+      expect(ownerBefore.body.connected).toBe(true);
+
+      // Driving it over MCP with the other user's token fails at the ownership gate, and
+      // the failure is the same "not found" an unknown id would produce.
+      const stolen = await mcpAuthed(app, other)
+        .post("/mcp")
+        .send({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: { name: "observe", arguments: { sessionId: sid } },
+        })
+        .expect(200);
+      expect(stolen.body.result.isError).toBe(true);
+      expect(stolen.body.result.content[0].text).toMatch(/not found/i);
+
+      // That request marked the OTHER user active (auth succeeded; only ownership failed)…
+      const otherStatus = await cookieAuthed(app, other).get("/authoring/mcp-status").expect(200);
+      expect(otherStatus.body.connected).toBe(true);
+      // …and left the owner's own timestamp untouched. Before Slice 16 this was one global
+      // flag, so anyone's MCP traffic lit up everyone's indicator.
+      const ownerAfter = await authed(app).get("/authoring/mcp-status").expect(200);
+      expect(ownerAfter.body.lastSeenAt).toBe(ownerBefore.body.lastSeenAt);
+    } finally {
+      await mcpAuthed(app)
+        .post("/mcp")
+        .send({
+          jsonrpc: "2.0",
+          id: 3,
+          method: "tools/call",
+          params: { name: "finish_session", arguments: { sessionId: sid, confirm: true } },
+        });
+    }
+  }, 60_000);
+
   it("reports MCP activity (the Claude-Code-connected proxy) and guards the endpoint", async () => {
     // The status endpoint is authenticated.
     await request(app.getHttpServer()).get("/authoring/mcp-status").expect(401);
-    // Any MCP request marks recent activity.
-    await authed(app)
+    // Any MCP request marks recent activity — for the user the token belongs to.
+    await mcpAuthed(app)
       .post("/mcp")
       .send({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} })
       .expect(200);

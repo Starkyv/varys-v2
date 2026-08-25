@@ -4,6 +4,12 @@
     "rootDir": ".",
     "outDir": "dist",
     "types": ["node"],
+    // No declaration emit: the API is a deployable app, not a library — nothing consumes its
+    // .d.ts. It also has to be off, because better-auth's `mcp` plugin's inferred type reaches
+    // into the plugin's own option types and a hoisted zod v4, which can't be *named* from
+    // here (TS2742/TS4058). Those are declaration-emit-only diagnostics; every real type check
+    // still runs.
+    "declaration": false,
     // DOM lib: the authoring layer drives a server-side browser and serializes in-page
     // functions (reusing @varys/capture's captureFingerprint), so it needs DOM types.
     // Node + DOM coexist here under skipLibCheck. Keep DOM usage confined to the

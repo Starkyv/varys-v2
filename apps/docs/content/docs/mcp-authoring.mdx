@@ -9,7 +9,8 @@ review. The test it produces is the same as one you'd record by hand.
 
 ## Connect Claude to Varys
 
-Point Claude Code at the Varys server (running at `http://localhost:4000/mcp` in local dev):
+Point Claude Code at the Varys server. Use the same origin you open Varys in your browser at
+(`http://localhost:5174` in local dev) — the sign-in step below happens on that origin:
 
 <Tabs items={['.mcp.json', 'CLI']}>
 
@@ -20,7 +21,7 @@ Point Claude Code at the Varys server (running at `http://localhost:4000/mcp` in
   "mcpServers": {
     "varys": {
       "type": "http",
-      "url": "http://localhost:4000/mcp"
+      "url": "http://localhost:5174/mcp"
     }
   }
 }
@@ -31,12 +32,27 @@ Point Claude Code at the Varys server (running at `http://localhost:4000/mcp` in
 <Tab value="CLI">
 
 ```bash
-claude mcp add --transport http varys http://localhost:4000/mcp
+claude mcp add --transport http varys http://localhost:5174/mcp
 ```
 
 </Tab>
 
 </Tabs>
+
+## Sign in
+
+The first time Claude Code connects, it opens your browser to sign in to Varys, then returns to
+your terminal. Nothing to configure — no tokens to copy, no keys to paste. Run `/mcp` in Claude
+Code to check the connection or re-authenticate.
+
+Claude then works **as you**: the tests it authors are attributed to you, the sessions it opens
+are visible only to you, and the Author page shows *your* Claude Code as connected — not
+everyone else's.
+
+<Callout type="warn" title="Signed out?">
+  If Claude reports it can't reach Varys, you've most likely been signed out. Run `/mcp` in Claude
+  Code and re-authenticate.
+</Callout>
 
 ## Ask Claude to create a test
 
@@ -56,10 +72,36 @@ as a draft.
   project root.
 </Callout>
 
+## How the screen gets checked
+
+Every checkpoint is compared against a baseline, and Claude picks *how*:
+
+- **Pixel-perfect** (the default) — an exact pixel-to-pixel comparison. Right for UI that should
+  render identically every run. Claude can mask volatile spots (a timestamp, an id) or allow a
+  small tolerance for rendering noise.
+- **Judged** — the baseline and the new screenshot both go to an AI reviewer, along with a note
+  about what "broken" means here. Right for content that is legitimately different every run —
+  a generated summary, live figures — where a pixel comparison would fail every single time.
+
+You can just say which you want ("this panel is AI-generated, don't pixel-compare it"), or let
+Claude choose and change it later in the test's settings.
+
+## Content that loads late
+
+If part of your app streams in — an answer that types itself out, a chart that draws once its
+data lands — tell Claude, and it will make the test wait for the content to *finish* rather than
+guessing at a fixed delay. That is usually the difference between a test that passes reliably and
+one that fails at random.
+
 ## You're always in control
 
 <Callout type="warn">
   Claude can **create** a test but can't put it live — every test it makes waits in the review
-  queue for you to approve. Passwords you give it are used only to log in and are never saved
-  into the test.
+  queue for you to approve.
+</Callout>
+
+<Callout type="warn" title="Credentials are stored in the test">
+  Anything Claude types is recorded **literally**, passwords included — a test that logs in stores
+  that password in its definition, exactly as a test you record by hand does. Use a dedicated test
+  account, never a real user's credentials.
 </Callout>

@@ -1,23 +1,62 @@
 import { randomUUID } from "node:crypto";
-import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  Logger,
+  NotFoundException,
+  type OnApplicationShutdown,
+} from "@nestjs/common";
 import { captureFingerprint } from "@varys/capture";
+import { environments, runs, tests as testsTable, testVersions } from "@varys/db";
+import { verify, type VerifyOutcome, type VerifyStatus } from "@varys/locator-engine";
+import {
+  type EnvCookie,
+  type EnvironmentProfile,
+  type EnvLocalStorageItem,
+  performStepAction,
+  seedCookies,
+  seedLocalStorage,
+} from "@varys/runner";
+import { resolveStep, resolveWaits } from "@varys/variable-resolver";
+import { and, desc, eq, ilike } from "drizzle-orm";
 import {
   buildClick,
+  buildHover,
   buildEntryNavigate,
   buildType,
   createRecording,
   type Recording,
 } from "@varys/recorder";
-import type { Fingerprint, Rect, Step, Viewport, Wait } from "@varys/step-schema";
+import {
+  describeStep,
+  type Fingerprint,
+  type Rect,
+  type Step,
+  streamIdleExpression,
+  type TestDefinition,
+  type Viewport,
+  type Wait,
+} from "@varys/step-schema";
 import type {
   AuthoringDraftEvent,
   AuthoringFrame,
   AuthoringMode,
   AuthoringSessionSummary,
+  FingerprintPatch,
+  FingerprintSummary,
 } from "@varys/review-contract";
 import { type Browser, type BrowserContext, chromium, type Locator, type Page } from "playwright-core";
 import { type Observable, Subject } from "rxjs";
+import { DB, type Db } from "../db/db.module";
+import { applyFingerprintPatch, hasMatchableSignal } from "../fingerprint-patch";
+import { summarizeFingerprint } from "../fingerprint-summary";
 import { TestsService } from "../tests/tests.service";
+
+/** How often the idle sweep runs, and how long a session may sit untouched before it is torn
+ *  down. Generous: an interactive session legitimately waits on a human between instructions. */
+const REAP_INTERVAL_MS = 5 * 60 * 1000;
+const IDLE_TIMEOUT_MS = 45 * 60 * 1000;
 
 /** Default authoring viewport (desktop) when the caller doesn't specify one. */
 const DEFAULT_VIEWPORT: Viewport = { width: 1280, height: 800, deviceScaleFactor: 1 };
@@ -41,6 +80,19 @@ export interface SnapshotNode {
   /** Accessible name (aria-label, else first visible text line, else placeholder). */
   name: string;
   tag: string;
+  /** The element's own `data-testid`, when it has one — the STRONGEST replay signal (the
+   *  matcher scores it far above everything else). Surfaced so the agent can tell a target
+   *  that will re-locate deterministically from one that will not, rather than guess. */
+  testId?: string;
+  /** The element's `id`, when it is author-stable — i.e. it would survive the capture's
+   *  `isUsableId` filter (a letter-led plain identifier, not a generated `:r1:` / `tippy-347`).
+   *  Second-strongest replay signal. Generated ids are omitted, exactly as capture drops them. */
+  id?: string;
+  /** True when another node in THIS snapshot shares this node's `role` + `name` and neither
+   *  carries a `testId`/`id` to tell them apart. On replay such a target scores a near-tie
+   *  against its twin and the matcher refuses to guess (`ambiguous` ⇒ the step hard-fails), so
+   *  the agent must disambiguate (row scope / a uniquely-named control) instead of acting. */
+  duplicate?: boolean;
   /** Current value for form fields. */
   value?: string;
   /** True for inputs/textareas/selects. */
@@ -57,8 +109,19 @@ export interface SnapshotResult {
 
 export interface ActionResult {
   ok: true;
-  /** A terse record of what was appended to the test, for Claude's confirmation. */
-  recorded: { type: Step["type"]; value?: string; checkpoint?: string };
+  /** A terse record of what was appended to the test, for Claude's confirmation. `"wait"`
+   *  is not a step type — a wait attaches to the NEXT step — so it is reported distinctly
+   *  rather than mislabelled as one. */
+  recorded: {
+    type: Step["type"] | "wait";
+    value?: string;
+    checkpoint?: string;
+    /** For `type: "wait"`: which wait primitive was queued. */
+    wait?: Wait["kind"];
+    /** True when a pending hover was flushed as a step just before this one (a
+     *  hover-reveal → interact flow), so replay re-opens the menu first. */
+    hoverFirst?: boolean;
+  };
   /** Fresh perception after the action, so Claude can decide the next step. */
   snapshot: SnapshotResult;
 }
@@ -67,18 +130,247 @@ export interface ActionResult {
 export type AgentWait =
   | { kind: "delay"; ms: number }
   | { kind: "networkIdle"; timeoutMs?: number }
+  | { kind: "streamIdle"; quietMs?: number; timeoutMs?: number; busySelector?: string }
   | { kind: "selector"; ref: string; state: "visible" | "hidden"; timeoutMs?: number };
 
-/** How to capture a checkpoint (Slice 4). element ⇒ a ref; region ⇒ a rect; fullpage ⇒ neither. */
+/** How to capture a checkpoint (Slice 4). element ⇒ a ref; region ⇒ a rect; fullpage ⇒ neither.
+ *  `compareMode` (+ `prompt` / `threshold`) chooses how it is COMPARED — orthogonal to capture. */
 export interface CheckpointInput {
   name: string;
   mode?: "element" | "fullpage" | "region";
   ref?: string;
   rect?: Rect;
   masks?: Rect[];
+  /** `pixel` (default) = exact pixel diff; `context` = LLM judge, for generated content. */
+  compareMode?: "pixel" | "context";
+  /** The judge instruction for `context`. Omitted ⇒ the global default prompt applies. */
+  prompt?: string;
+  /** Pixel-mode tolerance: max mismatched-pixel ratio (0..1). */
+  threshold?: number;
+}
+
+/** The matcher's `Page` parameter, taken from `verify` itself: the Authoring Session drives
+ *  `playwright-core` while `@varys/locator-engine` is typed against `playwright`. The two are the
+ *  same object at runtime (playwright re-exports playwright-core), so this names the target type
+ *  for the cast without making the API depend on the `playwright` wrapper package. */
+type VerifyPage = Parameters<typeof verify>[0];
+
+/** Which action a locator probe should model — it decides whether the fingerprint is captured
+ *  with the actionable-ancestor climb (click/hover/type) or on the exact node (checkpoint). */
+export type LocatorProbeAction = "click" | "type" | "checkpoint";
+
+/**
+ * How durable the matched signal is — the question `status: "resolved"` does NOT answer. Ordered
+ * strongest to weakest:
+ *  - `deterministic` — testId / stable id / an attribute-derived accessible name. Survives copy
+ *    and data changes.
+ *  - `row-scoped` — found as "the control inside the row that says X". Durable exactly as long as
+ *    that row text is stable and unique; the probe echoes the text so the caller can judge it.
+ *  - `text-bound` — found by visible text. That exact string is baked into the step and must match
+ *    verbatim on every future run.
+ *  - `fragile` — found only by class names or bounding-box size. No real identity: the matcher is
+ *    separating this element from its siblings by shape.
+ */
+export type LocatorVerdict =
+  | "deterministic"
+  | "row-scoped"
+  | "text-bound"
+  | "fragile"
+  | "ambiguous"
+  | "not-found";
+
+/** One matcher verdict on one fingerprint against one live page — shared by the authoring-time
+ *  probe (`verify_locator`, on a live ref) and the repair path (`try_locator`, on a recorded
+ *  step's fingerprint), so a locator reads the same either side of a failed Run. */
+export interface LocatorAssessment {
+  /** Can the matcher find it at all, right now. */
+  status: VerifyStatus;
+  /** Which signal identified the winner (testId | id | role+name | scope | name | stableClasses | box). */
+  matchedSignal: string | null;
+  /** True when the win came from a WEAKER signal than the fingerprint's strongest — the stronger
+   *  one already fails to match, so the step is one change away from having nothing left. */
+  healed: boolean;
+  /** How durable that signal is — see {@link LocatorVerdict}. */
+  verdict: LocatorVerdict;
+  /** What to do about it, in one sentence. */
+  advice: string;
+}
+
+/** The result of {@link AuthoringSessionService.verifyLocator} — a replay-matcher dry run. */
+export interface LocatorProbeResult extends LocatorAssessment {
+  ok: true;
+  ref: string;
+  action: LocatorProbeAction;
+  /** The signals this step would actually carry, so the caller can spot volatile content (a
+   *  timestamp or a generated title baked into `accessibleName` or `scope.text`). */
+  recorded: {
+    tag: string;
+    testId?: string;
+    id?: string;
+    role?: string;
+    accessibleName?: string;
+    nameFromAttr?: boolean;
+    scope?: { container: string; text: string };
+    stableClasses?: string[];
+    size?: { width: number; height: number };
+  };
+}
+
+/**
+ * Turn a matcher outcome + the fingerprint it ran on into a durability verdict and one line of
+ * advice. Deliberately separate from `status`: the failure mode this exists to catch is a locator
+ * that resolves cleanly today on a signal that cannot survive tomorrow's data.
+ */
+function locatorVerdict(
+  fp: Fingerprint,
+  outcome: VerifyOutcome,
+): { verdict: LocatorVerdict; advice: string } {
+  if (outcome.status === "not-found") {
+    return {
+      verdict: "not-found",
+      advice:
+        "The matcher cannot find this element even with it on screen — it carries no signal above the confidence floor. Do NOT record a step against it: target a uniquely-named control instead, reach the state by navigating, or ask for a data-testid on it.",
+    };
+  }
+  if (outcome.status === "ambiguous") {
+    return {
+      verdict: "ambiguous",
+      advice:
+        "Two or more elements score as this target, so on replay the matcher refuses to guess and the step hard-fails. Disambiguate: act on a control inside a row with unique, stable text, or on a uniquely-named element — do not record this one.",
+    };
+  }
+  const healedNote = outcome.healed
+    ? " It also matched on a weaker signal than the fingerprint's strongest, which means that stronger signal is ALREADY not matching."
+    : "";
+  switch (outcome.matchedSignal) {
+    case "testId":
+    case "id":
+    case "override":
+      return { verdict: "deterministic", advice: `Safe to record — matched on ${outcome.matchedSignal}.${healedNote}` };
+    case "role+name":
+    case "name":
+      return fp.nameFromAttr
+        ? {
+            verdict: "deterministic",
+            advice: `Safe to record — the accessible name comes from an attribute (aria-label/title), which content changes do not touch.${healedNote}`,
+          }
+        : {
+            verdict: "text-bound",
+            advice: `Recordable, but "${fp.accessibleName ?? ""}" is baked in from visible text and must match verbatim on every run. Confirm it is fixed UI copy — if it is data (a name, a date, a count, anything generated), pick a different target.${healedNote}`,
+          };
+    case "scope":
+      return {
+        verdict: "row-scoped",
+        advice: `Recordable — anchored on the row containing "${fp.scope?.text ?? ""}". That text must be unique and identical on every run; if it is per-run or per-environment data, pick a row that is not.${healedNote}`,
+      };
+    default:
+      return {
+        verdict: "fragile",
+        advice: `Matched only on ${outcome.matchedSignal ?? "shape"} — class names and element size are not identity, so replay will pick a sibling of the same shape as soon as the layout or the data shifts. Do not record this: target a named control, or ask for a data-testid.${healedNote}`,
+      };
+  }
+}
+
+/**
+ * Resolve a fingerprint's `{{tokens}}` the way a Run would, by round-tripping it through the
+ * step it belongs to (`resolveStep` is the single definition of token substitution, and it
+ * operates on steps). Used by the repair path so a candidate locator is judged against the same
+ * resolved values replay would use, not the raw `{{baseUrl}}`-style text.
+ */
+function resolveFingerprintTokens(
+  fp: Fingerprint,
+  step: Step,
+  profile: EnvironmentProfile,
+): Fingerprint {
+  const resolved = resolveStep({ ...step, target: fp } as Step, profile);
+  return ("target" in resolved ? resolved.target : undefined) ?? fp;
+}
+
+/**
+ * What a repair session is parked on: the failed Run, the exact definition VERSION that ran, and
+ * the step being diagnosed. Held on the session so a candidate locator can be merged onto the
+ * right step and re-checked against the parked page without re-reading the DB or re-driving.
+ */
+export interface RepairContext {
+  runId: string;
+  testId: string;
+  testName: string;
+  /** The version that RAN — not necessarily the test's latest; a diagnosis must reproduce the
+   *  failure, and the latest version may already differ. */
+  version: number;
+  environmentName: string;
+  profile: EnvironmentProfile | null;
+  definition: TestDefinition;
+  /** The step under diagnosis (0-based) — the run's `failedStepIndex` unless overridden. */
+  stepIndex: number;
+  /** How far THIS re-drive got. Below `stepIndex` ⇒ the path broke upstream and the step under
+   *  diagnosis was never reached, which is a different bug from "this locator is wrong". */
+  reachedStep: number;
+  /** The step this re-drive died on, when it stopped short of `stepIndex`. */
+  brokeAt: { index: number; label: string } | null;
+  /** The original run's error, for comparison against what we just reproduced. */
+  runError: string | null;
+}
+
+/** What `open_repair_session` hands back: why the run failed, what the step was looking for, what
+ *  the page actually offers now, and the matcher's verdict on the recorded locator as it stands. */
+export interface RepairSessionResult {
+  sessionId: string;
+  mode: "repair";
+  run: { id: string; error: string | null; failedStepIndex: number | null };
+  test: { id: string; name: string; version: number; environment: string };
+  /** The step being diagnosed, and where it sits in the test. */
+  step: { index: number; of: number; label: string; type: Step["type"] };
+  /** Whether this re-drive reproduced the original failure, and where it actually stopped. */
+  replay: { reachedStep: number; brokeAt: { index: number; label: string } | null; reproduced: boolean; note: string };
+  /** What the recorded locator was looking for (null for steps with no element target). */
+  recordedLocator: FingerprintSummary | null;
+  /** The matcher's verdict on that recorded locator against the page as it is NOW — the answer to
+   *  "why is this step failing". Null when the step has no element target, or when the re-drive
+   *  never reached the step (nothing meaningful to resolve against). */
+  diagnosis: LocatorAssessment | null;
+  url: string;
+  title: string;
+  /** Everything actionable on the parked page, with identity + duplicate flags. */
+  nodes: SnapshotNode[];
+  /** Base64 PNG of the parked page. */
+  screenshot: string;
+  guidance: string;
+}
+
+/** The result of trying one candidate locator against the parked page. */
+export interface TryLocatorResult extends LocatorAssessment {
+  ok: true;
+  stepIndex: number;
+  /** The merged candidate, as the step would carry it if this patch were saved. */
+  candidate: FingerprintSummary | null;
+  /** The exact edit this represents, echoed back so the caller can report it verbatim. */
+  patch: FingerprintPatch;
+  /** Whether this candidate is an improvement worth proposing to the user. */
+  recommend: boolean;
+}
+
+/**
+ * A hover awaiting a verdict. The human recorder emits a hover step only when hovering a
+ * trigger REVEALED content the user then interacted with (`dom.ts` → `openerForRevealed`);
+ * recording every hover would bury real steps in exploration noise. The MCP driver gets the
+ * same selectivity from `revealedRefs`: the refs that appeared *because* of this hover. If the
+ * next click/type targets one of them, the hover was load-bearing and is flushed as a step
+ * ahead of it; otherwise it is dropped.
+ */
+interface PendingHover {
+  target: Fingerprint;
+  /** Refs present after the hover but not before it — i.e. what the hover revealed. */
+  revealedRefs: Set<string>;
 }
 
 interface SessionState {
+  /** The better-auth user id that opened this session (Slice 16 — per-user MCP auth).
+   *  Every read and every action is gated on it, so one user's server-side browser is
+   *  invisible and undrivable to another. */
+  ownerId: string;
+  /** The owner's email — written as the draft's `createdBy` on finish. */
+  ownerEmail: string;
   browser: Browser;
   context: BrowserContext;
   page: Page;
@@ -89,9 +381,17 @@ interface SessionState {
   mode: AuthoringMode;
   /** Waits requested since the last recorded step — drained onto the next step's waitBefore. */
   pendingWaits: Wait[];
+  /** The last hover, held until we know whether it was load-bearing (see `hover`). */
+  pendingHover?: PendingHover;
+  /** Last time a tool touched this session — the idle reaper's input. */
+  lastActivityAt: number;
   /** Reference screenshots captured at each checkpoint (name → PNG) — the promote-view
    *  previews, persisted on finish. A Map so a re-checkpointed name keeps the latest. */
   previews: Map<string, Buffer>;
+  /** Set ONLY on a repair session: what failed Run/step this browser is parked on. Its presence
+   *  is what makes the session diagnostic rather than recording — `finish` and `checkpoint` refuse
+   *  it, because nothing here is meant to become a test. */
+  repair?: RepairContext;
   /** Monotonic live-preview frame counter, and the latest frame so a viewer that subscribes
    *  mid-session paints immediately (Slice 15 — Author with AI). */
   frameSeq: number;
@@ -99,6 +399,9 @@ interface SessionState {
 }
 
 export interface OpenSessionInput {
+  /** The authenticated MCP user opening this session (Slice 16). Supplied by the
+   *  controller from the OAuth bearer token — never by the model. */
+  owner: { id: string; email: string };
   startUrl: string;
   name?: string;
   intent?: string;
@@ -123,6 +426,9 @@ export interface OpenSessionResult {
 /** Per-mode steering returned from open_session, anchoring how Claude proceeds. The checkpoint
  *  discipline (only on an explicit request) holds in BOTH modes — see authoring-instructions. */
 function modeGuidance(mode: AuthoringMode): string {
+  if (mode === "repair") {
+    return "Repair mode: this session RECORDS NOTHING. The browser has been driven through the test's own steps to the point the Run failed and parked there, so the page in front of you is the page the failing step faced. Diagnose it: read `diagnosis` (the matcher's verdict on the recorded locator), compare `recordedLocator` against the `nodes` actually on the page, and use observe/hover to look around. Test candidate fixes with try_locator — it merges your patch onto the real step and re-runs the real matcher against this page, so a `resolved` + `deterministic` verdict means it would resolve at Run time. Then REPORT: what broke, and the exact edit to make. You cannot save the fix — the user applies it in the test's locator editor, so give them the step number and the precise field and value.";
+  }
   return mode === "batch"
     ? "Batch mode: execute the whole plan to completion without pausing for confirmation between steps. Take a checkpoint ONLY where the plan explicitly asks for one (e.g. 'screenshot', 'capture', 'snapshot', 'checkpoint', 'verify this screen') — never add one on your own. When every step in the plan is done, call finish_session to save the draft."
     : "Step-by-step mode: perform ONLY the single action just requested, then stop and report what you did and what the page now shows. Do not run ahead to later steps. Take a checkpoint only when explicitly told to. NEVER end the session on your own: it ends ONLY when the user explicitly tells you to finish or save it (e.g. \"finish the session\", \"we're done\", \"save it\"). When they do, call finish_session with confirm: true — the server refuses finish_session on an interactive session without that confirmation.";
@@ -206,12 +512,39 @@ function collectSnapshot(): { nodes: SnapshotNode[] } {
     const innerText = ((el as HTMLElement).innerText || el.textContent || "").trim();
     const firstLine = innerText.split("\n").map((s) => s.trim()).find((s) => s.length > 0) || "";
     const node: SnapshotNode = { ref, role, name: (aria || firstLine || placeholder).slice(0, 120), tag };
+    // Identity signals, surfaced so the agent can judge whether a target will re-locate on
+    // replay instead of inferring it from role/name alone. `id` is filtered by the same rule
+    // `@varys/capture` applies (letter-led plain identifier, not a library-generated one) —
+    // an id that capture would drop must not read here as a durable signal.
+    const testId = (el.getAttribute("data-testid") || "").trim();
+    if (testId) node.testId = testId;
+    const rawId = (el.getAttribute("id") || "").trim();
+    if (rawId && /^[A-Za-z][\w-]*$/.test(rawId) && !/^tippy-\d+$/.test(rawId)) node.id = rawId;
     if (tag === "input" || tag === "textarea" || tag === "select") {
       node.editable = true;
       node.value = (el as HTMLInputElement).value || "";
     }
     nodes.push(node);
   }
+
+  // Ambiguity pre-flight: the replay matcher refuses to act when the top two candidates score
+  // within a few points, and two same-role/same-name elements with no testId/id to separate them
+  // are exactly that tie. Flag them HERE, while the agent can still pick a different target —
+  // by the time a Run hits it, the step is already recorded and the failure is a hard one.
+  // Blank names are not flagged: they are unaddressable on their own terms (see the authoring
+  // instructions), not merely ambiguous.
+  const byIdentity = new Map<string, SnapshotNode[]>();
+  for (const n of nodes) {
+    if (!n.name || n.testId || n.id) continue;
+    const key = `${n.role}\u0000${n.name}`;
+    const bucket = byIdentity.get(key);
+    if (bucket) bucket.push(n);
+    else byIdentity.set(key, [n]);
+  }
+  for (const bucket of Array.from(byIdentity.values())) {
+    if (bucket.length > 1) for (const n of bucket) n.duplicate = true;
+  }
+
   w.__varysRef = counter;
   return { nodes };
 }
@@ -226,16 +559,24 @@ function collectSnapshot(): { nodes: SnapshotNode[] } {
  * this service; tests drive it deterministically (no LLM).
  */
 @Injectable()
-export class AuthoringSessionService {
+export class AuthoringSessionService implements OnApplicationShutdown {
   private readonly log = new Logger(AuthoringSessionService.name);
   private readonly sessions = new Map<string, SessionState>();
+  /** Sweeps abandoned sessions. Every open session pins a headless Chromium, and a client can
+   *  simply go away (Claude Code quits, the network drops) — the MCP transport is stateless HTTP,
+   *  so there is no disconnect to react to. Without this, every abandoned session leaks a browser
+   *  for the process's lifetime, and each user can leak their own. */
+  private readonly reaper = setInterval(() => void this.reapIdle(), REAP_INTERVAL_MS).unref();
   /** Live-preview frames across all sessions; the live-preview controller filters by sessionId.
    *  A human-only channel — these frames are never fed to the model. */
   private readonly liveFrames = new Subject<AuthoringFrame>();
   /** Terminal authoring events (a Draft created on finish), for the web review hand-off. */
   private readonly sessionEvents = new Subject<AuthoringDraftEvent>();
 
-  constructor(@Inject(TestsService) private readonly tests: TestsService) {}
+  constructor(
+    @Inject(TestsService) private readonly tests: TestsService,
+    @Inject(DB) private readonly db: Db,
+  ) {}
 
   async open(input: OpenSessionInput): Promise<OpenSessionResult> {
     const startUrl = (input.startUrl ?? "").trim();
@@ -268,6 +609,8 @@ export class AuthoringSessionService {
     const sessionId = randomUUID();
     const mode: AuthoringMode = input.mode;
     this.sessions.set(sessionId, {
+      ownerId: input.owner.id,
+      ownerEmail: input.owner.email,
       browser,
       context,
       page,
@@ -277,13 +620,310 @@ export class AuthoringSessionService {
       intent: input.intent?.trim() || null,
       mode,
       pendingWaits: [],
+      lastActivityAt: Date.now(),
       previews: new Map(),
       frameSeq: 0,
     });
-    this.log.log(`opened authoring session ${sessionId} on ${href} (${mode})`);
+    this.log.log(
+      `opened authoring session ${sessionId} on ${href} (${mode}) for ${input.owner.email}`,
+    );
     const { nodes } = await page.evaluate(collectSnapshot);
     await this.emitFrame(sessionId, { type: "navigate" });
     return { sessionId, url: href, title: await page.title(), nodes, mode, guidance: modeGuidance(mode) };
+  }
+
+  /**
+   * Recent failed Runs, so a repair can start from "the dashboard test that broke last night"
+   * rather than from a run id someone has to go and find. Read-only.
+   */
+  async recentFailures(opts?: { testName?: string; limit?: number }): Promise<
+    Array<{
+      runId: string;
+      testId: string;
+      testName: string;
+      failedAt: string;
+      failedStepIndex: number | null;
+      failedStep: string | null;
+      error: string | null;
+    }>
+  > {
+    const name = opts?.testName?.trim();
+    const rows = await this.db
+      .select({
+        runId: runs.id,
+        testId: testVersions.testId,
+        testName: testsTable.name,
+        failedAt: runs.updatedAt,
+        failedStepIndex: runs.failedStepIndex,
+        error: runs.error,
+        definition: testVersions.definition,
+      })
+      .from(runs)
+      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
+      .innerJoin(testsTable, eq(testsTable.id, testVersions.testId))
+      .where(
+        name
+          ? and(eq(runs.status, "failed"), ilike(testsTable.name, `%${name}%`))
+          : eq(runs.status, "failed"),
+      )
+      .orderBy(desc(runs.updatedAt))
+      .limit(Math.min(Math.max(opts?.limit ?? 10, 1), 50));
+
+    return rows.map((r) => {
+      const steps = (r.definition as TestDefinition).steps;
+      const step = r.failedStepIndex != null ? steps[r.failedStepIndex] : undefined;
+      return {
+        runId: r.runId,
+        testId: r.testId,
+        testName: r.testName,
+        failedAt: r.failedAt.toISOString(),
+        failedStepIndex: r.failedStepIndex,
+        failedStep: step ? describeStep(step) : null,
+        error: r.error,
+      };
+    });
+  }
+
+  /**
+   * Open a REPAIR session on a failed Run: re-drive the test's own steps, with the same drive
+   * primitive a Run uses, up to the step that failed — then stop and hold the browser there.
+   *
+   * This is the diagnostic counterpart to authoring. A failed Run tells you a step could not be
+   * located; it cannot tell you WHY, because by the time anyone looks the browser is gone. Here
+   * the page the failing step faced is still on screen and still driveable, so the recorded
+   * fingerprint can be resolved against it, the live alternatives listed, and candidate fixes
+   * tried — see {@link tryLocator}.
+   *
+   * It replays the definition VERSION the run actually used, not the test's latest, so the
+   * failure being diagnosed is the one that happened.
+   *
+   * Nothing is recorded and nothing is saved: `finish` and `checkpoint` refuse a repair session.
+   * The output is a diagnosis for a human to act on in the locator editor — Claude proposes,
+   * a person edits (ADR 0001).
+   */
+  async openRepair(input: {
+    owner: { id: string; email: string };
+    runId: string;
+    stepIndex?: number;
+  }): Promise<RepairSessionResult> {
+    const runId = (input.runId ?? "").trim();
+    if (!runId) throw new BadRequestException("runId is required");
+
+    const [row] = await this.db
+      .select({
+        error: runs.error,
+        failedStepIndex: runs.failedStepIndex,
+        environmentId: runs.environmentId,
+        testId: testVersions.testId,
+        version: testVersions.version,
+        definition: testVersions.definition,
+        testName: testsTable.name,
+      })
+      .from(runs)
+      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
+      .innerJoin(testsTable, eq(testsTable.id, testVersions.testId))
+      .where(eq(runs.id, runId))
+      .limit(1);
+    if (!row) throw new NotFoundException(`Run ${runId} not found`);
+
+    const definition = row.definition as TestDefinition;
+    // Which step to park on. A caller may override to inspect an earlier step (e.g. the one that
+    // ACTUALLY broke when the drive stops short), but by default it is the run's own verdict.
+    const stepIndex = input.stepIndex ?? row.failedStepIndex ?? -1;
+    if (stepIndex < 0) {
+      throw new BadRequestException(
+        `Run ${runId} did not fail at a step (error: ${row.error ?? "none"}), so there is no locator to diagnose. Pass an explicit stepIndex to park on a specific step anyway.`,
+      );
+    }
+    if (stepIndex >= definition.steps.length) {
+      throw new BadRequestException(
+        `Step ${stepIndex} is out of range — this test version has ${definition.steps.length} steps.`,
+      );
+    }
+
+    // The run's environment supplies {{baseUrl}} plus the cookies/localStorage that get it past
+    // login. Without them the re-drive would fail at step 1 for reasons unrelated to the bug.
+    let environmentName = "default";
+    let profile: EnvironmentProfile | null = null;
+    let cookies: EnvCookie[] = [];
+    let localStorage: EnvLocalStorageItem[] = [];
+    if (row.environmentId) {
+      const [env] = await this.db
+        .select({
+          name: environments.name,
+          baseUrl: environments.baseUrl,
+          cookies: environments.cookies,
+          localStorage: environments.localStorage,
+        })
+        .from(environments)
+        .where(eq(environments.id, row.environmentId))
+        .limit(1);
+      if (env) {
+        environmentName = env.name;
+        profile = { baseUrl: env.baseUrl ?? "" };
+        cookies = (env.cookies ?? []) as EnvCookie[];
+        localStorage = (env.localStorage ?? []) as EnvLocalStorageItem[];
+      }
+    }
+
+    const viewport: Viewport = { ...DEFAULT_VIEWPORT, ...definition.viewport };
+    const browser = await chromium.launch({ headless: true, args: browserLaunchArgs() });
+    const context = await browser.newContext({
+      viewport: { width: viewport.width, height: viewport.height },
+      deviceScaleFactor: viewport.deviceScaleFactor,
+      reducedMotion: "reduce",
+    });
+    let page: Page;
+    let reachedStep = 0;
+    let brokeAt: { index: number; label: string } | null = null;
+    try {
+      await seedCookies(context, cookies, profile);
+      await seedLocalStorage(context, localStorage, profile);
+      page = await context.newPage();
+
+      const defaultWaits = definition.defaults?.waitBefore ?? [];
+      const resolvedDefaultWaits = profile ? resolveWaits(defaultWaits, profile) : defaultWaits;
+      // Drive the prefix. A step that throws STOPS the drive — we park wherever we got to and
+      // say so, because "the path broke three steps earlier" is a different diagnosis from
+      // "this locator is wrong", and conflating them sends the reader to the wrong step.
+      for (let i = 0; i < stepIndex; i++) {
+        const raw = definition.steps[i];
+        try {
+          await performStepAction(page, profile ? resolveStep(raw, profile) : raw, resolvedDefaultWaits);
+          reachedStep = i + 1;
+        } catch {
+          brokeAt = { index: i, label: describeStep(raw) };
+          break;
+        }
+      }
+    } catch (err) {
+      await browser.close().catch(() => undefined);
+      throw new BadRequestException(
+        `could not start the repair drive for run ${runId}: ${(err as Error).message}`,
+      );
+    }
+
+    const step = definition.steps[stepIndex];
+    const recordedTarget = "target" in step ? step.target : undefined;
+    // Resolve the recorded locator against the page as it is NOW — the actual answer to "why is
+    // this step failing". Skipped when the drive never reached the step: the page would be the
+    // wrong one, and a verdict against it would be noise dressed as a finding.
+    const diagnosis =
+      recordedTarget && !brokeAt
+        ? await this.assess(page, profile ? resolveFingerprintTokens(recordedTarget, step, profile) : recordedTarget)
+        : null;
+
+    const sessionId = randomUUID();
+    this.sessions.set(sessionId, {
+      ownerId: input.owner.id,
+      ownerEmail: input.owner.email,
+      browser,
+      context,
+      page,
+      rec: createRecording(),
+      viewport,
+      name: `repair: ${row.testName}`,
+      intent: null,
+      mode: "repair",
+      repair: {
+        runId,
+        testId: row.testId,
+        testName: row.testName,
+        version: row.version,
+        environmentName,
+        profile,
+        definition,
+        stepIndex,
+        reachedStep,
+        brokeAt,
+        runError: row.error,
+      },
+      pendingWaits: [],
+      lastActivityAt: Date.now(),
+      previews: new Map(),
+      frameSeq: 0,
+    });
+    this.log.log(
+      `opened repair session ${sessionId} on run ${runId} (step ${stepIndex}, reached ${reachedStep}) for ${input.owner.email}`,
+    );
+
+    const reproduced = brokeAt ? brokeAt.index === row.failedStepIndex : diagnosis?.status !== "resolved";
+    const note = brokeAt
+      ? brokeAt.index === row.failedStepIndex
+        ? `The drive failed at step ${brokeAt.index + 1} (${brokeAt.label}) — the same step the Run failed on. The page you are parked on is the state BEFORE that step.`
+        : `The drive broke EARLIER than the Run did, at step ${brokeAt.index + 1} (${brokeAt.label}), so step ${stepIndex + 1} was never reached. Diagnose step ${brokeAt.index + 1} first — re-open the session with stepIndex ${brokeAt.index}.`
+      : diagnosis?.status === "resolved"
+        ? `The recorded locator RESOLVES on this page, so the original failure did not reproduce. Either the page is in a different state than it was during the Run, or the failure is intermittent (a timing/late-render problem rather than a locator problem). Check the diagnosis verdict — a fragile locator that happens to resolve today is still the likely culprit.`
+        : `Reproduced: the recorded locator does not resolve on this page. The diagnosis below says which way it fails.`;
+
+    const { nodes } = await page.evaluate(collectSnapshot);
+    await this.emitFrame(sessionId, { type: "navigate" });
+    return {
+      sessionId,
+      mode: "repair",
+      run: { id: runId, error: row.error, failedStepIndex: row.failedStepIndex },
+      test: { id: row.testId, name: row.testName, version: row.version, environment: environmentName },
+      step: { index: stepIndex, of: definition.steps.length, label: describeStep(step), type: step.type },
+      replay: { reachedStep, brokeAt, reproduced, note },
+      recordedLocator: summarizeFingerprint(recordedTarget),
+      diagnosis,
+      url: page.url(),
+      title: await page.title().catch(() => ""),
+      nodes,
+      screenshot: (await page.screenshot()).toString("base64"),
+      guidance: modeGuidance("repair"),
+    };
+  }
+
+  /**
+   * Try one candidate locator for the step under repair, against the page this session is parked
+   * on. The patch is merged onto the step's REAL fingerprint (every other captured signal is
+   * preserved — a locator edit never collapses the bundle) and run through the same matcher a Run
+   * uses, so a `resolved` + `deterministic` verdict here means it resolves at Run time.
+   *
+   * Cheap to repeat: the prefix was driven once when the session opened, so each candidate costs
+   * one in-page scan rather than a whole replay. That is the point — iterate here, then report the
+   * one edit that works.
+   */
+  async tryLocator(sessionId: string, patch: FingerprintPatch): Promise<TryLocatorResult> {
+    const s = this.require(sessionId);
+    const repair = s.repair;
+    if (!repair) {
+      throw new BadRequestException(
+        "try_locator only works in a repair session — open one with open_repair_session on the failed run.",
+      );
+    }
+    if (repair.brokeAt) {
+      throw new BadRequestException(
+        `This session is parked at step ${repair.brokeAt.index + 1} (${repair.brokeAt.label}), which broke before step ${repair.stepIndex + 1} was reached. A candidate for step ${repair.stepIndex + 1} cannot be judged from here — re-open the session with stepIndex ${repair.brokeAt.index} and fix that step first.`,
+      );
+    }
+    const step = repair.definition.steps[repair.stepIndex];
+    const base = "target" in step ? step.target : undefined;
+    if (!base) throw new BadRequestException("The step under repair has no element locator to patch.");
+
+    const candidate = applyFingerprintPatch(base, patch);
+    if (!hasMatchableSignal(candidate)) {
+      throw new BadRequestException(
+        "That patch clears every distinguishing signal — the result could never resolve. Set at least one of testId / selectorOverride / role / accessibleName / text.",
+      );
+    }
+    const resolved = repair.profile
+      ? resolveFingerprintTokens(candidate, step, repair.profile)
+      : candidate;
+    const assessment = await this.assess(s.page, resolved);
+    return {
+      ok: true,
+      stepIndex: repair.stepIndex,
+      candidate: summarizeFingerprint(candidate),
+      patch,
+      // Worth proposing only when it both resolves AND wins on something durable — "it resolves"
+      // is exactly the bar that let the current broken locator through in the first place.
+      recommend:
+        assessment.status === "resolved" &&
+        (assessment.verdict === "deterministic" || assessment.verdict === "row-scoped"),
+      ...assessment,
+    };
   }
 
   /** Perceive the current page: a ref-annotated node list (+ optional screenshot). */
@@ -305,27 +945,47 @@ export class AuthoringSessionService {
     await locator.click({ timeout: 10_000 });
     await s.page.waitForLoadState("domcontentloaded", { timeout: 3000 }).catch(() => undefined);
 
+    const hoverFirst = this.flushHover(s, target.ref);
     const step = this.withWaits(s, buildClick(fpRaw));
     s.rec.push(step);
     await this.emitFrame(sessionId, { type: "click" });
-    return { ok: true, recorded: { type: "click" }, snapshot: await this.snapshot(s, false) };
+    return {
+      ok: true,
+      recorded: { type: "click", ...(hoverFirst ? { hoverFirst } : {}) },
+      snapshot: await this.snapshot(s, false),
+    };
   }
 
-  /** Hover a target (by ref or text) to reveal hover-only affordances (dropdown menus,
-   *  "Read more →"), then return a fresh snapshot so the revealed elements get refs. A live
-   *  authoring aid only — hovers are NOT recorded as steps (the step schema has none), so
-   *  when a control only appears on hover, prefer clicking a stable container. */
+  /**
+   * Hover a target (by ref or text) to reveal hover-only affordances (dropdown menus,
+   * "Read more →"), then return a fresh snapshot so the revealed elements get refs.
+   *
+   * The hover becomes a recorded step ONLY if it turns out to be load-bearing — i.e. the next
+   * click/type targets something this hover revealed. That mirrors the human recorder (which
+   * emits a hover only for content the user then interacts with) and is what makes replay
+   * re-open the menu before clicking into it. Exploratory hovers record nothing.
+   */
   async hover(
     sessionId: string,
     target: { ref?: string; text?: string },
   ): Promise<{ ok: true; note: string; snapshot: SnapshotResult }> {
     const s = this.require(sessionId);
-    await this.resolveTarget(s.page, target).hover({ timeout: 10_000 });
+    const before = new Set((await s.page.evaluate(collectSnapshot)).nodes.map((n) => n.ref));
+    const locator = this.resolveTarget(s.page, target);
+    // Capture BEFORE hovering: the fingerprint of the trigger as it is when targeted, matching
+    // what a click would record. Climb like a click does — you hover the icon, not the button.
+    const fp = await this.captureFp(s.page, locator, true);
+    await locator.hover({ timeout: 10_000 });
     await s.page.waitForTimeout(150);
+    const snapshot = await this.snapshot(s, false);
+    const revealedRefs = new Set(snapshot.nodes.map((n) => n.ref).filter((r) => !before.has(r)));
+    s.pendingHover = { target: fp, revealedRefs };
     return {
       ok: true,
-      note: "hovered (reveal only — hovers aren't recorded as steps)",
-      snapshot: await this.snapshot(s, false),
+      note: revealedRefs.size
+        ? `hovered — revealed ${revealedRefs.size} element(s). Acting on one of them records this hover, so replay re-opens it.`
+        : "hovered — nothing new appeared, so this hover records nothing.",
+      snapshot,
     };
   }
 
@@ -354,13 +1014,71 @@ export class AuthoringSessionService {
     const fpRaw = await this.captureFp(s.page, locator, false);
     await locator.fill(value, { timeout: 10_000 });
 
+    const hoverFirst = this.flushHover(s, ref);
     const step = this.withWaits(s, buildType(fpRaw, value));
     s.rec.push(step);
     await this.emitFrame(sessionId, { type: "type" });
     return {
       ok: true,
-      recorded: { type: "type", value: step.type === "type" ? step.value : undefined },
+      recorded: {
+        type: "type",
+        value: step.type === "type" ? step.value : undefined,
+        ...(hoverFirst ? { hoverFirst } : {}),
+      },
       snapshot: await this.snapshot(s, false),
+    };
+  }
+
+  /**
+   * Dry-run the REPLAY matcher against a target before committing a step to the test.
+   *
+   * Authoring and replay locate elements two completely different ways: here the agent holds a
+   * `ref` (an attribute Varys stamped on the live DOM, which always resolves); on replay the ref
+   * is long gone and the step is re-found by scoring the captured fingerprint's signals. So a
+   * step can be recorded perfectly and still be unrunnable — and today that only surfaces on the
+   * next Run, by which point the draft is written. This probe closes that loop: it captures the
+   * fingerprint exactly as the corresponding action would, then runs the REAL matcher
+   * (`@varys/locator-engine`'s `verify`, the same code a Run uses) against the current page.
+   *
+   * Two distinct things come back, and both matter:
+   *  - `status` — can the matcher find it AT ALL (`resolved` / `ambiguous` / `not-found`).
+   *  - `verdict` — is the signal it won on DURABLE. A target the matcher resolves purely by
+   *    bounding-box size or by volatile visible text resolves fine right now and breaks the
+   *    moment the data or the layout shifts, so `resolved` alone is not the question to ask.
+   *
+   * Nothing is recorded and the page is not touched (beyond the matcher's own invisible marker
+   * attribute), so this is safe to call before any action.
+   */
+  async verifyLocator(
+    sessionId: string,
+    ref: string,
+    action: LocatorProbeAction = "click",
+  ): Promise<LocatorProbeResult> {
+    const s = this.require(sessionId);
+    const locator = this.resolveRef(s.page, ref);
+    // Climb exactly as the real action would: click/hover/type rise to the actionable control,
+    // an element checkpoint frames the exact node. Probing a different element than the step
+    // would capture would make the verdict a lie.
+    const fp = await this.captureFp(s.page, locator, action !== "checkpoint");
+    const assessment = await this.assess(s.page, fp);
+    return {
+      ok: true,
+      ref,
+      action,
+      ...assessment,
+      recorded: {
+        tag: fp.tag,
+        ...(fp.testId ? { testId: fp.testId } : {}),
+        ...(fp.attributes?.id ? { id: fp.attributes.id } : {}),
+        ...(fp.role ? { role: fp.role } : {}),
+        ...(fp.accessibleName ? { accessibleName: fp.accessibleName } : {}),
+        ...(fp.accessibleName ? { nameFromAttr: !!fp.nameFromAttr } : {}),
+        ...(fp.scope ? { scope: fp.scope } : {}),
+        ...(fp.stableClasses?.length ? { stableClasses: fp.stableClasses } : {}),
+        ...(fp.boundingBox
+          ? { size: { width: Math.round(fp.boundingBox.width), height: Math.round(fp.boundingBox.height) } }
+          : {}),
+      },
     };
   }
 
@@ -375,6 +1093,16 @@ export class AuthoringSessionService {
     } else if (input.kind === "networkIdle") {
       await s.page.waitForLoadState("networkidle", { timeout: input.timeoutMs ?? 15_000 }).catch(() => undefined);
       w = { kind: "networkIdle", ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}) };
+    } else if (input.kind === "streamIdle") {
+      // Performed live with the SAME in-page settle logic replay uses (shared via
+      // `streamIdleExpression`), so the snapshot Claude sees next is the one replay will assert.
+      await s.page.evaluate(streamIdleExpression(input)).catch(() => undefined);
+      w = {
+        kind: "streamIdle",
+        ...(input.quietMs ? { quietMs: input.quietMs } : {}),
+        ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
+        ...(input.busySelector?.trim() ? { busySelector: input.busySelector.trim() } : {}),
+      };
     } else {
       const locator = this.resolveRef(s.page, input.ref);
       const fp = await this.captureFp(s.page, locator, false);
@@ -382,7 +1110,12 @@ export class AuthoringSessionService {
       w = { kind: "selector", target: fp, state: input.state, ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}) };
     }
     s.pendingWaits.push(w);
-    return { ok: true, recorded: { type: "type" }, snapshot: await this.snapshot(s, false) };
+    // A wait is not a step — it attaches to whatever is recorded next.
+    return {
+      ok: true,
+      recorded: { type: "wait", wait: w.kind },
+      snapshot: await this.snapshot(s, false),
+    };
   }
 
   /** Propose a checkpoint (the visual assertion). element → captures the ref's fingerprint;
@@ -390,6 +1123,11 @@ export class AuthoringSessionService {
    *  the human finalizes in review. Pending waits settle before the screenshot. */
   async checkpoint(sessionId: string, input: CheckpointInput): Promise<ActionResult> {
     const s = this.require(sessionId);
+    if (s.repair) {
+      throw new BadRequestException(
+        "This is a repair session — it records nothing, so a checkpoint here would go nowhere. Diagnose the locator (try_locator) and report the edit; the user applies it to the existing test.",
+      );
+    }
     const name = (input.name ?? "").trim();
     if (!name) throw new BadRequestException("checkpoint name is required");
     const waits = s.pendingWaits;
@@ -397,26 +1135,55 @@ export class AuthoringSessionService {
     const waitBefore = waits.length ? waits : undefined;
     const mode = input.mode ?? "element";
 
+    // How it will be COMPARED — independent of how it is captured. `pixel` (the default) is an
+    // exact diff and honours masks/threshold; `context` hands both screenshots to an LLM judge,
+    // for content that is legitimately different every run (generated text, live figures).
+    const compareMode = input.compareMode ?? "pixel";
+    if (compareMode === "context" && (input.masks?.length || input.threshold !== undefined)) {
+      throw new BadRequestException(
+        "masks and threshold are pixel-mode knobs and are ignored by the context judge — drop them, or describe what to ignore in the prompt instead.",
+      );
+    }
+    if (input.threshold !== undefined && !(input.threshold > 0 && input.threshold <= 1)) {
+      throw new BadRequestException("threshold must be a mismatched-pixel ratio between 0 and 1");
+    }
+    const comparison = {
+      compareMode,
+      ...(input.prompt?.trim() ? { prompt: input.prompt.trim() } : {}),
+      ...(input.threshold !== undefined ? { threshold: input.threshold } : {}),
+    };
+
+    // A checkpoint asserts what is on screen, so a hover that revealed any of it is
+    // load-bearing and must be recorded FIRST (replay re-hovers, then captures). An element
+    // checkpoint is matched precisely by ref; fullpage/region have no ref, so any reveal
+    // counts — an extra hover is harmless on replay, a missing one silently captures the
+    // un-revealed page.
+    const hoverFirst = this.flushHover(s, input.ref, { anyReveal: mode !== "element" });
+
     // Record the step (for replay) AND grab a reference screenshot for the promote view.
     // No network-idle settle — capture the page exactly as it is right now.
     let preview: Buffer;
     if (mode === "fullpage") {
-      s.rec.checkpoint(name, { mode: "fullpage", masks: input.masks, waitBefore });
+      s.rec.checkpoint(name, { mode: "fullpage", masks: input.masks, waitBefore, ...comparison });
       preview = await s.page.screenshot({ fullPage: true });
     } else if (mode === "region") {
       if (!input.rect) throw new BadRequestException("region checkpoint requires a rect (x, y, width, height)");
-      s.rec.checkpoint(name, { mode: "region", rect: input.rect, masks: input.masks, waitBefore });
+      s.rec.checkpoint(name, { mode: "region", rect: input.rect, masks: input.masks, waitBefore, ...comparison });
       preview = await s.page.screenshot({ clip: input.rect });
     } else {
       if (!input.ref) throw new BadRequestException("element checkpoint requires a ref");
       const locator = this.resolveRef(s.page, input.ref);
       const fp = await this.captureFp(s.page, locator, false);
-      s.rec.checkpoint(name, { mode: "element", target: fp, masks: input.masks, waitBefore });
+      s.rec.checkpoint(name, { mode: "element", target: fp, masks: input.masks, waitBefore, ...comparison });
       preview = await locator.screenshot();
     }
     s.previews.set(name, preview);
     await this.emitFrame(sessionId, { type: "screenshot", checkpoint: name });
-    return { ok: true, recorded: { type: "screenshot", checkpoint: name }, snapshot: await this.snapshot(s, false) };
+    return {
+      ok: true,
+      recorded: { type: "screenshot", checkpoint: name, ...(hoverFirst ? { hoverFirst } : {}) },
+      snapshot: await this.snapshot(s, false),
+    };
   }
 
   /**
@@ -428,6 +1195,11 @@ export class AuthoringSessionService {
    */
   async finish(sessionId: string, opts?: { confirm?: boolean }): Promise<FinishResult> {
     const s = this.require(sessionId);
+    if (s.repair) {
+      throw new BadRequestException(
+        `This is a repair session on run ${s.repair.runId} — there is no draft to save, and saving one would fork the test you are trying to fix. Report the diagnosis and the exact edit for step ${s.repair.stepIndex + 1}, then call close_repair_session.`,
+      );
+    }
     if (s.mode === "interactive" && !opts?.confirm) {
       throw new BadRequestException(
         "This is an interactive session — it ends ONLY when the user explicitly tells you to finish or save it. Do not finish on your own. Once the user says so, call finish_session again with confirm: true.",
@@ -436,7 +1208,11 @@ export class AuthoringSessionService {
     const definition = s.rec.getDefinition(s.name, s.viewport);
     const checkpointCount = s.rec.checkpointCount();
     const previews = [...s.previews].map(([checkpointName, bytes]) => ({ checkpointName, bytes }));
-    const { id, version } = await this.tests.createDraft(definition, { intent: s.intent, previews });
+    const { id, version } = await this.tests.createDraft(definition, {
+      intent: s.intent,
+      previews,
+      createdBy: s.ownerEmail,
+    });
     this.sessionEvents.next({ sessionId, testId: id, version, checkpointCount, name: s.name });
     await this.teardown(sessionId);
     this.log.log(`finished authoring session ${sessionId} → draft ${id} (v${version})`);
@@ -451,9 +1227,23 @@ export class AuthoringSessionService {
     };
   }
 
-  async abort(sessionId: string): Promise<{ ok: true }> {
+  /**
+   * Throw the session away WITHOUT persisting a draft: close the browser, keep nothing. The
+   * counterpart to `finish` — needed because a session that went wrong (wrong app, wrong flow,
+   * a dead end) otherwise had only one exit, which was to save it as a draft someone then has
+   * to triage and discard by hand.
+   */
+  async discard(sessionId: string): Promise<{ ok: true; discarded: string }> {
+    const s = this.require(sessionId);
+    const repair = s.repair;
+    const stepCount = s.rec.stepCount();
     await this.teardown(sessionId);
-    return { ok: true };
+    this.log.log(
+      repair
+        ? `closed repair session ${sessionId} (run ${repair.runId}, step ${repair.stepIndex})`
+        : `discarded authoring session ${sessionId} (${stepCount} recorded step(s) dropped)`,
+    );
+    return { ok: true, discarded: sessionId };
   }
 
   // ── live preview (Slice 15 — Author with AI) ────────────────────────────────────────
@@ -470,15 +1260,29 @@ export class AuthoringSessionService {
     return this.sessionEvents.asObservable();
   }
 
-  /** The latest frame for a session, so a viewer subscribing mid-session paints immediately. */
-  latestFrame(sessionId: string): AuthoringFrame | undefined {
-    return this.sessions.get(sessionId)?.lastFrame;
+  /**
+   * Assert that `ownerId` owns `sessionId`, throwing the same not-found as an unknown id
+   * (Slice 16). Called once per MCP tool call and before any live-preview read, so it is
+   * the single choke point for cross-user access — and it deliberately does NOT
+   * distinguish "someone else's session" from "no such session", so a caller can't probe
+   * for other users' session ids.
+   */
+  assertOwner(sessionId: string, ownerId: string): void {
+    this.requireOwned(sessionId, ownerId);
   }
 
-  /** Active Authoring Sessions, for the live-preview picker. */
-  async listSessions(): Promise<AuthoringSessionSummary[]> {
+  /** The latest frame for a session the caller owns, so a viewer subscribing mid-session
+   *  paints immediately. Returns undefined for anyone else's session. */
+  latestFrame(sessionId: string, ownerId: string): AuthoringFrame | undefined {
+    const s = this.sessions.get(sessionId);
+    return s?.ownerId === ownerId ? s.lastFrame : undefined;
+  }
+
+  /** The caller's OWN active Authoring Sessions, for the live-preview picker. */
+  async listSessions(ownerId: string): Promise<AuthoringSessionSummary[]> {
     const out: AuthoringSessionSummary[] = [];
     for (const [sessionId, s] of this.sessions) {
+      if (s.ownerId !== ownerId) continue;
       out.push({
         sessionId,
         name: s.name,
@@ -494,6 +1298,27 @@ export class AuthoringSessionService {
   }
 
   // ── internals ──────────────────────────────────────────────────────────────────────
+
+  /**
+   * Run the REAL replay matcher over one fingerprint against a live page and turn the outcome
+   * into a durability verdict. The single place both probes go through, so an authoring-time
+   * check and a post-failure diagnosis of the same locator cannot disagree.
+   *
+   * The poll is deliberately short: in both callers the page is already in the state the step
+   * faces, so a confident match returns on the first scan and only a genuine miss spends the
+   * budget.
+   */
+  private async assess(page: Page, fp: Fingerprint): Promise<LocatorAssessment> {
+    const outcome = await verify(page as unknown as VerifyPage, fp, { timeoutMs: 2_000, intervalMs: 250 });
+    const { verdict, advice } = locatorVerdict(fp, outcome);
+    return {
+      status: outcome.status,
+      matchedSignal: outcome.matchedSignal,
+      healed: outcome.healed,
+      verdict,
+      advice,
+    };
+  }
 
   /** Capture a fingerprint of the resolved element in-page, reusing `captureFingerprint`.
    *  Serialized via `new Function` with a `__name` shim — tsx/esbuild keepNames injects
@@ -569,6 +1394,26 @@ export class AuthoringSessionService {
     return page.getByText(text, { exact: false }).first();
   }
 
+  /**
+   * Decide the fate of a pending hover and, if it was load-bearing, push it as a step.
+   * Returns whether it was recorded. Called immediately BEFORE the step it precedes, so the
+   * hover lands ahead of it and replay re-opens the revealed content first.
+   *
+   * Load-bearing = the following step acts on something this hover revealed (`ref` in
+   * `revealedRefs`), or — for a step with no ref, like a fullpage checkpoint — the hover
+   * revealed anything at all. Either way the pending hover is consumed: a hover is only ever
+   * offered to the step directly after it.
+   */
+  private flushHover(s: SessionState, ref: string | undefined, opts?: { anyReveal?: boolean }): boolean {
+    const pending = s.pendingHover;
+    s.pendingHover = undefined;
+    if (!pending || !pending.revealedRefs.size) return false;
+    const loadBearing = ref ? pending.revealedRefs.has(ref) : !!opts?.anyReveal;
+    if (!loadBearing) return false;
+    s.rec.push(this.withWaits(s, buildHover(pending.target)));
+    return true;
+  }
+
   private resolveRef(page: Page, ref: string): Locator {
     if (!ref || !/^e\d+$/.test(ref)) {
       throw new BadRequestException(`invalid ref "${ref}" — use a ref returned by observe/open`);
@@ -576,10 +1421,40 @@ export class AuthoringSessionService {
     return page.locator(`[data-varys-ref="${ref}"]`);
   }
 
+  /** Resolve a session AND mark it active — every tool goes through here, so this is the one
+   *  place the idle clock is reset. */
   private require(sessionId: string): SessionState {
     const s = this.sessions.get(sessionId);
     if (!s) throw new NotFoundException(`Authoring session ${sessionId} not found or already finished`);
+    s.lastActivityAt = Date.now();
     return s;
+  }
+
+  /** `require` plus an ownership check, collapsed into one indistinguishable not-found. */
+  private requireOwned(sessionId: string, ownerId: string): SessionState {
+    const s = this.sessions.get(sessionId);
+    if (!s || s.ownerId !== ownerId) {
+      throw new NotFoundException(`Authoring session ${sessionId} not found or already finished`);
+    }
+    return s;
+  }
+
+  /** Tear down sessions untouched for longer than `IDLE_TIMEOUT_MS`. */
+  private async reapIdle(): Promise<void> {
+    const cutoff = Date.now() - IDLE_TIMEOUT_MS;
+    for (const [sessionId, s] of [...this.sessions]) {
+      if (s.lastActivityAt > cutoff) continue;
+      this.log.warn(
+        `reaping idle authoring session ${sessionId} (${s.ownerEmail}, idle > ${Math.round(IDLE_TIMEOUT_MS / 60_000)}m) — recorded steps are discarded`,
+      );
+      await this.teardown(sessionId);
+    }
+  }
+
+  /** Close every live browser on shutdown, so a restart doesn't orphan Chromium processes. */
+  async onApplicationShutdown(): Promise<void> {
+    clearInterval(this.reaper);
+    await Promise.all([...this.sessions.keys()].map((id) => this.teardown(id)));
   }
 
   private async teardown(sessionId: string): Promise<void> {

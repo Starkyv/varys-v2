@@ -106,10 +106,28 @@ export function buildEntryNavigate(href: string, origin: string): Step {
 /** A checkpoint spec AFTER capture — element mode carries an already-captured
  *  `Fingerprint` (not a live element), keeping the accumulator DOM-free. `waitBefore`
  *  (optional) lets a driver attach settle waits ahead of the screenshot. */
-export type RecordedCheckpoint =
+export type RecordedCheckpoint = RecordedCheckpointTarget & RecordedComparison;
+
+type RecordedCheckpointTarget =
   | { mode?: "element"; target: Fingerprint; masks?: Rect[]; waitBefore?: Wait[] }
   | { mode: "region"; rect: Rect; masks?: Rect[]; waitBefore?: Wait[] }
   | { mode: "fullpage"; masks?: Rect[]; waitBefore?: Wait[] };
+
+/**
+ * How the checkpoint is compared against its baseline — orthogonal to how it's captured.
+ * Omitted ⇒ `pixel`, which is what the DOM recorder always records (it can't infer a judge
+ * prompt from a click). The MCP driver CAN set this: an authoring model knows whether the
+ * region it just captured is deterministic chrome or generated content.
+ */
+export interface RecordedComparison {
+  /** `pixel` = exact pixel diff (honours `masks`/`threshold`); `context` = LLM judge. */
+  compareMode?: "pixel" | "context";
+  /** The judge's instruction, for `context`. Omitted ⇒ the global default prompt from the
+   *  Configurations page applies at run time. */
+  prompt?: string;
+  /** Pixel-mode tolerance: max mismatched-pixel ratio (0..1) before the diff is flagged. */
+  threshold?: number;
+}
 
 /** A driver-agnostic recording: holds the ordered steps, shapes checkpoints, and
  *  assembles the definition (deriving variables from the recorded tokens). */
@@ -133,16 +151,25 @@ export function createRecording(onStep?: OnStep): Recording {
     checkpoint(name, spec) {
       // Carry masks / waits only when present, so simple checkpoints stay clean (and old
       // definitions without them are unchanged).
-      const masks = spec.masks && spec.masks.length ? { masks: spec.masks } : {};
       const waits = spec.waitBefore && spec.waitBefore.length ? { waitBefore: spec.waitBefore } : {};
-      // The recorder always records pixel comparison; `context` is authored later in the
-      // test-detail editor (it needs a human-written prompt the recorder can't infer).
+      // Comparison defaults to `pixel` — the DOM recorder never sets it, so human recordings
+      // are byte-identical to before. `masks`/`threshold` are pixel-only knobs, so they are
+      // dropped for a `context` checkpoint rather than written and silently ignored at run time.
+      const compareMode = spec.compareMode ?? "pixel";
+      const comparison =
+        compareMode === "context"
+          ? { compareMode, ...(spec.prompt ? { prompt: spec.prompt } : {}) }
+          : {
+              compareMode,
+              ...(spec.masks && spec.masks.length ? { masks: spec.masks } : {}),
+              ...(spec.threshold !== undefined ? { threshold: spec.threshold } : {}),
+            };
       if (spec.mode === "fullpage") {
-        push({ type: "screenshot", name, captureMode: "fullpage", compareMode: "pixel", ...masks, ...waits });
+        push({ type: "screenshot", name, captureMode: "fullpage", ...comparison, ...waits });
       } else if (spec.mode === "region") {
-        push({ type: "screenshot", name, captureMode: "region", compareMode: "pixel", rect: spec.rect, ...masks, ...waits });
+        push({ type: "screenshot", name, captureMode: "region", rect: spec.rect, ...comparison, ...waits });
       } else {
-        push({ type: "screenshot", name, captureMode: "element", compareMode: "pixel", target: spec.target, ...masks, ...waits });
+        push({ type: "screenshot", name, captureMode: "element", target: spec.target, ...comparison, ...waits });
       }
     },
     getDefinition(name, viewport) {

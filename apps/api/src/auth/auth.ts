@@ -1,5 +1,6 @@
 import { betterAuth } from "better-auth";
 import { APIError } from "better-auth/api";
+import { mcp } from "better-auth/plugins";
 import { Pool } from "pg";
 import { isSignInAllowed, parseDomainPolicy } from "./domain-policy";
 
@@ -15,8 +16,20 @@ import { isSignInAllowed, parseDomainPolicy } from "./domain-policy";
  * Slice 10 (Auth & multi-user):
  *  - Issue 1: email + password, httpOnly cookie sessions.
  *  - Issue 2: a global guard that enforces a session on every other route.
- *  - Issue 3 (this): Google SSO with an env-driven domain restriction.
+ *  - Issue 3: Google SSO with an env-driven domain restriction.
+ *
+ * Slice 16 (Per-user MCP auth): the `mcp` plugin turns this instance into an OAuth 2.1
+ * authorization server (dynamic client registration + PKCE) so Claude Code authenticates
+ * as a real Varys user over `/mcp` instead of connecting anonymously. See
+ * `MCP_LOGIN_PAGE` below and `../authoring/mcp-auth.service.ts`.
  */
+
+/**
+ * Where the OAuth authorize endpoint sends a browser that has no Varys session yet.
+ * A path on the WEB origin (the SPA renders its normal Login here, then bounces back to
+ * `/api/auth/mcp/authorize` with the original query — see `apps/web/src/main.tsx`).
+ */
+export const MCP_LOGIN_PAGE = "/oauth/authorize";
 
 /**
  * Which sign-in methods are enabled, controlled by `VARYS_AUTH_METHODS` — a comma list
@@ -143,6 +156,21 @@ function createAuth() {
         secure: true,
       },
     },
+    // OAuth 2.1 provider for the MCP server (Slice 16). Claude Code registers itself via
+    // DCR on first connect, runs the authorize/token dance in the user's browser, and then
+    // sends a bearer token on every `/mcp` request — which `McpAuthService` resolves back
+    // to the signing-in user, so authoring sessions and status are per-user, not global.
+    // PKCE is required (public clients hold no secret) and consent is skipped: the client
+    // is the user's own local Claude Code, and the authorize leg already proves identity
+    // interactively. Tables: oauthApplication / oauthAccessToken / oauthConsent (see DDL).
+    plugins: [
+      mcp({
+        loginPage: MCP_LOGIN_PAGE,
+        // `loginPage` is repeated here only to satisfy OIDCOptions' required field — the
+        // plugin overwrites it with the top-level value regardless.
+        oidcConfig: { loginPage: MCP_LOGIN_PAGE, requirePKCE: true },
+      }),
+    ],
     emailAndPassword: {
       // Toggled by VARYS_AUTH_METHODS (see resolveAuthMethods above).
       enabled: authMethods.emailPassword,

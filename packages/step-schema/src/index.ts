@@ -135,6 +135,79 @@ export const wait = z.discriminatedUnion("kind", [
 ]);
 export type Wait = z.infer<typeof wait>;
 
+/** `streamIdle` defaults, shared by every driver so "settled" means one thing everywhere.
+ *  `timeoutMs` is a generous cap, not a target: with the loading gate below the wait resolves
+ *  as soon as content finishes, and the cap only bites if a busy marker never clears (an
+ *  LLM answer with tool calls can legitimately run past a minute). */
+export const STREAM_IDLE_DEFAULTS = {
+  quietMs: 800,
+  timeoutMs: 120_000,
+  /** How long to wait for a loading marker to APPEAR before concluding nothing async is
+   *  coming. Covers the submit→skeleton latency; any DOM mutation in this window also counts
+   *  as activity. */
+  graceMs: 6_000,
+  /** Common "still working" markers. `data-testid*="skeleton"` catches answer/section
+   *  skeletons (testids survive CSS-module hashing, unlike class names). */
+  busySelector:
+    '[aria-busy="true"],[role="progressbar"],[data-testid*="skeleton" i],[data-testid*="spinner" i],[data-testid*="loading" i],[class*="animate-pulse"]',
+} as const;
+
+/**
+ * The canonical in-page implementation of a `streamIdle` wait, as a raw JS expression string
+ * to hand to `page.evaluate`.
+ *
+ * It lives here, beside the schema that DEFINES the primitive, because two drivers must agree
+ * on it: the runner performs it on replay, and the authoring server performs it live so the
+ * model's next observation sees settled content. A second, drifting copy would mean Claude
+ * authors against one notion of "settled" and replay asserts against another.
+ *
+ * Why a state machine rather than "quiet for `quietMs`": the work usually hasn't STARTED when
+ * the wait begins (the click that submits a query is the previous step; the skeleton appears a
+ * beat later). A naive quiet check fires in that pre-work calm and captures the skeleton. So:
+ *   • `busy()`  — a loading marker is present (skeleton / spinner / progressbar / aria-busy).
+ *   • activity  — a loading marker OR any DOM mutation (streaming text, late chart) resets idle.
+ * We settle only when idle for `quietMs` AND either a loading state was seen and has since
+ * cleared (`sawBusy` — content finished), or `graceMs` elapsed with nothing async happening
+ * (a static page — nothing to wait for). Reads only signals the app already renders; no
+ * app-side markup required. Best-effort: it resolves at the cap even if the page never quiesces.
+ *
+ * Emitted as a raw STRING (not a serialized function) so esbuild/tsx `keepNames` can't inject a
+ * `__name` helper that doesn't exist in the page.
+ */
+export function streamIdleExpression(opts?: {
+  quietMs?: number;
+  timeoutMs?: number;
+  busySelector?: string;
+}): string {
+  const quiet = opts?.quietMs ?? STREAM_IDLE_DEFAULTS.quietMs;
+  const max = opts?.timeoutMs ?? STREAM_IDLE_DEFAULTS.timeoutMs;
+  const grace = STREAM_IDLE_DEFAULTS.graceMs;
+  const sel = opts?.busySelector?.trim() || STREAM_IDLE_DEFAULTS.busySelector;
+  return `(function () {
+  return new Promise(function (resolve) {
+    var quiet = ${quiet}, max = ${max}, grace = ${grace}, sel = ${JSON.stringify(sel)}, obs = null;
+    var start = Date.now(), lastActivity = Date.now(), sawBusy = false;
+    var hard = setTimeout(finish, max);
+    function busy() { try { return !!document.querySelector(sel); } catch (e) { return false; } }
+    function finish() { try { if (obs) obs.disconnect(); } catch (e) {} clearTimeout(hard); resolve(true); }
+    function tick() {
+      var now = Date.now();
+      if (busy()) { sawBusy = true; lastActivity = now; return setTimeout(tick, 150); }
+      if (now - lastActivity < quiet) return setTimeout(tick, 150);
+      // Idle long enough. Settle if a loading state came and went (content finished), or the
+      // grace window elapsed with nothing async ever happening (a static page).
+      if (sawBusy || (now - start) >= grace) return finish();
+      return setTimeout(tick, 150);
+    }
+    try {
+      obs = new MutationObserver(function () { lastActivity = Date.now(); });
+      obs.observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true });
+    } catch (e) {}
+    setTimeout(tick, 150);
+  });
+})()`;
+}
+
 export const screenshotStep = z.object({
   type: z.literal("screenshot"),
   name: z.string().min(1),

@@ -1,16 +1,22 @@
 import { Controller, Get, Inject, type MessageEvent, Param, Sse } from "@nestjs/common";
 import type { AuthoringFrame, AuthoringSessionSummary, McpStatus } from "@varys/review-contract";
 import { concat, EMPTY, filter, interval, map, merge, type Observable, of } from "rxjs";
+import { type AuthUser, CurrentUser } from "../auth/current-user.decorator";
 import { AuthoringSessionService } from "./authoring-session.service";
 import { McpStatusService } from "./mcp-status.service";
 
 /**
  * Live preview of Authoring Sessions in the Varys web app (Slice 15 — Author with AI).
  *
- * Authenticated, deliberately UNLIKE the public `/mcp`: this drives a signed-in human's view of
- * a server-side browser, so it sits behind the global auth guard (no `@Public`). The frame
- * stream is a human-only channel — the model only perceives a screenshot when it itself calls
- * `observe(screenshot:true)`, so watching here costs no inference.
+ * Cookie-authenticated (no `@Public`), unlike `/mcp`'s bearer tokens: this drives a signed-in
+ * human's view of a server-side browser. The frame stream is a human-only channel — the model
+ * only perceives a screenshot when it itself calls `observe(screenshot:true)`, so watching here
+ * costs no inference.
+ *
+ * Slice 16 — every route is owner-scoped to the signed-in user: you see the status of your OWN
+ * Claude Code, list your OWN sessions, and can only stream a session you opened. The two
+ * identities line up because the MCP bearer token resolves to the same better-auth user as this
+ * cookie.
  */
 @Controller("authoring")
 export class LivePreviewController {
@@ -19,17 +25,17 @@ export class LivePreviewController {
     @Inject(McpStatusService) private readonly mcpStatus: McpStatusService,
   ) {}
 
-  /** Whether Claude Code has recently driven the MCP server (activity-based — the MCP transport is
-   *  stateless HTTP, so this reflects recent requests, not a held connection). */
+  /** Whether THIS user's Claude Code has recently driven the MCP server (activity-based — the
+   *  MCP transport is stateless HTTP, so this reflects recent requests, not a held connection). */
   @Get("mcp-status")
-  status(): McpStatus {
-    return this.mcpStatus.status();
+  status(@CurrentUser() user: AuthUser): McpStatus {
+    return this.mcpStatus.status(user.id);
   }
 
-  /** The active Authoring Sessions a signed-in user can choose to watch. */
+  /** The signed-in user's own active Authoring Sessions, to choose one to watch. */
   @Get("sessions")
-  listSessions(): Promise<AuthoringSessionSummary[]> {
-    return this.authoring.listSessions();
+  listSessions(@CurrentUser() user: AuthUser): Promise<AuthoringSessionSummary[]> {
+    return this.authoring.listSessions(user.id);
   }
 
   /**
@@ -38,8 +44,11 @@ export class LivePreviewController {
    * heartbeat (a `ping` event the client ignores) keeps idle proxies from dropping the stream.
    */
   @Sse("sessions/:id/stream")
-  stream(@Param("id") id: string): Observable<MessageEvent> {
-    const current = this.authoring.latestFrame(id);
+  stream(@Param("id") id: string, @CurrentUser() user: AuthUser): Observable<MessageEvent> {
+    // Owner check up front: a non-owner gets the same not-found as an unknown id, and the
+    // frame/draft filters below are further pinned to sessions this user owns.
+    this.authoring.assertOwner(id, user.id);
+    const current = this.authoring.latestFrame(id, user.id);
     const seed: Observable<MessageEvent> = current ? of({ data: current }) : EMPTY;
     const frames = this.authoring.liveFrames$().pipe(
       filter((f: AuthoringFrame) => f.sessionId === id),
