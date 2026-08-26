@@ -412,6 +412,10 @@ export const repairJobs = pgTable(
     /** Who holds the claim (an `agent:…` principal) and since when; both null while queued. */
     claimedBy: text("claimed_by"),
     claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    /** When this claim lapses (slice 03). A Claim is a lease: past this instant the job is
+     *  swept back to `queued` with its attempt count incremented, so a drainer that died
+     *  mid-repair strands nothing. Null whenever `claimed_by` is. */
+    claimExpiresAt: timestamp("claim_expires_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -711,12 +715,17 @@ CREATE TABLE IF NOT EXISTS repair_jobs (
   attempts integer NOT NULL DEFAULT 0,
   claimed_by text,
   claimed_at timestamptz,
+  claim_expires_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS repair_jobs_queued_uq
   ON repair_jobs (test_id, cluster_key) WHERE status = 'queued';
 CREATE INDEX IF NOT EXISTS repair_jobs_status_idx ON repair_jobs (status, created_at);
+-- A Claim is a lease (slice 03): a claimed job carries the instant its claim lapses, after which
+-- it is swept back to 'queued' with attempts incremented. Added by ALTER so an existing queue
+-- gains the column without the CREATE TABLE above (IF NOT EXISTS) silently skipping it.
+ALTER TABLE repair_jobs ADD COLUMN IF NOT EXISTS claim_expires_at timestamptz;
 -- Repair Agent credentials (Slice 19, slice 02 / ADR-0005): the second issuer on /mcp, for an
 -- unattended drainer that cannot complete the browser OAuth leg. Only the token's SHA-256 is
 -- stored, so the secret is unrecoverable after provisioning; expiry is NOT NULL because ADR-0005

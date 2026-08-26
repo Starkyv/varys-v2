@@ -22,6 +22,7 @@
     "@varys/notify": "workspace:*",
     "@varys/queue": "workspace:*",
     "@varys/recorder": "workspace:*",
+    "@varys/repair-policy": "workspace:*",
     "@varys/review-contract": "workspace:*",
     "@varys/runner": "workspace:*",
     "@varys/step-schema": "workspace:*",

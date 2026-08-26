@@ -1,0 +1,170 @@
+@use "../../styles/mixins" as *;
+
+.card {
+  @include card-flush;
+}
+
+.loading {
+  @include card(var(--space-16));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  padding: var(--space-16) var(--space-20);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.scopeBar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: var(--space-16);
+}
+
+.title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+}
+
+.count {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+  white-space: nowrap;
+}
+
+.spacer {
+  flex: 1;
+}
+
+/* The whole point of the view: a growing unclaimed count is a configuration fact, said in
+   words rather than left as a silently lengthening list. */
+.notice {
+  padding: var(--space-12) var(--space-20);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-subtle);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+.statusHead {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6);
+}
+
+.scroll {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 760px;
+
+  thead tr {
+    background: var(--color-bg-subtle);
+  }
+
+  th {
+    text-align: left;
+    padding: var(--space-10) var(--space-12);
+    @include overline;
+  }
+}
+
+.thLeft {
+  padding-left: var(--space-20) !important;
+}
+.thRight {
+  text-align: right !important;
+  padding-right: var(--space-20) !important;
+}
+
+.row {
+  border-top: 1px solid var(--color-border);
+
+  td {
+    padding: var(--space-12);
+    vertical-align: top;
+  }
+}
+
+.tdTest {
+  padding-left: var(--space-20) !important;
+}
+
+.testLink {
+  display: block;
+  border: 0;
+  padding: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-strong);
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.runLink {
+  display: block;
+  margin-top: 2px;
+  border: 0;
+  padding: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.cluster {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  display: inline-block;
+  max-width: 280px;
+  @include truncate;
+}
+
+.claimer {
+  margin-top: 3px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+
+.attempts {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.when {
+  text-align: right;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.thAction {
+  width: 1%;
+}
+.tdAction {
+  text-align: right;
+  padding-right: var(--space-16) !important;
+  white-space: nowrap;
+}

@@ -21,6 +21,7 @@
     "@varys/judge-engine": "workspace:*",
     "@varys/locator-engine": "workspace:*",
     "@varys/notify": "workspace:*",
+    "@varys/repair-policy": "workspace:*",
     "@varys/step-schema": "workspace:*",
     "@varys/storage-adapter": "workspace:*",
     "@varys/variable-resolver": "workspace:*",

@@ -43,6 +43,12 @@ import {
   type Locator,
   type Page,
 } from "playwright";
+import { enqueueRepairIfAuto, LocatorUnresolvedError } from "./repair-jobs";
+
+// The repair-queue seam: the typed locator failure the runner throws, and the policy-gated
+// enqueue it triggers. Re-exported so the API and its tests can use both without reaching
+// into the runner's internals.
+export { enqueueRepairIfAuto, LocatorUnresolvedError } from "./repair-jobs";
 
 /** Extra Chromium flags from VARYS_BROWSER_ARGS (comma-separated). In containers the
  *  browser runs unprivileged with a small /dev/shm, so set
@@ -276,7 +282,9 @@ export async function performStepAction(
     // Patient resolve (the target may render a few seconds after navigation), with a hover-reveal
     // fallback for controls shown only on `:hover` (card/row edit & delete buttons).
     const target = await resolveWithHoverReveal(page, step.target, actionResolveTimeoutMs());
-    if (!target) throw new Error(`could not locate ${step.type} target`);
+    if (!target) {
+      throw new LocatorUnresolvedError(`could not locate ${step.type} target`, step.target);
+    }
     if (step.type === "type") await target.locator.fill(step.value);
     else if (step.type === "hover") {
       // A hover is AUXILIARY — it reveals content (a menu/popover) for a LATER step; it is not an
@@ -647,9 +655,6 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
       // captures the scrollable page; region clips a rect.
       let actual: Buffer;
       let healed = false;
-      const elementSelector = step.target?.testId
-        ? `[data-testid="${step.target.testId}"]`
-        : (step.target?.cssPath ?? undefined);
       if (step.captureMode === "fullpage") {
         actual = await page.screenshot({ fullPage: true });
       } else if (step.captureMode === "region") {
@@ -659,7 +664,14 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
         if (!step.target) throw new Error(`element checkpoint "${step.name}" has no target`);
         const found = await resolveWithHoverReveal(page, step.target, actionResolveTimeoutMs());
         if (found) {
-          actual = await captureFullElement(page, found.locator, elementSelector);
+          // Measure the scroll-clip deficit against the element that ACTUALLY resolved
+          // (`found.selector` — the matcher's marker, or the author's override), never a
+          // selector re-derived from the recorded fingerprint. A recorded
+          // `data-testid="widget-<uuid>"` names an element that no longer exists on this
+          // run, so the in-page lookup returned null, the deficit read as 0, and a widget
+          // taller than its scroll pane was captured CLIPPED — silently, as a pixel diff
+          // rather than an error, even though the match itself succeeded via other signals.
+          actual = await captureFullElement(page, found.locator, found.selector);
           healed = found.healed;
         } else {
           // The scored matcher couldn't confidently resolve. For a screenshot a wrong
@@ -677,8 +689,9 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
             }
           }
           if (!fallbackShot) {
-            throw new Error(
+            throw new LocatorUnresolvedError(
               `could not locate checkpoint "${step.name}" — no fingerprint signal matched`,
+              step.target,
             );
           }
           actual = fallbackShot;
@@ -864,15 +877,37 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
     // re-running the whole replay and (pre-idempotency) duplicating run_steps/run_results.
     // Only an inability to record the verdict (e.g. the DB is unreachable) propagates, so
     // the job can legitimately retry.
+    // Only an unresolvable locator is repairable (Slice 19). Recorded on the run rather than
+    // re-derived from the message later, so "may a repair touch this?" is answered once, here,
+    // by the code that knows what threw.
+    const locatorFailure = err instanceof LocatorUnresolvedError ? err : null;
     try {
       await db
         .update(runs)
-        .set({ status: "failed", error: message, failedStepIndex, updatedAt: new Date() })
+        .set({
+          status: "failed",
+          error: message,
+          failureKind: locatorFailure ? "locator" : null,
+          failedStepIndex,
+          updatedAt: new Date(),
+        })
         .where(eq(runs.id, runId));
     } catch (finalizeErr) {
       // eslint-disable-next-line no-console
       console.error(`[runner] could not finalize run ${runId} as failed:`, finalizeErr);
       throw finalizeErr;
+    }
+    // Enqueue the repair AFTER the run is durably failed — the queue is a consequence of the
+    // verdict, never a precondition for recording it. Best-effort: a test whose policy is
+    // `auto` but whose job could not be written stays red and repairable by hand, which is the
+    // pre-queue behaviour. Losing the job must never cost us the failure record.
+    if (locatorFailure) {
+      try {
+        await enqueueRepairIfAuto(db, { testId, runId, target: locatorFailure.target });
+      } catch (enqueueErr) {
+        // eslint-disable-next-line no-console
+        console.error(`[runner] could not enqueue a repair job for run ${runId}:`, enqueueErr);
+      }
     }
   } finally {
     // Persist the per-step timeline (every run except a cancelled one, whose run row is gone).

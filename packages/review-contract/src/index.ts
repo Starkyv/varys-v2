@@ -114,7 +114,43 @@ export interface RepairJobSummary {
   /** Who holds the claim, and since when (ISO) — both null while the job is unclaimed. */
   claimedBy: string | null;
   claimedAt: string | null;
+  /** When the current claim lapses (ISO), after which the job returns to the queue. Null while
+   *  unclaimed — a Claim is a lease, so an in-progress job always has one. */
+  claimExpiresAt: string | null;
   createdAt: string;
+}
+
+/**
+ * What a drainer gets back when it claims a job (Slice 19, slice 03): everything needed to start
+ * repairing without a second lookup — the test, the step that broke, and the Brief the repair
+ * will have to be justified against (slice 05).
+ *
+ * `claimExpiresAt` is the deadline, not a hint: past it the job returns to the queue and another
+ * drainer may take it, so a claimer that is still working must report before then.
+ */
+export interface ClaimedRepairJob {
+  jobId: string;
+  kind: RepairJobKind;
+  testId: string;
+  testName: string;
+  /** The run whose failure created the job — null once that run has been purged. */
+  runId: string | null;
+  /** The Brief the test states its intent as (`tests.intent`), or null if it has none. */
+  brief: string | null;
+  clusterKey: string;
+  /** The step that failed, as recorded on the run — null when the run has been purged. */
+  failingStep: {
+    index: number;
+    /** Human description of the step, e.g. `click "Save changes"`. */
+    label: string;
+    /** The run's own error message for it. */
+    error: string | null;
+  } | null;
+  /** Attempts INCLUDING this one, and how many remain before the job is abandoned. */
+  attempts: number;
+  attemptsRemaining: number;
+  claimedAt: string;
+  claimExpiresAt: string;
 }
 
 /**

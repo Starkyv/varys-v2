@@ -113,6 +113,8 @@ const LOCATOR_PATCH_SCHEMA = {
  *    agent per DESIGN.md §4 (approving deletes the previous baseline with no rollback).
  */
 const AGENT_TOOLS: readonly string[] = [
+  "claim_repair_job",
+  "release_repair_job",
   "open_repair_session",
   "close_repair_session",
   "read_test",
@@ -127,6 +129,15 @@ const AGENT_TOOLS: readonly string[] = [
   "type",
   "verify_locator",
 ];
+
+/**
+ * Tools only an AGENT principal may see (slice 03). Draining the queue is a machine's job: a
+ * human who wants a test repaired opens a Repair Session on it directly, and a claim taken by a
+ * person is a claim no drainer can finish and nothing can lapse. Filtered out of `tools/list` and
+ * `tools/call` for a human exactly as `AGENT_TOOLS` filters the other way, so an out-of-scope
+ * tool reads as "Unknown tool" for either principal.
+ */
+const AGENT_ONLY_TOOLS: readonly string[] = ["claim_repair_job", "release_repair_job"];
 
 /**
  * For an agent principal: which arguments of a tool name the TEST it would reach, and whether one
@@ -370,7 +381,9 @@ export class McpController {
    *  self-promote — ADR 0001 / PRD safety). */
   private tools(user: McpPrincipal): McpTool[] {
     const all = this.allTools(user);
-    return user.kind === "agent" ? all.filter((t) => AGENT_TOOLS.includes(t.name)) : all;
+    return user.kind === "agent"
+      ? all.filter((t) => AGENT_TOOLS.includes(t.name))
+      : all.filter((t) => !AGENT_ONLY_TOOLS.includes(t.name));
   }
 
   private allTools(user: McpPrincipal): McpTool[] {
@@ -506,6 +519,26 @@ export class McpController {
             testName: args.testName ? String(args.testName) : undefined,
             limit: args.limit !== undefined ? Number(args.limit) : undefined,
           }),
+      },
+      {
+        name: "claim_repair_job",
+        description:
+          "Take the next queued Repair Job for yourself. Returns the job id, the test, its Brief, the step that failed with the run's error, and `claimExpiresAt` — the instant your claim lapses. Returns `job: null` when the queue is empty, which is the normal answer, not an error: stop and try again on your next drain rather than retrying in a loop.\n\nA claim is exclusive and first-claim-wins: nobody else can see or take this job while your claim holds, and while it holds you may read and edit THAT test (open_repair_session, read_test, edit_test, try_locator, apply_fix) — and no other. It is also a deadline: if you stop reporting before `claimExpiresAt`, the job returns to the queue for someone else and the attempt is counted against it. If you cannot fix it, call release_repair_job rather than going quiet — that returns it immediately. `attemptsRemaining` tells you how many tries the job has left before Varys abandons it.",
+        inputSchema: { type: "object", properties: {} },
+        handler: async () => ({ job: await this.repairJobs.claimNext(user.id) }),
+      },
+      {
+        name: "release_repair_job",
+        description:
+          "Give a job you claimed back to the queue, right away — 'I can't fix this one.' Use it whenever you stop working on a claimed job for any reason other than reporting a repair; it beats letting the claim lapse, which parks the work until the deadline passes. It counts as one attempt either way, so a job you keep claiming and releasing is eventually abandoned rather than draining you forever.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            jobId: { type: "string", description: "The `jobId` claim_repair_job handed you." },
+          },
+          required: ["jobId"],
+        },
+        handler: (args) => this.repairJobs.release(user.id, String(args.jobId ?? "")),
       },
       {
         name: "open_repair_session",

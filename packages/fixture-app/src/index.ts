@@ -21,7 +21,9 @@ export type Variant =
   | "streaming"
   | "editor"
   | "iframe"
-  | "twins";
+  | "twins"
+  | "locatorRepair"
+  | "locatorRepairBroken";
 
 function html(variant: Variant): string {
   // A stable hero with one volatile sub-region (#stamp, top-left) — stampA/stampB
@@ -352,6 +354,50 @@ function html(variant: Variant): string {
   <div><div class="card" onclick="void 0"></div></div>
   <div><div class="card" onclick="void 0"></div></div>
   <button id="new-report" type="button">New report</button>
+</body>
+</html>`;
+  }
+
+  // A REAL locator break, for the repair queue (Slice 19). The pair renders the same page with
+  // one control renamed AND resized AND re-parented, so a fingerprint recorded against
+  // `locatorRepair` genuinely has no signal left to match in `locatorRepairBroken`: the test id
+  // and element id are different, the accessible name is different, the containing section's id
+  // is different, and the box is far enough off that size similarity can't clear the matcher's
+  // identifying-signal floor either. That is what makes the queue test a real hard-fail rather
+  // than a stubbed one — exactly the "element moved/renamed" drift auto-repair exists for.
+  if (variant === "locatorRepair" || variant === "locatorRepairBroken") {
+    const broken = variant === "locatorRepairBroken";
+    const key = broken ? "commit-btn" : "save-btn";
+    const name = broken ? "Commit changes" : "Save changes";
+    const label = broken ? "Commit" : "Save";
+    const panel = broken ? "editor-panel" : "form-panel";
+    const size = broken ? "width: 260px; height: 72px;" : "width: 140px; height: 36px;";
+    return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Varys Fixture — Locator repair</title>
+<style>
+  * { margin: 0; }
+  body { background: #ffffff; font-family: Arial, sans-serif; padding: 24px; }
+  #hero {
+    width: 240px; height: 120px; margin-bottom: 24px;
+    background: #3366cc; color: #ffffff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px;
+  }
+  button {
+    ${size}
+    font-size: 16px;
+    background: #2e7d32; color: #ffffff; border: 0;
+  }
+</style>
+</head>
+<body>
+  <div id="hero">Hero</div>
+  <section id="${panel}">
+    <button id="${key}" data-testid="${key}" role="button" aria-label="${name}">${label}</button>
+  </section>
 </body>
 </html>`;
   }
