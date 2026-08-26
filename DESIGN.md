@@ -310,6 +310,12 @@ replays.** The recording's screenshot is a *target + preview + mask surface*, no
   undrivable to anyone else, your drafts are attributed to you, and the "Claude Code
   connected" indicator reflects only your own client. Supersedes the earlier
   anonymous-MCP decision (which made all of the above global). See ADR 0002.
+- **Machine authentication on `/mcp`:** a **second issuer** alongside the OAuth one — an admin
+  provisions a named, expiring, revocable **Repair Agent** credential for an unattended drainer,
+  which has no browser and so cannot complete the PKCE leg. It is not an exemption: it resolves to
+  a real service principal (`agent:…`), so ownership checks and attribution work unchanged. Its
+  safety is **scope**: the repair/triage toolset only, restricted to tests covered by a job it has
+  claimed, and never an Authoring Session or a baseline approval. See ADR 0005.
 
 ---
 
@@ -358,6 +364,8 @@ replays.** The recording's screenshot is a *target + preview + mask surface*, no
 First slice of making **Test Details** a configurable definition editor (not just
 waits/thresholds). Scope here is the **locator** only; values/URLs/capture-modes/masks/
 checkpoint-rename/step-ordering are later slices. See `prd/locator-editor-live-verify.md`.
+*(Those later fields now exist on the shared config patch and are writable from the repair
+session — see §15; surfacing them in the Test Details UI is still its own slice.)*
 
 ### Editing the locator
 - **Stance:** a recorded locator that is wrong/brittle must be **fixable in place**, never
@@ -402,6 +410,55 @@ checkpoint-rename/step-ordering are later slices. See `prd/locator-editor-live-v
 
 ---
 
+## 15. Repair session — diagnosis and full test editing (Slice 18)
+
+A **Repair Session** re-drives an existing test with the same primitive a Run uses, parks a live
+browser on the step in question, and edits the test from there. It is the counterpart to the
+Authoring Session: authoring records a NEW test into a draft; repair records nothing and writes
+onto an EXISTING one. See `prd/repair-session-full-edit.md`.
+
+- **Stance:** the session that holds the diagnosis, the live page, and the write path should be
+  able to make the change. Restricting it to the locator on the step the run happened to die on
+  sent the user to the web editor to re-derive what Claude already had on screen.
+- **Two write paths, deliberately unequal:**
+  - `apply_fix` — the **locator** on the parked step. Re-resolved against the live page
+    immediately before the write and **refused** when `not-found`/`ambiguous`. This is the one
+    repair that must never be a guess: swapping one broken locator for another is the failure the
+    whole path exists to prevent.
+  - `edit_test` — **everything else**, and any locator on any step. Checkpoint name / capture
+    mode / compare mode / judge prompt / threshold / masks / rect, a typed value, a navigate URL,
+    waits, step insert / remove / reorder, plus the test's name and notes. **Not** verified against
+    a live page — most of what it changes has nothing to resolve — and the tool descriptions,
+    mode guidance and response note all say so: edit a locator here and you must re-park and
+    re-check before calling it fixed.
+- **One seam:** both ride `TestsService.saveConfig` (the `PUT /tests/:id/config` service), so an
+  MCP edit and a hand edit are the same operation — same Zod validation, same optimistic lock, new
+  audited `test_version`, previous version retained. The shared `TestConfigPatch` was widened
+  (screenshot `name`/`captureMode`/`rect`, navigate `url`, whole-fingerprint `recapture`, a
+  test-level `order` permutation; `NewStepInput` gained `hover`, element/region checkpoints, and an
+  optional captured `target`) rather than MCP getting a second definition writer. **No new tables.**
+- **Checkpoint rename moves the baseline.** The name IS the baseline key
+  `(test, checkpoint, env, viewport)` — which is why §14 did locator editing first. A rename
+  migrates this test's `baselines` + `draft_previews` rows onto the new name **in the same
+  transaction as the version insert**; half-applied is worse than rejected.
+- **Capture beats selector.** A step inserted or re-recorded from a page `ref` carries the full
+  multi-signal fingerprint (`@varys/capture`, the same capture an authoring action performs), so it
+  self-heals like a recorded step. A raw `selector` remains available and remains a last resort —
+  nothing falls back behind it.
+- **`goto_step`** re-drives from step 0 on a **fresh page** in the seeded context and parks
+  anywhere in the test **as it stands now**, including this session's own edits. Fresh rather than
+  reusing the dirty page: a parked state that depends on where the session had been before is not a
+  diagnosis.
+- **Indices are the contract.** `read_test` reports the LATEST version's steps with the index each
+  edit is keyed by, and is required before editing; a field aimed at the wrong step type or an
+  out-of-range index is rejected before anything is written, and every edit returns the step list
+  *after* it, because add/remove/reorder shifts everything below.
+- **Unchanged:** promotion stays web-UI-only (ADR 0001), baseline approval stays a human
+  per-environment gate (§4), and a repair session still records no draft — `checkpoint` and
+  `finish_session` are refused.
+
+---
+
 ## ⚠️ Accepted risks (chosen knowingly)
 
 1. **Irreversible baseline approval** — old baselines are deleted on replace; a mistaken approval
@@ -436,3 +493,4 @@ email notifications · "existing tests as examples" for AI.
 | 15 | Author with AI (in-product)           | In-Varys chat + live browser preview; model runs on the user's own Claude subscription via a local Bridge Helper relayed to the web UI | 14 |
 | 16 | Locator editor + live verify          | Edit a step's locator (role/name/text/testId + raw override) in Test Details; verify it against an env via a real, artifact-free partial replay (the matcher Runs use) — §14 | 13 |
 | 17 | Run outcome — test-runner status model | Derived `RunOutcome` (Pending baseline / Baseline / Passed / Failed): a diff or crash is Failed, a first run is Pending baseline (awaiting approval), no Reject; set any actual (incl. a passing one) as baseline; baseline + pending runs excluded from pass-rate — §4 (`prd/run-outcome-baseline-vs-verified.md`) | 1–3, 7 |
+| 18 | Repair session — full test editing    | A repair session can change ANY part of the test it opened (checkpoint name/capture/compare/prompt/threshold/masks, typed values, URLs, waits, insert/remove/reorder, re-capture a locator off the live page) through the same audited config-save the web editor uses; `apply_fix` stays the verified locator path — §15 (`prd/repair-session-full-edit.md`) | 14, 16 |

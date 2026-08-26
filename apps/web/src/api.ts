@@ -1,7 +1,10 @@
 import type {
+  AgentCredentialSummary,
   AuthoringInstructionsView,
   AuthoringSessionSummary,
   BridgeChatState,
+  CreateAgentCredentialRequest,
+  CreatedAgentCredential,
   DashboardView,
   McpStatus,
   DraftSummary,
@@ -21,6 +24,10 @@ import type {
   PromoteDraftBody,
   PersistResult,
   ReEvaluation,
+  RepairJobSummary,
+  RepairPolicy,
+  SetRepairPolicyRequest,
+  SetRepairPolicyResult,
   RunSummary,
   RunView,
   SaveConfigResult,
@@ -231,6 +238,35 @@ export async function sendSlackTest(): Promise<{ ok: true }> {
   return (await res.json()) as { ok: true };
 }
 
+/** Repair Agent credentials — the unattended `/mcp` issuer (ADR-0005). The list never carries a
+ *  token; only `createAgentCredential` returns one, once. */
+export async function fetchAgentCredentials(): Promise<AgentCredentialSummary[]> {
+  const res = await fetch(`${API_BASE}/settings/agent-credentials`);
+  if (!res.ok) throw new Error(`Failed to load agent credentials (${res.status})`);
+  return (await res.json()) as AgentCredentialSummary[];
+}
+
+export async function createAgentCredential(
+  body: CreateAgentCredentialRequest,
+): Promise<CreatedAgentCredential> {
+  const res = await fetch(`${API_BASE}/settings/agent-credentials`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { message?: string };
+    throw new Error(err.message ?? `Failed to create the credential (${res.status})`);
+  }
+  return (await res.json()) as CreatedAgentCredential;
+}
+
+export async function revokeAgentCredential(id: string): Promise<AgentCredentialSummary> {
+  const res = await fetch(`${API_BASE}/settings/agent-credentials/${id}/revoke`, { method: "POST" });
+  if (!res.ok) throw new Error(`Failed to revoke the credential (${res.status})`);
+  return (await res.json()) as AgentCredentialSummary;
+}
+
 /** Whether Claude Code has recently driven the MCP server — an activity-based "connected" proxy
  *  (the MCP transport is stateless HTTP). Slice 15. */
 export async function fetchMcpStatus(): Promise<McpStatus> {
@@ -285,6 +321,8 @@ export interface UpdateTestBody {
   schedule?: TestScheduleInput | null;
   /** Free-form note; `null`/empty clears it. Omit to leave unchanged. */
   notes?: string | null;
+  /** The test's Repair Policy (Slice 19). Omit to leave unchanged. */
+  repairPolicy?: RepairPolicy;
 }
 
 /** Rename / (un)file a test. Throws on a non-2xx response. */
@@ -713,5 +751,66 @@ export async function postDecision(
   );
   if (!res.ok) {
     throw new Error(`Failed to ${action} “${checkpointName}” (${res.status})`);
+  }
+}
+
+/** The server's `message` if it sent one, else a status-code fallback. Nest's exception
+ *  filter puts the reason a request was refused there, and for the repair surfaces that
+ *  reason ("only a run that failed on an unresolvable locator can be repaired") is the
+ *  whole point of the error. */
+async function errorMessage(res: Response, fallback: string): Promise<string> {
+  try {
+    const body = (await res.json()) as { message?: string };
+    if (body?.message) return body.message;
+  } catch {
+    /* non-JSON error body — fall through */
+  }
+  return `${fallback} (${res.status})`;
+}
+
+/**
+ * Set a Repair Policy across a scope — one or more tests, a whole folder (including its
+ * subfolders), or a tag. The server rejects an empty scope rather than applying to everything.
+ * Throws on a non-2xx response.
+ */
+export async function setRepairPolicy(
+  body: SetRepairPolicyRequest,
+): Promise<SetRepairPolicyResult> {
+  const res = await fetch(`${API_BASE}/tests/repair-policy`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(await errorMessage(res, "Failed to set the repair policy"));
+  }
+  return res.json() as Promise<SetRepairPolicyResult>;
+}
+
+/** The repair queue. Open jobs (queued + claimed) by default; `all` includes finished ones. */
+export async function fetchRepairJobs(opts?: { all?: boolean }): Promise<RepairJobSummary[]> {
+  const res = await fetch(`${API_BASE}/repair-jobs${opts?.all ? "?all=1" : ""}`);
+  if (!res.ok) throw new Error(`Failed to load the repair queue (${res.status})`);
+  return res.json() as Promise<RepairJobSummary[]>;
+}
+
+/** Enqueue a repair by hand for a run that failed on an unresolvable locator. */
+export async function enqueueRepairJob(runId: string): Promise<RepairJobSummary> {
+  const res = await fetch(`${API_BASE}/repair-jobs`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ runId }),
+  });
+  if (!res.ok) {
+    throw new Error(await errorMessage(res, "Failed to enqueue the repair"));
+  }
+  return res.json() as Promise<RepairJobSummary>;
+}
+
+/** Cancel a queued (unclaimed) repair job. */
+export async function cancelRepairJob(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/repair-jobs/${id}/cancel`, { method: "POST" });
+  if (!res.ok) {
+    throw new Error(await errorMessage(res, "Failed to cancel the job"));
   }
 }

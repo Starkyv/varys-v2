@@ -68,6 +68,107 @@ export type TestOrigin = "human" | "ai";
 export type TestStatus = "draft" | "active";
 
 /**
+ * A test's Repair Policy (Slice 19) — what happens when a run fails on a locator it cannot
+ * resolve: `manual` (surface it; a human opens a Repair Session — today's behaviour) or `auto`
+ * (enqueue a Repair Job for a cloud Claude to drain). Available to EVERY test regardless of how
+ * it was authored; `manual` is the default, so nothing an author recorded starts changing
+ * behind their back. Mirrors `RepairPolicy` in `@varys/repair-policy`, kept as a plain type
+ * here so the SPA needs no dependency on that package.
+ */
+export type RepairPolicy = "manual" | "auto";
+
+/**
+ * The class of failure that ended a failed run, when it is classified. `locator` — an
+ * unresolvable fingerprint — is the ONLY repairable class; a pixel regression, a failed judge,
+ * a false relation and a crash are all `null`, which is what makes them un-enqueueable rather
+ * than merely un-enqueued.
+ */
+export type RunFailureKind = "locator" | null;
+
+/** A Repair Job's kind: `repair` may change the test; `triage` only diagnoses it (slice 08). */
+export type RepairJobKind = "repair" | "triage";
+
+/**
+ * A Repair Job's lifecycle. `queued` means UNCLAIMED — no drainer has taken it. A project with
+ * no repair agent accumulates these, which ADR-0003 accepts as a consequence of never letting
+ * Varys spend a user's Claude subscription; the queue view's job is to make it visible rather
+ * than mysterious, which is why "queued" and "claimed" are distinct states and not one
+ * "pending".
+ */
+export type RepairJobStatus = "queued" | "claimed" | "done" | "failed" | "cancelled";
+
+/** One row of the repair queue. */
+export interface RepairJobSummary {
+  id: string;
+  /** The test to be repaired, and its name for display without a second lookup. */
+  testId: string;
+  testName: string;
+  /** The run whose failure created the job — null once that run has been purged. */
+  runId: string | null;
+  kind: RepairJobKind;
+  status: RepairJobStatus;
+  /** Stable identity of the broken locator: failures sharing this key share a root cause. */
+  clusterKey: string;
+  /** How many times a drainer has attempted this job. */
+  attempts: number;
+  /** Who holds the claim, and since when (ISO) — both null while the job is unclaimed. */
+  claimedBy: string | null;
+  claimedAt: string | null;
+  createdAt: string;
+}
+
+/**
+ * One Repair Agent credential as the management surface sees it (Slice 19, slice 02 / ADR-0005).
+ * Never carries the token: the secret is shown exactly once, at provisioning.
+ */
+export interface AgentCredentialSummary {
+  id: string;
+  /** Human label — also what a repaired version's attribution reads. */
+  label: string;
+  /** The token's last 4 characters, so two credentials can be told apart. */
+  tokenHint: string;
+  expiresAt: string;
+  revokedAt: string | null;
+  /** When it was last accepted on `/mcp` — null if it has never been used. */
+  lastUsedAt: string | null;
+  /** `active`, or why it would be refused right now. */
+  status: AgentCredentialStatus;
+  createdBy: string;
+  createdAt: string;
+}
+
+/** Whether a credential would be accepted, and if not, why. */
+export type AgentCredentialStatus = "active" | "expired" | "revoked";
+
+/** Provision a credential. Expiry is required by policy, so `expiresInDays` has a default
+ *  rather than an "unlimited" option. */
+export interface CreateAgentCredentialRequest {
+  label: string;
+  expiresInDays?: number;
+}
+
+/** The provisioning response — the ONLY time the token is readable. */
+export interface CreatedAgentCredential {
+  credential: AgentCredentialSummary;
+  /** The bearer token to configure on the drainer. Not retrievable afterwards. */
+  token: string;
+}
+
+/** Set a Repair Policy across a scope: one test, a whole folder (including its subfolders),
+ *  or a tag. Exactly one scope key is expected. */
+export interface SetRepairPolicyRequest {
+  policy: RepairPolicy;
+  testIds?: string[];
+  folderId?: string;
+  tag?: string;
+}
+
+/** How many tests a bulk policy change actually applied to. */
+export interface SetRepairPolicyResult {
+  updated: number;
+}
+
+/**
  * A test's optional cron schedule (Slice 8 — Scheduling). Operational "when-to-run"
  * metadata, NOT part of the versioned definition: setting it writes no new test_version.
  * A row exists ⇒ the test is scheduled; `enabled` gates firing (pause without losing the
@@ -151,6 +252,9 @@ export interface TestSummary {
   /** The test's cron schedule, or null when unscheduled — drives the Tests-list
    *  "scheduled · next run" indicator (Slice 8). */
   schedule: TestScheduleSummary | null;
+  /** What happens when a run of this test fails on an unresolvable locator (Slice 19).
+   *  `manual` for everything until an author opts in. */
+  repairPolicy: RepairPolicy;
 }
 
 /**
@@ -176,8 +280,9 @@ export type EditableWait =
 /** One step as the test-config editor renders it — label + the waits before it, plus
  *  the screenshot-only knobs (threshold). `supportsWaits` is false for navigate. */
 export interface TestConfigStep {
-  /** 0-based position in the definition's step list — the stable key the patch uses
-   *  (steps can be removed via the patch, but never reordered or inserted). */
+  /** 0-based position in the definition's step list — the key a patch addresses this step by.
+   *  Not stable across a patch that adds, removes or reorders steps: re-read the config after
+   *  one of those before keying another edit off an index. */
   index: number;
   type: "navigate" | "click" | "hover" | "type" | "screenshot";
   /** Human label (same `describeStep` vocabulary as the run timeline). */
@@ -186,10 +291,15 @@ export interface TestConfigStep {
   supportsWaits: boolean;
   /** The waits the runner applies before this step (after the test-level defaults). */
   waitBefore: ConfigWait[];
+  /** Navigate-only: the URL this step navigates to (tokenized, e.g. `{{baseUrl}}/reports`);
+   *  null for every other step type. */
+  url: string | null;
   /** Screenshot-only: the checkpoint name; null for non-screenshot steps. */
   checkpointName: string | null;
   /** Screenshot-only: how it's captured. */
   captureMode: CaptureMode | null;
+  /** Screenshot-only, `region` capture: the clipped rectangle. Null otherwise. */
+  rect: Rect | null;
   /** Screenshot-only: how it's compared to its baseline (`pixel` diff or `context` LLM judge);
    *  null for non-screenshot steps. */
   compareMode: CompareMode | null;
@@ -281,7 +391,19 @@ export interface TestConfigView {
   /** True when the test uses `{{baseUrl}}` — the locator-verify control uses this to require
    *  an environment (which supplies the base URL + cookies + localStorage). */
   needsEnvironment: boolean;
+  /** The test's Repair Policy (Slice 19). Shown and edited on test detail; written via the
+   *  structural `PATCH /tests/:id`, so changing it never writes a new test_version. */
+  repairPolicy: RepairPolicy;
 }
+
+/**
+ * A recorded element fingerprint travelling on a patch — the `Fingerprint` of
+ * `@varys/step-schema`, typed loosely here so this contract stays dependency-free (it is
+ * consumed by the SPA, which must not pull in the schema package). Everything assembled from
+ * one is Zod-validated against the real schema server-side before it is stored, so the loose
+ * type never reaches the database.
+ */
+export type RecordedTarget = Record<string, unknown>;
 
 /** A per-step edit in a config patch — keyed by `index`. Omitted fields are left as-is. */
 export interface TestConfigStepPatch {
@@ -289,6 +411,25 @@ export interface TestConfigStepPatch {
   /** Remove this step from the definition entirely. The entry navigation (index 0) can't
    *  be removed; when set, the step's other patch fields are ignored. */
   remove?: boolean;
+  /** Screenshot-only: RENAME the checkpoint. The name is part of the baseline key, so the
+   *  server moves this test's baselines and draft previews onto the new name in the same
+   *  transaction as the version write — a rename re-points the golden rather than orphaning
+   *  it. Names must stay unique within the test. */
+  name?: string;
+  /** Screenshot-only: switch how the checkpoint is CAPTURED. `element` needs a target (the
+   *  step's own, or one supplied via `recapture`), `region` needs a `rect`, `fullpage`
+   *  needs neither. */
+  captureMode?: CaptureMode;
+  /** Screenshot-only: the clipped rectangle for `region` capture. */
+  rect?: Rect;
+  /** Navigate-only: set the URL this step navigates to. Keep the `{{baseUrl}}` token to
+   *  stay environment-agnostic. */
+  url?: string;
+  /** REPLACE this step's element locator with a freshly captured fingerprint, rather than
+   *  patching signals onto the recorded one. This is how a repair session re-records a step
+   *  against the live page when the element changed wholesale. `target` (the signal patch)
+   *  is applied on top of it. */
+  recapture?: RecordedTarget;
   /** Replace this step's authorable (delay/networkIdle) waits; any existing selector
    *  waits are preserved server-side. */
   waitBefore?: EditableWait[];
@@ -312,16 +453,32 @@ export interface TestConfigStepPatch {
   target?: FingerprintPatch;
 }
 
-/** A manually-added step (test-detail "add step").
+/** A manually-added step (test-detail "add step", or an MCP `edit_test` insert).
  *  - `navigate` (URL) and full-page `screenshot` (checkpoint name) need no recorded element.
- *  - `click`/`type` are authored by a raw CSS/Playwright `selector`, stored as the locator's
- *    `selectorOverride`. Unlike a recorded fingerprint there's no multi-signal bundle to fall
- *    back on, so a stale selector fails the step (no self-heal) — prefer recording for these. */
+ *  - `click`/`hover`/`type` are authored EITHER by a raw CSS/Playwright `selector` (stored as
+ *    the locator's `selectorOverride` — no multi-signal bundle behind it, so a stale selector
+ *    fails the step with no self-heal) OR by a `target` captured live off a real element,
+ *    which carries the full fingerprint and self-heals exactly like a recorded step. A repair
+ *    session supplies the latter from a page ref; the web editor supplies the former. */
 export type NewStepInput =
   | { type: "navigate"; url: string }
-  | { type: "screenshot"; name: string }
-  | { type: "click"; selector: string }
-  | { type: "type"; selector: string; value: string };
+  | {
+      type: "screenshot";
+      name: string;
+      /** Defaults to `fullpage` — the only mode authorable without an element. `element`
+       *  requires a `target`/`selector`; `region` requires a `rect`. */
+      captureMode?: CaptureMode;
+      rect?: Rect;
+      selector?: string;
+      target?: RecordedTarget;
+      compareMode?: CompareMode;
+      prompt?: string;
+      threshold?: number;
+      masks?: Rect[];
+    }
+  | { type: "click"; selector?: string; target?: RecordedTarget }
+  | { type: "hover"; selector?: string; target?: RecordedTarget }
+  | { type: "type"; selector?: string; target?: RecordedTarget; value: string };
 
 /** An insertion in a config patch: place a new step relative to an existing step, addressed by
  *  its ORIGINAL 0-based index in the opened definition. Inserting `above` the entry navigation
@@ -344,6 +501,12 @@ export interface TestConfigPatch {
   /** Steps to insert, each anchored to an existing step's original index. Applied after
    *  removals/edits. Omit when nothing is being added. */
   inserts?: TestConfigStepInsert[];
+  /** REORDER the steps: a permutation of the ORIGINAL 0-based indices, in their new order.
+   *  It must list exactly the steps that survive this patch (every original index except the
+   *  ones being removed), and the entry navigation must stay first. Inserts stay anchored to
+   *  the step they name, so they follow it to its new position. Omit to keep the recorded
+   *  order. */
+  order?: number[];
 }
 
 /** Result of a config save: the version number of the newly written test_version. */
@@ -987,6 +1150,13 @@ export interface RunView {
   checkpoints: CheckpointView[];
   /** Optional free-form note on the run, or null when none. Editable from the run-detail page. */
   notes: string | null;
+  /** For a `failed` run: which CLASS of failure ended it, when it is classified (Slice 19).
+   *  `locator` is the only repairable class — the run-detail "repair this" affordance is
+   *  offered on that and nothing else. */
+  failureKind: RunFailureKind;
+  /** The Repair Policy of the run's test, so run detail can say whether a repair would have
+   *  been enqueued automatically or needs enqueuing by hand. */
+  repairPolicy: RepairPolicy;
 }
 
 /**

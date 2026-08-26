@@ -1,16 +1,25 @@
 import type { IncomingHttpHeaders } from "node:http";
-import { Injectable, Logger } from "@nestjs/common";
+import { Inject, Injectable, Logger } from "@nestjs/common";
 import { fromNodeHeaders } from "better-auth/node";
+import { AGENT_TOKEN_PREFIX, AgentCredentialsService } from "../agent-credentials/agent-credentials.service";
 import { getAuth } from "../auth/auth";
 
+/** Which issuer produced a principal (ADR-0005). `user` is a human who completed the browser
+ *  OAuth leg; `agent` is an unattended drainer presenting a Repair Agent credential. The kind is
+ *  what the tool surface is gated on — an agent is scoped, not trusted. */
+export type McpPrincipalKind = "user" | "agent";
+
 /** The identity behind one authenticated `/mcp` request. `id` is the isolation key
- *  (stable per user); `email` is what gets written as a draft's `createdBy`. */
+ *  (stable per user, or `agent:<credentialId>` for a Repair Agent); `email` is what gets written
+ *  as a draft's `createdBy`. */
 export interface McpPrincipal {
   id: string;
   email: string;
   name: string;
-  /** The OAuth client the token was issued to — the user's Claude Code install. */
+  /** The OAuth client the token was issued to — the user's Claude Code install. Empty for an
+   *  agent principal, which has no OAuth client. */
   clientId: string;
+  kind: McpPrincipalKind;
 }
 
 /** Thrown when a `/mcp` request carries no usable bearer token. The controller turns this
@@ -27,10 +36,20 @@ export class McpUnauthorized extends Error {}
  * on every JSON-RPC request. `getMcpSession` validates the token against
  * `oauthAccessToken` (existence + expiry) and yields its `userId`, which we resolve to
  * the user record so callers get an identity, not just an id.
+ *
+ * ADR-0005 adds a SECOND ISSUER here for unattended machine access: a bearer token carrying the
+ * Repair Agent prefix is resolved against `agent_credentials` instead, yielding an `agent:…`
+ * principal. It is not an exemption — it produces a real `McpPrincipal`, so every downstream
+ * ownership check and attribution write is unchanged — and the human OAuth path is untouched by
+ * it, because the token's prefix decides which issuer runs before either is consulted.
  */
 @Injectable()
 export class McpAuthService {
   private readonly log = new Logger(McpAuthService.name);
+
+  constructor(
+    @Inject(AgentCredentialsService) private readonly agentCredentials: AgentCredentialsService,
+  ) {}
 
   /**
    * The authenticated principal for a request, or `McpUnauthorized` if the token is
@@ -38,6 +57,9 @@ export class McpAuthService {
    * unauthenticated `/mcp` request must not be able to see or drive anyone's sessions.
    */
   async principal(headers: IncomingHttpHeaders): Promise<McpPrincipal> {
+    const bearer = readBearer(headers);
+    if (bearer?.startsWith(AGENT_TOKEN_PREFIX)) return this.agentPrincipal(bearer);
+
     const auth = getAuth();
     const token = await auth.api
       .getMcpSession({ headers: fromNodeHeaders(headers) })
@@ -61,6 +83,31 @@ export class McpAuthService {
       email: user.email,
       name: user.name ?? user.email,
       clientId: String(token.clientId ?? ""),
+      kind: "user",
+    };
+  }
+
+  /**
+   * The Repair Agent issuer (ADR-0005). An unknown, malformed, revoked or expired credential
+   * throws the SAME `McpUnauthorized` an unknown OAuth token does — so the 401 an attacker sees
+   * is identical either way and agent tokens cannot be probed for.
+   *
+   * The label lands in `email`/`name` because those are what downstream writes attribute to:
+   * a repaired version reads `Repair Agent "nightly-drainer"`, which is more truthful than
+   * borrowing a human's identity.
+   */
+  private async agentPrincipal(token: string): Promise<McpPrincipal> {
+    const credential = await this.agentCredentials.resolve(token);
+    if (!credential) {
+      throw new McpUnauthorized("Authentication required");
+    }
+    const label = `Repair Agent "${credential.label}"`;
+    return {
+      id: `agent:${credential.id}`,
+      email: label,
+      name: label,
+      clientId: "",
+      kind: "agent",
     };
   }
 
@@ -73,4 +120,14 @@ export class McpAuthService {
     const base = process.env.BETTER_AUTH_URL ?? "http://localhost:5174";
     return `Bearer resource_metadata="${base}/.well-known/oauth-protected-resource"`;
   }
+}
+
+/** The raw bearer token on a request, or null. Only used to pick the ISSUER — each issuer
+ *  validates the token itself. */
+function readBearer(headers: IncomingHttpHeaders): string | null {
+  const raw = headers.authorization; // node lowercases incoming header names
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (!value) return null;
+  const match = /^Bearer\s+(.+)$/i.exec(value.trim());
+  return match ? match[1].trim() : null;
 }

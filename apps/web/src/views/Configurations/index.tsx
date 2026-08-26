@@ -1,4 +1,5 @@
 import {
+  type AgentCredentialSummary,
   DEFAULT_PER_PIXEL_THRESHOLD,
   DEFAULT_RATIO_THRESHOLD,
   type ImageComparisonSettings,
@@ -7,14 +8,28 @@ import {
   type JudgeSettingsView,
   type SlackSettingsView,
 } from "@varys/review-contract";
-import { Badge, Button, ErrorState, Input, Select, Skeleton, Sliders, Switch } from "@varys/ui";
+import {
+  Badge,
+  Button,
+  ErrorState,
+  IconButton,
+  Input,
+  Select,
+  Skeleton,
+  Sliders,
+  Switch,
+  Trash,
+} from "@varys/ui";
 import { useEffect, useState } from "react";
 import { useToast } from "../../context/toast";
 import {
+  useAgentCredentials,
+  useCreateAgentCredential,
   useImageComparisonSettings,
   useJudgeSettings,
   useSaveImageComparisonSettings,
   useSaveJudgeSettings,
+  useRevokeAgentCredential,
   useSaveSlackSettings,
   useSendSlackTest,
   useSlackSettings,
@@ -76,6 +91,7 @@ export function Configurations() {
       <ImageComparisonCard settings={query.data} />
       <JudgeCard />
       <SlackCard />
+      <AgentCredentialsCard />
       <p className={styles.comingSoon}>More settings coming soon — capture and schedules.</p>
     </div>
   );
@@ -634,6 +650,195 @@ function SlackCardForm({ settings }: { settings: SlackSettingsView }) {
         <Button variant="secondary" size="sm" loading={test.isPending || save.isPending} disabled={!canTest} onClick={() => void onTest()}>
           Send test message
         </Button>
+      </div>
+    </section>
+  );
+}
+
+/** Status → badge tone. `expired` and `revoked` are both refusals, but only one of them was
+ *  somebody's decision, so they don't read the same. */
+const CREDENTIAL_TONE: Record<AgentCredentialSummary["status"], "success" | "warning" | "danger"> = {
+  active: "success",
+  expired: "warning",
+  revoked: "danger",
+};
+
+function formatWhen(iso: string | null): string {
+  if (!iso) return "never";
+  return new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+/**
+ * Repair Agent credentials (ADR-0005) — the second issuer on `/mcp`, for an unattended drainer
+ * that cannot complete the browser OAuth leg a human does.
+ *
+ * This surface exists because the credential's safeguard is scope and visibility, not secrecy:
+ * expiry, `last used`, and one-click revocation are what make a long-lived machine secret
+ * acceptable, so they are the whole content of the card rather than a detail behind a link.
+ */
+function AgentCredentialsCard() {
+  const query = useAgentCredentials();
+  const create = useCreateAgentCredential();
+  const revoke = useRevokeAgentCredential();
+  const { toast } = useToast();
+
+  const [label, setLabel] = useState("");
+  const [days, setDays] = useState("30");
+  // The provisioning response is the ONLY time the token is readable, so it is held here until
+  // the admin dismisses it — a reload loses it for good, which the callout says out loud.
+  const [issued, setIssued] = useState<{ label: string; token: string } | null>(null);
+
+  const onCreate = async () => {
+    try {
+      const parsed = Number(days);
+      const result = await create.mutateAsync({
+        label: label.trim(),
+        expiresInDays: Number.isFinite(parsed) && parsed > 0 ? parsed : undefined,
+      });
+      setIssued({ label: result.credential.label, token: result.token });
+      setLabel("");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Could not provision the credential");
+    }
+  };
+
+  const onRevoke = async (credential: AgentCredentialSummary) => {
+    try {
+      await revoke.mutateAsync(credential.id);
+      toast(`Revoked “${credential.label}” — refused from its next request.`);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Could not revoke the credential");
+    }
+  };
+
+  return (
+    <section className={styles.card}>
+      <header className={styles.header}>
+        <span className={styles.headerIcon}>
+          <Sliders size={19} />
+        </span>
+        <div className={styles.headerText}>
+          <h2 className={styles.title}>Repair Agent credentials</h2>
+          <p className={styles.subtitle}>
+            A token an unattended repair agent presents on <code>/mcp</code> instead of signing in
+            through a browser. It can only work on repair jobs it has claimed — it cannot author a
+            new test, and it can never approve a baseline. Revoke one and it is refused from its
+            very next request.
+          </p>
+        </div>
+      </header>
+
+      {issued && (
+        <div className={styles.tokenCallout}>
+          <div className={styles.settingHead}>
+            <span className={styles.settingTitle}>Token for “{issued.label}”</span>
+            <Badge tone="warning" size="sm">
+              shown once
+            </Badge>
+          </div>
+          <p className={styles.settingDesc}>
+            Copy it into the agent’s configuration now. It is stored hashed, so this is the only
+            time it can be read — leaving this page loses it and you’ll need a new credential.
+          </p>
+          <code className={styles.tokenValue}>{issued.token}</code>
+          <div className={styles.credActions}>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                void navigator.clipboard?.writeText(issued.token);
+                toast("Token copied to the clipboard.");
+              }}
+            >
+              Copy token
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setIssued(null)}>
+              Done
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <div className={styles.setting}>
+        <div className={styles.settingHead}>
+          <span className={styles.settingTitle}>Provision a credential</span>
+        </div>
+        <p className={styles.settingDesc}>
+          A label (it becomes the attribution on anything this agent repairs) and how many days it
+          should live for.
+        </p>
+        <div className={styles.createRow}>
+          <Input
+            value={label}
+            placeholder="e.g. nightly-drainer"
+            aria-label="Credential label"
+            onChange={(e) => setLabel(e.target.value)}
+          />
+          <Input
+            value={days}
+            type="number"
+            min={1}
+            max={365}
+            aria-label="Expires in days"
+            onChange={(e) => setDays(e.target.value)}
+          />
+          <Button
+            variant="primary"
+            size="md"
+            loading={create.isPending}
+            disabled={!label.trim()}
+            onClick={() => void onCreate()}
+          >
+            Provision
+          </Button>
+        </div>
+      </div>
+
+      <div className={styles.setting}>
+        <div className={styles.settingHead}>
+          <span className={styles.settingTitle}>Provisioned credentials</span>
+        </div>
+        {query.isLoading && <Skeleton height={72} radius="var(--radius-lg)" />}
+        {query.isError && (
+          <ErrorState
+            title="Couldn’t load the credentials"
+            description="Fetching the Repair Agent credentials failed."
+            onRetry={() => query.refetch()}
+          />
+        )}
+        {query.data?.length === 0 && (
+          <p className={styles.settingDesc}>
+            None yet — no unattended agent can reach <code>/mcp</code>.
+          </p>
+        )}
+        {query.data?.map((c) => (
+          <div key={c.id} className={styles.credRow}>
+            <div className={styles.credMain}>
+              <span className={styles.credLabel}>
+                {c.label} <code>…{c.tokenHint}</code>
+              </span>
+              <span className={styles.credMeta}>
+                {c.status === "revoked"
+                  ? `revoked ${formatWhen(c.revokedAt)}`
+                  : `expires ${formatWhen(c.expiresAt)}`}{" "}
+                · last used {formatWhen(c.lastUsedAt)} · created by {c.createdBy}
+              </span>
+            </div>
+            <Badge tone={CREDENTIAL_TONE[c.status]} size="sm">
+              {c.status}
+            </Badge>
+            {c.status !== "revoked" && (
+              <IconButton
+                icon={<Trash size={16} />}
+                label={`Revoke ${c.label}`}
+                variant="ghost"
+                size="sm"
+                disabled={revoke.isPending}
+                onClick={() => void onRevoke(c)}
+              />
+            )}
+          </div>
+        ))}
       </div>
     </section>
   );

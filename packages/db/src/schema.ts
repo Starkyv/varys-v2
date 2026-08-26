@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   type AnyPgColumn,
   boolean,
@@ -49,6 +50,12 @@ export const tests = pgTable("tests", {
   /** Optional free-form note on the test (organization/annotation only — never part of
    *  the versioned definition). Edited inline on the test-detail page. */
   notes: text("notes"),
+  /** Repair Policy (Slice 19): what happens when a run fails on a locator it cannot resolve —
+   *  `manual` (surface it; a human opens a Repair Session — today's behaviour) or `auto`
+   *  (enqueue a Repair Job). Defaults to `manual` for EVERY test, however it was authored, so
+   *  nothing an author recorded starts changing behind their back. Operational metadata, like
+   *  `folder_id` / `status`: setting it never writes a test_version. */
+  repairPolicy: text("repair_policy").notNull().default("manual"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -160,6 +167,12 @@ export const runs = pgTable("runs", {
   status: text("status").notNull().default("queued"),
   /** Why a `failed` run failed (the replay error) — null otherwise. */
   error: text("error"),
+  /** What CLASS of failure ended the run, when it is classified (Slice 19): `locator` = a
+   *  fingerprint the matcher could not resolve, which is the only class auto-repair may touch.
+   *  Null for every other failure (a pixel regression, a failed judge, a crash, a timeout) and
+   *  for runs that finished before this column existed. Recorded rather than inferred from the
+   *  error text, because "is this repairable?" is a safety decision. */
+  failureKind: text("failure_kind"),
   /** 0-based index of the step that failed (null when it failed before any step). */
   failedStepIndex: integer("failed_step_index"),
   /** Who triggered the run (email), or "ai"/sentinel for non-human triggers. A suite
@@ -358,6 +371,86 @@ export const appSettings = pgTable("app_settings", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+/** A Repair Job's kind: `repair` may change the test; `triage` (slice 08) only diagnoses. */
+export type RepairJobKind = "repair" | "triage";
+/** A Repair Job's lifecycle. `queued` is UNCLAIMED — a project with no drainer accumulates
+ *  these, which ADR-0003 accepts as long as the queue view makes it visible. */
+export type RepairJobStatus = "queued" | "claimed" | "done" | "failed" | "cancelled";
+
+/**
+ * The repair queue (Slice 19) — Varys enqueues, a cloud Claude drains (ADR-0003). One row is one
+ * request to fix one broken test, created at the point in a run where an unresolvable locator is
+ * ALREADY detected (never by a separate scanner), and only when that test's Repair Policy is
+ * `auto` — or when a human enqueues it by hand from a failed run.
+ *
+ * `cluster_key` is written now even though clustering *behaviour* is slice 07, so there is
+ * nothing to backfill. Claiming under a lease is slice 03; `claimed_by`/`claimed_at` exist here
+ * because the queue view's whole job is to tell UNCLAIMED from in-progress.
+ *
+ * A partial unique index over (test_id, cluster_key) WHERE status = 'queued' is what makes "one
+ * failure, one job" true: the same test failing the same locator on ten nightly runs leaves one
+ * queued job, not ten. It deliberately does not cover finished jobs, so the same break can be
+ * re-enqueued after a repair was completed or cancelled.
+ */
+export const repairJobs = pgTable(
+  "repair_jobs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    /** The test to repair. Dies with its test (CASCADE) — a deleted test has nothing to fix. */
+    testId: uuid("test_id")
+      .notNull()
+      .references(() => tests.id, { onDelete: "cascade" }),
+    /** The run whose failure created the job. SET NULL so purging a run keeps the job's audit
+     *  trail rather than deleting the record of why a test was edited. */
+    runId: uuid("run_id").references(() => runs.id, { onDelete: "set null" }),
+    kind: text("kind").notNull().default("repair"),
+    status: text("status").notNull().default("queued"),
+    /** Stable identity of the broken locator — `deriveClusterKey` of `@varys/repair-policy`. */
+    clusterKey: text("cluster_key").notNull(),
+    /** How many times a drainer has attempted this job — the attempt cap's counter (slice 03). */
+    attempts: integer("attempts").notNull().default(0),
+    /** Who holds the claim (an `agent:…` principal) and since when; both null while queued. */
+    claimedBy: text("claimed_by"),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    openUq: uniqueIndex("repair_jobs_queued_uq")
+      .on(t.testId, t.clusterKey)
+      .where(sql`status = 'queued'`),
+  }),
+);
+
+/**
+ * A Repair Agent credential (Slice 19, slice 02 — ADR-0005): the long-lived secret an unattended
+ * drainer presents on `/mcp` in place of the browser OAuth leg a human completes.
+ *
+ * The row stores only the SHA-256 of the token — provisioning is the one and only time the secret
+ * exists in readable form, so a leaked database yields nothing presentable. `tokenHint` is the
+ * token's last four characters, which is what lets an admin tell two credentials apart in the
+ * management surface without the secret being recoverable.
+ *
+ * `expiresAt` is mandatory (ADR-0005 makes expiry load-bearing, not optional), `revokedAt` is the
+ * one-click kill switch, and `lastUsedAt` is the only signal an admin has that a credential is
+ * still in use — which is why it is written on every successful presentation.
+ */
+export const agentCredentials = pgTable("agent_credentials", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  /** Human label — also the ATTRIBUTION a repaired version carries (`Repair Agent "<label>"`). */
+  label: text("label").notNull(),
+  /** SHA-256 hex of the presented token. Unique, and the only stored form of the secret. */
+  tokenHash: text("token_hash").notNull().unique(),
+  /** Last 4 characters of the token, for recognition in the management surface. */
+  tokenHint: text("token_hint").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+  /** The admin who provisioned it (email) — provisioning is an audited human act. */
+  createdBy: text("created_by").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const schema = {
   folders,
   tests,
@@ -375,6 +468,8 @@ export const schema = {
   draftPreviews,
   testSchedules,
   appSettings,
+  repairJobs,
+  agentCredentials,
 };
 
 /**
@@ -414,6 +509,9 @@ ALTER TABLE tests ADD COLUMN IF NOT EXISTS created_by text;
 ALTER TABLE tests ADD COLUMN IF NOT EXISTS promoted_by text;
 ALTER TABLE tests ADD COLUMN IF NOT EXISTS promoted_at timestamptz;
 ALTER TABLE tests ADD COLUMN IF NOT EXISTS notes text;
+-- Repair Policy (Slice 19). Existing rows default to 'manual' — nothing an author already
+-- recorded starts self-editing when this column appears.
+ALTER TABLE tests ADD COLUMN IF NOT EXISTS repair_policy text NOT NULL DEFAULT 'manual';
 CREATE TABLE IF NOT EXISTS test_tags (
   test_id uuid NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
   tag text NOT NULL,
@@ -474,6 +572,10 @@ ALTER TABLE runs ADD COLUMN IF NOT EXISTS trace_artifact_key text;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS triggered_by text;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS trigger_source text;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS notes text;
+-- Which CLASS of failure ended a failed run (Slice 19): 'locator' = an unresolvable
+-- fingerprint (the only repairable class), NULL for everything else. Recorded by the runner,
+-- never inferred from the error text.
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS failure_kind text;
 CREATE TABLE IF NOT EXISTS run_results (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   run_id uuid NOT NULL REFERENCES runs(id),
@@ -594,6 +696,42 @@ DELETE FROM run_results a USING run_results b
   WHERE a.run_id = b.run_id AND a.checkpoint_name = b.checkpoint_name
     AND (a.created_at < b.created_at OR (a.created_at = b.created_at AND a.id < b.id));
 CREATE UNIQUE INDEX IF NOT EXISTS run_results_run_checkpoint_uq ON run_results (run_id, checkpoint_name);
+-- The repair queue (Slice 19). Varys enqueues on an unresolvable-locator failure under
+-- an 'auto' Repair Policy; a cloud Claude drains it (ADR-0003). The partial unique index is what
+-- makes "one failure, one job" true — ten nightly runs failing the same locator on the same
+-- test leave ONE queued job. It covers only queued rows, so the same break can be re-enqueued
+-- once a repair finished or was cancelled.
+CREATE TABLE IF NOT EXISTS repair_jobs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  test_id uuid NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+  run_id uuid REFERENCES runs(id) ON DELETE SET NULL,
+  kind text NOT NULL DEFAULT 'repair',
+  status text NOT NULL DEFAULT 'queued',
+  cluster_key text NOT NULL,
+  attempts integer NOT NULL DEFAULT 0,
+  claimed_by text,
+  claimed_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS repair_jobs_queued_uq
+  ON repair_jobs (test_id, cluster_key) WHERE status = 'queued';
+CREATE INDEX IF NOT EXISTS repair_jobs_status_idx ON repair_jobs (status, created_at);
+-- Repair Agent credentials (Slice 19, slice 02 / ADR-0005): the second issuer on /mcp, for an
+-- unattended drainer that cannot complete the browser OAuth leg. Only the token's SHA-256 is
+-- stored, so the secret is unrecoverable after provisioning; expiry is NOT NULL because ADR-0005
+-- treats short expiry, visible last_used_at and one-click revocation as the safeguard.
+CREATE TABLE IF NOT EXISTS agent_credentials (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  label text NOT NULL,
+  token_hash text NOT NULL UNIQUE,
+  token_hint text NOT NULL,
+  expires_at timestamptz NOT NULL,
+  revoked_at timestamptz,
+  last_used_at timestamptz,
+  created_by text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
 -- Generic key/value store for runtime-editable app settings (no redeploy). First user:
 -- the AI authoring instructions, edited from the Author page.
 CREATE TABLE IF NOT EXISTS app_settings (

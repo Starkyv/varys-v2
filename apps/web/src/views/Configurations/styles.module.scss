@@ -243,3 +243,59 @@
   font-size: var(--font-size-xs);
   color: var(--color-text-subtle);
 }
+
+/* Repair Agent credentials (ADR-0005) */
+.createRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 120px auto;
+  gap: var(--space-8);
+  margin-top: var(--space-12);
+}
+.credRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  padding: var(--space-12) 0;
+
+  & + & {
+    border-top: 1px solid var(--color-border);
+  }
+}
+.credMain {
+  flex: 1;
+  min-width: 0;
+}
+.credLabel {
+  display: block;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-strong);
+}
+.credMeta {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+.credActions {
+  display: flex;
+  gap: var(--space-8);
+  margin-top: var(--space-12);
+}
+.tokenCallout {
+  margin-top: var(--space-16);
+  padding: var(--space-16);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-subtle);
+}
+.tokenValue {
+  display: block;
+  margin-top: var(--space-12);
+  padding: var(--space-12);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-inset);
+  font-size: var(--font-size-xs);
+  word-break: break-all;
+  color: var(--color-text-strong);
+}

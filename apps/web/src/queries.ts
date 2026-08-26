@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
+  CreateAgentCredentialRequest,
   ImageComparisonSettings,
+  SetRepairPolicyRequest,
   JudgeSettingsPatch,
   LocatorVerifyRequest,
   PromoteDraftBody,
@@ -11,6 +13,10 @@ import type {
 } from "@varys/review-contract";
 import {
   approveAllInRun,
+  createAgentCredential,
+  fetchAgentCredentials,
+  revokeAgentCredential,
+  cancelRepairJob,
   type CreateEnvironmentBody,
   createEnvironment,
   createFolder,
@@ -22,6 +28,7 @@ import {
   deleteSuite,
   deleteTest,
   discardDraft,
+  enqueueRepairJob,
   fetchAuthoringInstructions,
   fetchAuthoringSessions,
   fetchImageComparisonSettings,
@@ -40,6 +47,7 @@ import {
   fetchEnvironments,
   fetchFolders,
   fetchNeedsReview,
+  fetchRepairJobs,
   fetchRuns,
   fetchRunView,
   fetchSuite,
@@ -56,6 +64,7 @@ import {
   renameFolder,
   runTest,
   saveTestConfig,
+  setRepairPolicy,
   triggerSuiteRun,
   updateSuite,
   type UpdateEnvironmentBody,
@@ -290,6 +299,36 @@ export function useSaveSlackSettings() {
 /** Post a test message to the configured channel (uses stored credentials). */
 export function useSendSlackTest() {
   return useMutation({ mutationFn: () => sendSlackTest() });
+}
+
+export function agentCredentialsQueryKey() {
+  return ["settings", "agent-credentials"] as const;
+}
+
+/** The provisioned Repair Agent credentials (ADR-0005) — label, expiry, last use, status. */
+export function useAgentCredentials() {
+  return useQuery({
+    queryKey: agentCredentialsQueryKey(),
+    queryFn: fetchAgentCredentials,
+  });
+}
+
+/** Provision one. The token comes back exactly once — the caller must show it immediately. */
+export function useCreateAgentCredential() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CreateAgentCredentialRequest) => createAgentCredential(body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: agentCredentialsQueryKey() }),
+  });
+}
+
+/** Revoke one — effective on the credential's very next `/mcp` request. */
+export function useRevokeAgentCredential() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => revokeAgentCredential(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: agentCredentialsQueryKey() }),
+  });
 }
 
 export function draftQueryKey(id: string) {
@@ -675,6 +714,57 @@ export function useDecision(runId: string) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: runQueryKey(runId) });
       qc.invalidateQueries({ queryKey: needsReviewQueryKey() });
+    },
+  });
+}
+
+/** Key for the repair queue; invalidated whenever a job is enqueued or cancelled. */
+export function repairJobsQueryKey(all: boolean) {
+  return ["repair-jobs", all ? "all" : "open"] as const;
+}
+
+/** The repair queue. Polled, because the interesting change is one a DRAINER makes elsewhere:
+ *  a job going from unclaimed to claimed is exactly what this view exists to show. */
+export function useRepairJobs(opts?: { all?: boolean }) {
+  const all = opts?.all ?? false;
+  return useQuery({
+    queryKey: repairJobsQueryKey(all),
+    queryFn: () => fetchRepairJobs({ all }),
+    refetchInterval: 5000,
+  });
+}
+
+/** Enqueue a repair by hand from a failed run (a test whose policy is `manual`). */
+export function useEnqueueRepairJob() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (runId: string) => enqueueRepairJob(runId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["repair-jobs"] });
+    },
+  });
+}
+
+/** Cancel a queued repair job. */
+export function useCancelRepairJob() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => cancelRepairJob(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["repair-jobs"] });
+    },
+  });
+}
+
+/** Set a Repair Policy in bulk (a folder or a tag). Refreshes the tests list and every open
+ *  test-config view, since the policy shows on test detail too. */
+export function useSetRepairPolicy() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: SetRepairPolicyRequest) => setRepairPolicy(body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: testsQueryKey() });
+      qc.invalidateQueries({ queryKey: ["test-config"] });
     },
   });
 }

@@ -1,8 +1,13 @@
 import type { IncomingHttpHeaders } from "node:http";
 import { Body, Controller, Get, Headers, HttpException, Inject, Post, Res } from "@nestjs/common";
 import { Public } from "../auth/public.decorator";
+import { RepairJobsService } from "../repair-jobs/repair-jobs.service";
 import { AuthoringInstructionsService } from "./authoring-instructions.service";
-import { AuthoringSessionService, type CheckpointInput } from "./authoring-session.service";
+import {
+  AuthoringSessionService,
+  type CheckpointInput,
+  type TestEditInput,
+} from "./authoring-session.service";
 import { McpAuthService, type McpPrincipal, McpUnauthorized } from "./mcp-auth.service";
 import { McpStatusService } from "./mcp-status.service";
 
@@ -56,6 +61,89 @@ interface McpTool {
 
 class MethodNotFound extends Error {}
 
+/** A rectangle in screenshot-pixel space — a checkpoint's region or one of its masks. */
+const RECT_SCHEMA = {
+  type: "object",
+  properties: {
+    x: { type: "number" },
+    y: { type: "number" },
+    width: { type: "number" },
+    height: { type: "number" },
+  },
+  required: ["x", "y", "width", "height"],
+} as const;
+
+/** The waits an editor can author. Recorded `selector` waits are preserved server-side and
+ *  removed by position via `dropRecordedWaits`, never rewritten here. */
+const EDITABLE_WAIT_SCHEMA = {
+  type: "object",
+  properties: {
+    kind: { type: "string", enum: ["delay", "networkIdle", "streamIdle"] },
+    ms: { type: "number", description: "For kind=delay: milliseconds." },
+    timeoutMs: { type: "number" },
+    quietMs: { type: "number", description: "For kind=streamIdle: mutation-free window that counts as settled." },
+  },
+  required: ["kind"],
+} as const;
+
+/** The locator signals an edit can set (empty string clears one); everything else the recorder
+ *  captured is preserved, so an edit never collapses the bundle to a single selector. */
+const LOCATOR_PATCH_SCHEMA = {
+  type: "object",
+  properties: {
+    testId: { type: "string", description: "The target's data-testid — the strongest, self-healing signal." },
+    selectorOverride: { type: "string", description: "A raw CSS/Playwright selector, tried first and used as-is when it matches exactly one element." },
+    role: { type: "string" },
+    accessibleName: { type: "string" },
+    text: { type: "string" },
+  },
+} as const;
+
+/**
+ * The toolset a Repair Agent principal may reach (ADR-0005 / slice 02): the repair path plus the
+ * perception and interaction tools needed to investigate a parked page. Everything else is absent
+ * from `tools/list` AND unresolvable in `tools/call`, so this is a capability boundary, not a hint.
+ *
+ * Three deliberate exclusions:
+ *  - `open_session`, `checkpoint`, `finish_session`, `discard_session` — authoring a NEW test is a
+ *    human act; an agent that could open an Authoring Session could invent tests unattended.
+ *  - `failed_runs` — a cross-test read. A drainer is handed its work by the job it claimed; it has
+ *    no business browsing every other test's failures.
+ *  - baseline approval — not an MCP tool at anyone's disposal, and permanently off-limits to an
+ *    agent per DESIGN.md §4 (approving deletes the previous baseline with no rollback).
+ */
+const AGENT_TOOLS: readonly string[] = [
+  "open_repair_session",
+  "close_repair_session",
+  "read_test",
+  "edit_test",
+  "try_locator",
+  "apply_fix",
+  "goto_step",
+  "observe",
+  "click",
+  "hover",
+  "navigate",
+  "type",
+  "verify_locator",
+];
+
+/**
+ * For an agent principal: which arguments of a tool name the TEST it would reach, and whether one
+ * is mandatory. Declared per tool rather than sniffed off the argument names, because `testId` on
+ * `try_locator`/`apply_fix` is the target's *data-testid* — treating that as a Varys test id would
+ * check the scope of the wrong thing entirely.
+ *
+ * A tool listed here with none of its id arguments supplied is addressing an open SESSION instead;
+ * that is already covered, because the session could only have been opened through a scope check
+ * and `assertOwner` refuses a session this principal does not own.
+ */
+const AGENT_TEST_SCOPE: Record<string, { args: readonly ("testId" | "runId")[]; required: boolean }> = {
+  open_repair_session: { args: ["runId", "testId"], required: true },
+  read_test: { args: ["testId"], required: false },
+  edit_test: { args: ["testId"], required: false },
+};
+
 // `@Public()` exempts this route from the COOKIE guard only — Claude Code is a separate
 // process with no browser cookie. It is not unauthenticated: `rpc` below requires an OAuth
 // bearer token on every request and 401s without one (Slice 16, superseding the earlier
@@ -68,6 +156,7 @@ export class McpController {
     @Inject(McpStatusService) private readonly mcpStatus: McpStatusService,
     @Inject(McpAuthService) private readonly mcpAuth: McpAuthService,
     @Inject(AuthoringInstructionsService) private readonly instructions: AuthoringInstructionsService,
+    @Inject(RepairJobsService) private readonly repairJobs: RepairJobsService,
   ) {}
 
   // Streamable HTTP: this server doesn't push, so the optional server→client SSE stream
@@ -192,6 +281,8 @@ export class McpController {
     const name = params.name as string | undefined;
     const tool = this.tools(user).find((t) => t.name === name);
     if (!tool) {
+      // For an agent principal, a tool outside its scope is reported exactly like a tool that
+      // does not exist — the same reasoning as the not-found on another user's session id.
       return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
     }
     const args = (params.arguments as Record<string, unknown>) ?? {};
@@ -201,6 +292,11 @@ export class McpController {
       // a session id leaked or guessed from another user resolves as not-found.
       if (args.sessionId !== undefined) {
         this.authoring.assertOwner(String(args.sessionId), user.id);
+      }
+      // The scope half of ADR-0005: a Repair Agent reaches only the tests covered by a job it
+      // has claimed. A human principal is untouched by this.
+      if (user.kind === "agent") {
+        await this.assertAgentScope(name ?? "", args, user);
       }
       const result = await tool.handler(args);
       // Surface a screenshot (`observe` with screenshot=true) as a viewable MCP image block
@@ -225,10 +321,59 @@ export class McpController {
     }
   }
 
-  /** The MCP tool surface. Slice 2 = open/finish; Slices 3/4 add perception, interaction,
-   *  and checkpoint tools to this list. Promotion is deliberately NOT a tool (web-UI only;
-   *  Claude must not be able to self-promote — ADR 0001 / PRD safety). */
+  /**
+   * Refuse a Repair Agent that is reaching for a test no claimed job of its own covers
+   * (ADR-0005). Thrown as a plain error, so it reaches the caller as an `isError` tool result
+   * with a message a drainer can act on.
+   *
+   * Nothing writes `claimed_by` until slice 03, so today every test-addressing call from an
+   * agent lands here — which is the refusal this slice is specced to produce, from the real
+   * check rather than a stub that later has to be found and removed.
+   */
+  private async assertAgentScope(
+    name: string,
+    args: Record<string, unknown>,
+    user: McpPrincipal,
+  ): Promise<void> {
+    const scope = AGENT_TEST_SCOPE[name];
+    if (!scope) return; // a session-only tool: `assertOwner` above is the whole check
+
+    const ids: string[] = [];
+    for (const arg of scope.args) {
+      const raw = args[arg];
+      if (raw === undefined || raw === null || String(raw) === "") continue;
+      const testId = arg === "runId" ? await this.repairJobs.testIdForRun(String(raw)) : String(raw);
+      // An unresolvable runId is left to the tool's own not-found; there is no test to scope to.
+      if (testId) ids.push(testId);
+    }
+    if (ids.length === 0) {
+      if (!scope.required) return;
+      throw new Error(
+        `${user.name} must name the test it has claimed a repair job for — pass the job's runId or testId.`,
+      );
+    }
+    for (const testId of ids) {
+      if (!(await this.repairJobs.hasClaimOn(user.id, testId))) {
+        throw new Error(
+          `${user.name} has no claimed repair job for test ${testId}. Claim the job for this test first — an agent credential may only touch tests covered by a claim it holds.`,
+        );
+      }
+    }
+  }
+
+  /** The MCP tool surface for this principal. A human sees all of it; a Repair Agent sees only
+   *  `AGENT_TOOLS` (ADR-0005) — the same filter `tools/list` and `tools/call` read, so a tool an
+   *  agent cannot list is also a tool it cannot call.
+   *
+   *  Slice 2 = open/finish; Slices 3/4 add perception, interaction, and checkpoint tools to this
+   *  list. Promotion is deliberately NOT a tool (web-UI only; Claude must not be able to
+   *  self-promote — ADR 0001 / PRD safety). */
   private tools(user: McpPrincipal): McpTool[] {
+    const all = this.allTools(user);
+    return user.kind === "agent" ? all.filter((t) => AGENT_TOOLS.includes(t.name)) : all;
+  }
+
+  private allTools(user: McpPrincipal): McpTool[] {
     const a = this.authoring;
     return [
       {
@@ -365,7 +510,7 @@ export class McpController {
       {
         name: "open_repair_session",
         description:
-          "Diagnose a failed test by re-driving it yourself. Takes either a `runId` (a specific failure) or a `testId` (that test's most recent failure — use this when the user names a test rather than a run). Launches a browser, seeds the run's environment, replays the test's OWN steps (the exact version that ran, with the same drive a Run uses) up to the step that failed, and PARKS there — so the page the failing step faced is live in front of you. Returns why it failed: the run's error, what the recorded locator was looking for (`recordedLocator`), the matcher's verdict on that locator against the page as it is now (`diagnosis`), every element actually on the page (`nodes`, with testId/id/duplicate flags), and a screenshot. Then investigate with observe/hover, and test fixes with try_locator. IMPORTANT: a repair session records no new test — checkpoint and finish_session are refused. What it CAN do is fix the existing one: once try_locator confirms a candidate, apply_fix writes it to the test as a new version. Always verify with try_locator before applying, and always tell the user what you changed and the new version number. Read `replay.note` first — if the drive broke EARLIER than the run did, the step you were sent to was never reached and you must diagnose the earlier step instead (re-open with that stepIndex). Close with close_repair_session when done.",
+          "Open an existing test for diagnosis and editing, by re-driving it yourself. Takes either a `runId` (a specific failure) or a `testId` (that test's most recent failure — use this when the user names a test rather than a run). Launches a browser, seeds the run's environment, replays the test's OWN steps (the exact version that ran, with the same drive a Run uses) up to the step that failed, and PARKS there — so the page the failing step faced is live in front of you. Returns why it failed: the run's error, what the recorded locator was looking for (`recordedLocator`), the matcher's verdict on that locator against the page as it is now (`diagnosis`), every element actually on the page (`nodes`, with testId/id/duplicate flags), and a screenshot. Investigate with observe/hover, move to any other step with goto_step, and test candidate locators with try_locator.\n\nThis session can change the test in any way the user asks. A broken locator goes through try_locator → apply_fix, which re-checks the candidate against the live page and refuses one that does not resolve. Everything else — a checkpoint's name, capture mode, compare mode, judge prompt, threshold or masks, a typed value, a navigate URL, waits, adding/removing/reordering steps, re-capturing a step's element off the live page — goes through read_test → edit_test. Both write a new audited version of the test with the previous one retained; always tell the user what you changed and the new version number. What it does NOT do is record a new test: `checkpoint` and `finish_session` are refused, because there is no draft here.\n\nRead `replay.note` first — if the drive broke EARLIER than the run did, the step you were sent to was never reached, so deal with the earlier step first (goto_step with that index). Close with close_repair_session when done.",
         inputSchema: {
           type: "object",
           properties: {
@@ -426,7 +571,7 @@ export class McpController {
       {
         name: "apply_fix",
         description:
-          "WRITE the fix onto the test. Applies your locator patch to the step under repair and saves it as a new test version — the same operation, validation and audit trail as editing it by hand in the web app. Two things are enforced before anything is written: the candidate is re-verified against the live page (a patch that is not-found or ambiguous is REFUSED — this can only ever replace a broken locator with one that demonstrably resolves), and the step at that index must still be the step you diagnosed (if the test changed since the session opened, the write is refused rather than landing on the wrong step). The previous version is retained, so this appends rather than overwrites. Use try_locator to find the right patch FIRST — apply the one that came back `recommend: true`. A patch that resolves on a weak signal is still written, but comes back with a `warning`: report that caveat instead of declaring the test fixed. Tell the user the new version number afterwards.",
+          "WRITE the fix onto the test. Applies your locator patch to the step under repair and saves it as a new test version — the same operation, validation and audit trail as editing it by hand in the web app. Two things are enforced before anything is written: the candidate is re-verified against the live page (a patch that is not-found or ambiguous is REFUSED — this can only ever replace a broken locator with one that demonstrably resolves), and the step at that index must still be the step you diagnosed (if the test changed since the session opened, the write is refused rather than landing on the wrong step). The previous version is retained, so this appends rather than overwrites. Use try_locator to find the right patch FIRST — apply the one that came back `recommend: true`. A patch that resolves on a weak signal is still written, but comes back with a `warning`: report that caveat instead of declaring the test fixed. Tell the user the new version number afterwards. This tool is the LOCATOR path only, and only for the step the session is parked on — for any other change to the test (a checkpoint's settings, a typed value, a URL, waits, adding/removing/reordering steps, or a locator on a different step) use edit_test.",
         inputSchema: {
           type: "object",
           properties: {
@@ -453,9 +598,130 @@ export class McpController {
         },
       },
       {
+        name: "goto_step",
+        description:
+          "Re-park the repair session on a DIFFERENT step: re-drive the test from the top with a fresh page and stop at `stepIndex`, so the live page in front of you is the one THAT step faces. Use it when `replay.note` says the path broke earlier than the Run did, when the user asks about a step other than the one that failed, and after edit_test — the parked page is always the drive from BEFORE an edit, so this is how you see an edit take effect and re-check it with try_locator. Returns the same diagnosis payload as open_repair_session, for the new step. It re-drives the test as it stands NOW (including edits made this session), which costs one full prefix drive — cheap enough to move around freely, not free enough to call between every try_locator.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sessionId: { type: "string" },
+            stepIndex: { type: "number", description: "0-based step to park on (as reported by read_test)." },
+          },
+          required: ["sessionId", "stepIndex"],
+        },
+        handler: (args) => a.gotoStep(String(args.sessionId ?? ""), Number(args.stepIndex)),
+      },
+      {
+        name: "read_test",
+        description:
+          "Read a test's CURRENT definition as an editable surface: every step with its 0-based `index`, human label, and every field an edit can address — the checkpoint's name/captureMode/compareMode/prompt/threshold/masks/rect, a type step's `value`, a navigate step's `url`, the waits before it, and its `locator`. ALWAYS call this before edit_test: an edit is keyed by step index, and an index inferred from a run's error message or from your memory of the flow is how you edit the wrong step. It reports the LATEST version — which is what an edit lands on, even inside a repair session opened on an older one. Pass `sessionId` to read the test that session is repairing, or `testId` to read any test (no session needed). Read-only.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sessionId: { type: "string", description: "An open repair session — reads the test it is repairing." },
+            testId: { type: "string", description: "Instead: any test, by the id in its web-app URL." },
+          },
+        },
+        handler: (args) =>
+          a.readTest({
+            sessionId: args.sessionId ? String(args.sessionId) : undefined,
+            testId: args.testId ? String(args.testId) : undefined,
+          }),
+      },
+      {
+        name: "edit_test",
+        description:
+          "CHANGE ANYTHING in a test, and save it as a new audited version. This is the general editor: whatever the user asks to change about an existing test, do it here.\n\n• Any step field — a checkpoint's `name` (baselines follow the rename), `captureMode` (element/fullpage/region), `rect`, `compareMode` (pixel/context), judge `prompt`, `threshold`, `masks`; a type step's `value`; a navigate step's `url`; the `waitBefore` list.\n• Any locator — `locator` patches the recorded signals; `ref` RE-CAPTURES the element off the live page of a repair session (use this when the element changed wholesale rather than one of its signals).\n• Structure — `remove` a step, `inserts` to add one (a `ref` builds it on a real captured fingerprint that self-heals; a `selector` is used as-is with nothing behind it), `order` to reorder.\n• The test itself — `name`, `notes` (these live on the test row, so they write no new version).\n\nCall read_test FIRST and key every edit off the indices it reports; after an edit that adds, removes or reorders steps, the indices in the response are the new truth. Only make the change the user asked for. The write goes through the same path as the web editor — same validation, previous version retained — and the response lists what was applied plus the new version number, which you must report back.\n\nUnlike apply_fix, an edit here is NOT verified against a live page: it will happily write a locator that does not resolve. When you edit a locator this way, verify it (goto_step to re-drive, then try_locator) before you tell the user it is fixed.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sessionId: { type: "string", description: "An open repair session: supplies the test being repaired, and the live page any `ref` refers to." },
+            testId: { type: "string", description: "Instead: the test to edit, by the id in its web-app URL. No session needed." },
+            name: { type: "string", description: "Rename the test." },
+            notes: { type: "string", description: "Set the test's free-form notes (empty string clears them)." },
+            defaults: {
+              type: "array",
+              description: "Replace the test-level default waits applied before every wait-supporting step.",
+              items: EDITABLE_WAIT_SCHEMA,
+            },
+            steps: {
+              type: "array",
+              description: "Per-step edits, each addressing the step at `index` (from read_test). Omitted fields are left untouched.",
+              items: {
+                type: "object",
+                properties: {
+                  index: { type: "number", description: "0-based index of the step to edit." },
+                  remove: { type: "boolean", description: "Delete this step. The entry navigation (index 0) can't be removed." },
+                  name: { type: "string", description: "Checkpoint only: rename it. Its baselines are moved onto the new name." },
+                  captureMode: { type: "string", enum: ["element", "fullpage", "region"], description: "Checkpoint only: what is captured. element needs a locator, region needs a rect." },
+                  rect: { ...RECT_SCHEMA, description: "Checkpoint only, region capture: the rectangle to clip." },
+                  compareMode: { type: "string", enum: ["pixel", "context"], description: "Checkpoint only: exact pixel diff, or an LLM judge for content that legitimately differs every run." },
+                  prompt: { type: "string", description: "Checkpoint only, compareMode=context: what the judge should check. Empty string clears it (falls back to the team default)." },
+                  threshold: { type: "number", description: "Checkpoint only, pixel mode: max mismatched-pixel ratio (0..1)." },
+                  masks: { type: "array", description: "Checkpoint only, pixel mode: the FULL list of diff-ignore regions (replaces the existing masks).", items: RECT_SCHEMA },
+                  url: { type: "string", description: "Navigate only: the URL to go to. Keep the {{baseUrl}} token to stay environment-agnostic." },
+                  value: { type: "string", description: "Type only: the literal value typed into the field." },
+                  waitBefore: { type: "array", description: "Replace this step's authorable waits (recorded selector waits are preserved).", items: EDITABLE_WAIT_SCHEMA },
+                  dropRecordedWaits: { type: "array", description: "Remove recorded selector waits by their 0-based position among this step's selector waits.", items: { type: "number" } },
+                  ref: { type: "string", description: "Re-capture this step's locator from the element with this ref on the session's live page (requires sessionId)." },
+                  locator: { ...LOCATOR_PATCH_SCHEMA, description: "Patch the step's locator signals; empty string clears one. Applied on top of `ref` when both are given." },
+                },
+                required: ["index"],
+              },
+            },
+            inserts: {
+              type: "array",
+              description: "Steps to add, each anchored to an existing step by its current index. Nothing can be inserted above the entry navigation, or anchored to a step this same edit removes.",
+              items: {
+                type: "object",
+                properties: {
+                  atIndex: { type: "number", description: "The existing step to anchor to (current 0-based index)." },
+                  position: { type: "string", enum: ["above", "below"] },
+                  step: {
+                    type: "object",
+                    properties: {
+                      type: { type: "string", enum: ["navigate", "click", "hover", "type", "screenshot"] },
+                      url: { type: "string", description: "For navigate." },
+                      ref: { type: "string", description: "For click/hover/type/element-checkpoint: capture the element off the session's live page. PREFER this — it records the full multi-signal fingerprint, which self-heals." },
+                      selector: { type: "string", description: "For click/hover/type/element-checkpoint without a live page: a raw CSS/Playwright selector, used as-is. Nothing falls back behind it, so a stale one hard-fails the step." },
+                      value: { type: "string", description: "For type: the literal value." },
+                      name: { type: "string", description: "For screenshot: the checkpoint name (part of the baseline key — make it stable and meaningful)." },
+                      captureMode: { type: "string", enum: ["element", "fullpage", "region"], description: "For screenshot; defaults to fullpage." },
+                      rect: RECT_SCHEMA,
+                      compareMode: { type: "string", enum: ["pixel", "context"] },
+                      prompt: { type: "string" },
+                      threshold: { type: "number" },
+                      masks: { type: "array", items: RECT_SCHEMA },
+                    },
+                    required: ["type"],
+                  },
+                },
+                required: ["atIndex", "position", "step"],
+              },
+            },
+            order: {
+              type: "array",
+              description: "Reorder the steps: every surviving step's CURRENT 0-based index, listed once, in the order they should run. The entry navigation (0) must stay first.",
+              items: { type: "number" },
+            },
+          },
+        },
+        handler: (args) =>
+          a.editTest({
+            sessionId: args.sessionId ? String(args.sessionId) : undefined,
+            testId: args.testId ? String(args.testId) : undefined,
+            ...(args.name !== undefined ? { name: String(args.name) } : {}),
+            ...(args.notes !== undefined ? { notes: String(args.notes) } : {}),
+            ...(args.defaults !== undefined ? { defaults: args.defaults as TestEditInput["defaults"] } : {}),
+            ...(args.steps !== undefined ? { steps: args.steps as TestEditInput["steps"] } : {}),
+            ...(args.inserts !== undefined ? { inserts: args.inserts as TestEditInput["inserts"] } : {}),
+            ...(args.order !== undefined ? { order: (args.order as unknown[]).map(Number) } : {}),
+          }),
+      },
+      {
         name: "close_repair_session",
         description:
-          "Close a repair session and shut its browser down. Nothing is lost — a repair session never recorded anything. Call it once you have reported the diagnosis.",
+          "Close a repair session and shut its browser down. Nothing is lost: a repair session holds no unsaved work — every edit it makes (apply_fix, edit_test) was already written to the test as its own version. Call it once you have reported the diagnosis and any changes you made.",
         inputSchema: {
           type: "object",
           properties: { sessionId: { type: "string" } },
