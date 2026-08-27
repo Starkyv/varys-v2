@@ -657,3 +657,93 @@ export function judgeRepairJustification(
     toolSchema: REPAIR_JUSTIFICATION_TOOL_SCHEMA,
   });
 }
+
+/* ------------------------------------------------------------------------------------------ *
+ * The assertion fallback (Slice 19, slice 11)
+ *
+ * Not every check reduces to two extractions and a relation. "The chart looks reasonable" cannot
+ * be pinned, and the honest answer is to judge it rather than to pretend. An assertion with no
+ * pinned form comes here — the same swappable seam, so a fake provider covers it in tests for
+ * free, and a thrown transport error is already "not a pass" (the runner maps it to needs-review).
+ *
+ * The rubric's whole job is the boundary the slice draws. A judge reading `$1,203,441` off an
+ * image and summing a 40-row column is exactly where a model hallucinates, and a confident wrong
+ * "pass" on an arithmetic check is worse than no check at all, because it looks like one. So this
+ * rubric REFUSES quantitative work: asked to do arithmetic or to compare exact figures, it fails
+ * and says the check needs pinning. The vocabulary exists for those; this exists for the rest.
+ * ------------------------------------------------------------------------------------------ */
+
+/** The rubric. Read the block comment above before changing a word of it. */
+export const ASSERTION_JUDGE_SYSTEM =
+  "You are checking one claim about a web page, from a screenshot of it. The claim is a test " +
+  "author's own sentence — an ASSERTION that could not be expressed exactly, so it falls to you.\n\n" +
+  "Answer only the claim you are given. Do not report other problems you notice, do not grade the " +
+  "design, and do not judge whether the page looks like a previous version — you have not been " +
+  "shown one.\n\n" +
+  "PASS when the screenshot shows the claim holding. FAIL when it shows the claim not holding.\n\n" +
+  "The boundary that matters most: you are a QUALITATIVE check. You must NOT read exact figures off " +
+  "the image and compute with them — no summing a column, no reconciling a total against its rows, " +
+  "no comparing precise numbers or dates. Models misread digits confidently, and a wrong PASS on an " +
+  "arithmetic claim is worse than no check at all because it looks like one. When the claim needs " +
+  "that kind of work, answer FAIL and say in your reasoning that the check should be pinned to an " +
+  "exact comparison rather than judged.\n\n" +
+  "Also FAIL when the screenshot simply does not show enough to decide — a region that is cut off, " +
+  "a still-loading state, a claim about behaviour rather than appearance. Say which it was. The " +
+  "asymmetry is deliberate: a FAIL leaves a red run a human will look at, while a wrong PASS leaves " +
+  "a green run asserting something nobody verified, and nothing will ever flag it.\n\n" +
+  "Answer by calling the provided tool exactly once.";
+
+/** The forced-tool schema for the fallback. The enum descriptions carry the same refusal, so a
+ *  model that only reads the tool definition still declines to do arithmetic. */
+export const ASSERTION_JUDGE_TOOL_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    verdict: {
+      type: "string",
+      enum: ["pass", "fail"],
+      description:
+        "pass = the screenshot shows the author's claim holding. fail = it shows the claim not holding, OR the claim needs exact figures/arithmetic (which you must not attempt — say it should be pinned instead), OR the screenshot does not show enough to decide.",
+    },
+    reasoning: {
+      type: "string",
+      description:
+        "One concise sentence the test author will read beside their own check text: what you concluded and what in the screenshot led you there.",
+    },
+  },
+  required: ["verdict", "reasoning"],
+} as const;
+
+/** Everything the fallback is shown: the author's sentence, and the page as the run left it. */
+export interface AssertionJudgeInput {
+  /** The assertion's plain-language `check` — the author's own words, verbatim. */
+  check: string;
+  /** The page at the end of the run (PNG bytes). The only evidence there is. */
+  screenshot: Buffer;
+}
+
+/** Assemble the fallback's user turn. Kept beside the rubric so the two are changed together. */
+export function buildAssertionJudgePrompt(check: string): string {
+  return [
+    "THE CLAIM TO CHECK, in the test author's own words:",
+    check.trim(),
+    'Decide whether the attached screenshot of the page shows this claim holding. Report "pass" or ' +
+      '"fail" with one sentence of reasoning.',
+  ].join("\n\n");
+}
+
+/**
+ * Judge one unpinnable assertion. Returns the verdict, or **throws** — and a throw is not a pass:
+ * the runner records `judge-unavailable` and the run goes needs-review, never green.
+ */
+export function judgeAssertion(
+  judge: JudgeProvider,
+  input: AssertionJudgeInput,
+): Promise<JudgeResult> {
+  return judge.judge({
+    current: input.screenshot,
+    prompt: buildAssertionJudgePrompt(input.check),
+    system: ASSERTION_JUDGE_SYSTEM,
+    toolSchema: ASSERTION_JUDGE_TOOL_SCHEMA,
+  });
+}

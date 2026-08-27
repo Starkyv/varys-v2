@@ -1,4 +1,5 @@
 import type {
+  AssertionMode,
   AssertionOutcome,
   AssertionSideView,
   Coercion,
@@ -71,11 +72,12 @@ function Side({ side }: { side: AssertionSideView }) {
 
 export function PinnedAssertion({ pinned }: { pinned: PinnedAssertionView | null }) {
   if (!pinned) {
-    // Declared but unpinned. Legal — and worth saying out loud, because a reader would otherwise
-    // assume every declared check is being enforced.
+    // No pinned form, so every run judges this one instead (slice 11). Worth saying out loud:
+    // a reader would otherwise assume every declared check is evaluated exactly.
     return (
       <p className={styles.unpinned}>
-        Not pinned yet — this is a note about what should be true, and no run evaluates it.
+        Nothing pinned — a model reads the page and answers this check in prose, so the verdict is
+        approximate rather than exact.
       </p>
     );
   }
@@ -115,6 +117,18 @@ export const OUTCOME_META: Record<AssertionOutcome, { label: string; tone: Inten
     blurb:
       "A value couldn’t be read, so nothing was compared — this says the test needs attention, not that the app is wrong.",
   },
+  "judge-failed": {
+    label: "Judged false",
+    tone: "danger",
+    blurb:
+      "A model read the page and said this check does not hold — evidence about the app, though an approximate reading rather than an exact comparison.",
+  },
+  "judge-unavailable": {
+    label: "Not checked",
+    tone: "neutral",
+    blurb:
+      "This check has no pinned form and the judge couldn’t be reached, so nothing was checked. The run claims nothing about it either way — which is why it is amber and not green.",
+  },
 };
 
 /**
@@ -132,8 +146,37 @@ export function consequenceOf(
   if (outcome === "relation-false") {
     return "Varys never repairs this. Fix the app, or change the check by hand if the check itself is wrong.";
   }
+  if (outcome === "judge-failed") {
+    return "Varys never repairs this either — re-pinning until a model agrees hides the same bugs. Fix the app, or pin the check so it is evaluated exactly instead of judged.";
+  }
+  if (outcome === "judge-unavailable") {
+    return "Nothing to repair and nothing to diagnose: configure a judge on the Configurations page, or pin this check so it never needs one.";
+  }
   if (outcome !== "extraction-failed") return null;
   return cause === "unresolved"
     ? "The target no longer resolves — a locator problem, and repairable like any other. Under an automatic Repair Policy this queues a repair job."
     : "The value was read but couldn’t be used as this check asked. That is the assertion’s definition, not its locator, so re-pinning wouldn’t help — edit the check.";
 }
+
+/**
+ * Exact or approximate, as a badge (Slice 19, slice 11).
+ *
+ * The one thing an author must never have to infer. A judged check is a real check — "the chart
+ * looks reasonable" is worth asserting and cannot be pinned — but it is a model's reading of a
+ * screenshot, and mistaking it for arithmetic is how someone discovers months later that a total
+ * was never really being verified. So the two are labelled, always, everywhere a check is shown.
+ */
+export const MODE_META: Record<AssertionMode, { label: string; tone: Intent; blurb: string }> = {
+  pinned: {
+    label: "Exact",
+    tone: "info",
+    blurb:
+      "Pinned: the worker reads the values off the page and applies the comparison itself, with no model call.",
+  },
+  judged: {
+    label: "Approximate",
+    tone: "warning",
+    blurb:
+      "Judged: nothing is pinned, so a model looks at the page and answers this check. It still fails the run when it says no — but it is a reading, not arithmetic.",
+  },
+};

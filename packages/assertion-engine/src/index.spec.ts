@@ -13,10 +13,13 @@ import {
   pinnedSideTarget,
   coerce,
   evaluateAssertion,
+  evaluateJudgedAssertion,
   evaluatePinned,
+  PINNABLE_CHECK_HELP,
   parseNumeric,
   pinnedAssertion,
   summarizeAssertionFailures,
+  summarizeUncheckedAssertions,
   unresolved,
   values,
 } from "./index";
@@ -507,5 +510,188 @@ describe("the target a repair re-pins", () => {
     expect(pinnedSideTarget(declared, "total-matches-sum", null)).toBeUndefined();
     expect(pinnedSideTarget(declared, "total-matches-sum", "")).toBeUndefined();
     expect(pinnedSideTarget(declared, "total-matches-sum", "LEFT")).toBeUndefined();
+  });
+});
+
+/**
+ * The judge fallback (Slice 19, slice 11).
+ *
+ * The engine never calls a judge — it turns an ANSWER (or the absence of one) into a result, which
+ * is what keeps the whole thing unit-testable with no network and no browser. Every property this
+ * slice rests on is decided here: that a judged pass is marked approximate, that a judged fail is
+ * a failure like any other, and — the one that matters most — that a judge which could not answer
+ * produces neither a pass nor a failure.
+ */
+describe("an assertion with no pinned form is judged, not skipped", () => {
+  const chartLooksRight: Assertion = { id: "chart-ok", check: "The chart looks reasonable" };
+
+  it("marks a judged pass as APPROXIMATE, so it can never be read as an exact one", () => {
+    const r = evaluateJudgedAssertion(chartLooksRight, {
+      ok: true,
+      verdict: "pass",
+      reasoning: "bars are rendered and the axis is labelled",
+    });
+    expect(r.outcome).toBe("passed");
+    expect(r.mode).toBe("judged");
+    expect(r.reasoning).toBe("bars are rendered and the axis is labelled");
+    expect(r.detail).toContain("approximate");
+    // Nothing was compared, so there are no values to show and no side to blame.
+    expect(r.left).toBeNull();
+    expect(r.right).toBeNull();
+    expect(r.side).toBeNull();
+    expect(r.cause).toBeNull();
+    // It carries the assertion's own identity, exactly as a pinned result does — the history strip
+    // must span a check that gets pinned later without restarting.
+    expect(r.assertionId).toBe("chart-ok");
+    expect(r.check).toBe("The chart looks reasonable");
+  });
+
+  it("fails the run on a judged fail, and never lets a repair touch it", () => {
+    const r = evaluateJudgedAssertion(chartLooksRight, {
+      ok: true,
+      verdict: "fail",
+      reasoning: "the chart area is empty",
+    });
+    expect(r.outcome).toBe("judge-failed");
+    expect(r.mode).toBe("judged");
+    expect(r.reasoning).toBe("the chart area is empty");
+    // A failing assertion fails the run, whichever machinery reached the verdict.
+    expect(anyAssertionFailed([r])).toBe(true);
+    expect(assertionFailureVerdict([r]).unavailable.length > 0).toBe(false);
+    // …and it is the APP's, approximately — so re-pinning until a model agrees is refused, for the
+    // same reason a false relation is.
+    expect(assertionRepairability(r)).toBe("app-failure");
+    expect(isRepairableAssertionFailure(r)).toBe(false);
+  });
+
+  it("turns a judge that could not answer into NEITHER a pass nor a failure", () => {
+    const r = evaluateJudgedAssertion(chartLooksRight, { ok: false, error: "429 rate limited" });
+    expect(r.outcome).toBe("judge-unavailable");
+    expect(r.mode).toBe("judged");
+    // The three properties that matter, together: not a pass…
+    expect(r.outcome).not.toBe("passed");
+    // …not a failure (nothing was checked, so there is nothing to be red about)…
+    expect(anyAssertionFailed([r])).toBe(false);
+    // …and loud enough that the run cannot quietly go green on it.
+    expect(assertionFailureVerdict([r]).unavailable.length > 0).toBe(true);
+    // The transport's own words survive, so a reviewer can tell an outage from a misconfiguration.
+    expect(r.detail).toContain("429 rate limited");
+    expect(r.reasoning).toBeNull();
+  });
+
+  it("earns no job of either kind when the judge was unreachable", () => {
+    const unavailable = evaluateJudgedAssertion(chartLooksRight, { ok: false, error: "no key" });
+    const verdict = assertionFailureVerdict([unavailable]);
+    // Nothing to repair (no locator broke) and nothing to diagnose (no verdict was reached). The
+    // run goes needs-review and a human looks; manufacturing a triage job here would file a bug
+    // report about an application nobody examined.
+    expect(verdict.consequence).toBe("none");
+    expect(verdict.repairable).toEqual([]);
+    expect(verdict.unrepairable).toEqual([]);
+    expect(verdict.unavailable).toEqual([unavailable]);
+    expect(assertionRepairability(unavailable)).toBe("unavailable");
+  });
+
+  it("sends a judged FAIL to triage, exactly as a false relation goes", () => {
+    const judged = evaluateJudgedAssertion(chartLooksRight, {
+      ok: true,
+      verdict: "fail",
+      reasoning: "empty",
+    });
+    const verdict = assertionFailureVerdict([judged]);
+    expect(verdict.consequence).toBe("triage");
+    expect(verdict.unrepairable).toEqual([judged]);
+    expect(verdict.unavailable).toEqual([]);
+  });
+
+  it("lets a pinned and a judged assertion on one test both run, and either fail the run", () => {
+    const pinnedPass = evaluateAssertion(
+      { id: "total", check: "The total adds up", pinned: pin("number", "eq", literal(60.5)) },
+      { left: values(["60.50"]) },
+    );
+    const judgedFail = evaluateJudgedAssertion(chartLooksRight, {
+      ok: true,
+      verdict: "fail",
+      reasoning: "the chart area is empty",
+    });
+    expect(pinnedPass.outcome).toBe("passed");
+    expect(pinnedPass.mode).toBe("pinned");
+    // The exact one is green and the approximate one is red, and the run is red: neither kind of
+    // check is a second-class one.
+    expect(anyAssertionFailed([pinnedPass, judgedFail])).toBe(true);
+    const summary = summarizeAssertionFailures([pinnedPass, judgedFail]) ?? "";
+    expect(summary).toContain("The chart looks reasonable");
+    expect(summary).toContain("was judged false");
+    // …and the pinned one that passed is not named as a failure.
+    expect(summary).not.toContain("The total adds up");
+
+    // The reverse pairing holds too: an exact failure alongside an approximate pass.
+    const pinnedFail = evaluateAssertion(
+      { id: "total", check: "The total adds up", pinned: pin("number", "eq", literal(1)) },
+      { left: values(["60.50"]) },
+    );
+    const judgedPass = evaluateJudgedAssertion(chartLooksRight, {
+      ok: true,
+      verdict: "pass",
+      reasoning: "looks fine",
+    });
+    expect(anyAssertionFailed([pinnedFail, judgedPass])).toBe(true);
+  });
+
+  it("summarises unchecked assertions as NOT CHECKED, never as failed", () => {
+    const a = evaluateJudgedAssertion(chartLooksRight, { ok: false, error: "timeout" });
+    const b = evaluateJudgedAssertion(
+      { id: "legend", check: "The legend is readable" },
+      { ok: false, error: "timeout" },
+    );
+    expect(summarizeAssertionFailures([a, b])).toBeNull();
+    const note = summarizeUncheckedAssertions([a, b]) ?? "";
+    expect(note).toContain("2 assertions could not be judged");
+    expect(note).toContain("The chart looks reasonable");
+    expect(note).toContain("The legend is readable");
+    expect(note).not.toContain("failed");
+    // A run with nothing unchecked has nothing to say.
+    expect(summarizeUncheckedAssertions([])).toBeNull();
+  });
+
+  it("lets a real failure outrank an unreachable judge on the same run", () => {
+    // A run carrying both a finding and a gap is a run with a finding: "a failing assertion fails
+    // the run" wins over "nothing was checked". The reverse precedence would let one flaky judge
+    // call downgrade a genuine red to amber, which is the direction that loses bugs.
+    const failed = evaluateJudgedAssertion(chartLooksRight, {
+      ok: true,
+      verdict: "fail",
+      reasoning: "empty",
+    });
+    const unchecked = evaluateJudgedAssertion(
+      { id: "legend", check: "The legend is readable" },
+      { ok: false, error: "timeout" },
+    );
+    expect(anyAssertionFailed([failed, unchecked])).toBe(true);
+    expect(assertionFailureVerdict([failed, unchecked]).unavailable.length > 0).toBe(true);
+    // …and the summary names only the one a verdict was actually reached on.
+    const summary = summarizeAssertionFailures([failed, unchecked]) ?? "";
+    expect(summary).toContain("1 assertion failed");
+    expect(summary).not.toContain("The legend is readable");
+  });
+
+  it("still refuses to evaluate an unpinned assertion down the PINNED path", () => {
+    // The two paths are not interchangeable, and a caller that reaches for the wrong one is a bug
+    // rather than something to paper over with a default.
+    expect(() => evaluateAssertion(chartLooksRight, { left: values(["x"]) })).toThrow(
+      /no pinned form/,
+    );
+  });
+
+  it("tells an author what the vocabulary can express, in terms it actually owns", () => {
+    // The help text is generated from the vocabulary rather than written beside the editor, so it
+    // cannot fall behind the day a coercion or relation is added.
+    for (const c of ["text", "number", "sum-number", "count", "exists"]) {
+      expect(PINNABLE_CHECK_HELP).toContain(c);
+    }
+    for (const r of ["eq", "neq", "gt", "gte", "lt", "lte", "contains", "non-empty"]) {
+      expect(PINNABLE_CHECK_HELP).toContain(r);
+    }
+    expect(PINNABLE_CHECK_HELP).toContain("tolerance");
   });
 });

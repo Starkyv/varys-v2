@@ -138,3 +138,23 @@
   text-transform: uppercase;
   color: var(--color-text-subtle);
 }
+
+/* What this assertion's mode MEANS — one sentence, always shown, because the badge alone tells an
+ * author which bucket a check is in and not why that matters. */
+.modeBlurb {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+/* The vocabulary an approximate check could be rephrased into. Shown only when there is something
+ * to rephrase — an already-pinned assertion has nothing to fix. */
+.pinningHelp {
+  margin: var(--space-4) 0 0;
+  padding: var(--space-8) var(--space-10);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-subtle);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+  line-height: var(--line-height-relaxed);
+}

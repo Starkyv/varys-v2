@@ -70,7 +70,10 @@ name keys a baseline. Once **pinned**, an assertion is *data, never code*: which
 to read, how to coerce each, and which relation to apply, from a vocabulary Varys owns — so
 the worker evaluates it exactly, with no model call and nothing model-authored executing.
 Assertions the vocabulary cannot express fall back to the vision judge, and the author is told
-which ones did. Distinct from a **Checkpoint**, which is an image compared to a baseline.
+which ones did — every assertion is labelled **exact** (pinned) or **approximate** (judged),
+because an approximate check wearing an exact one's clothes is how someone finds out months
+later that a total was never really being verified. Distinct from a **Checkpoint**, which is an
+image compared to a baseline.
 
 A failing assertion fails the run, and *how* it failed decides who owns it. **Extraction
 failed** — a side produced no value, because its target no longer resolves — is a *locator*
@@ -79,6 +82,10 @@ repairable exactly like a broken step locator. **Relation false** — both value
 they disagree — is evidence about the *application*, and is never repairable, under any Repair
 Policy, at any breaker threshold, by any agent: the only way to "repair" it is to re-pin until
 the numbers agree, which hides the exact bugs assertions exist to catch. It earns a Triage Job.
+A **judged fail** is the same rule with softer evidence and the same consequence. A judge that
+could not be reached at all is the one outcome that is neither a pass nor a failure: nothing was
+checked, so the run goes needs-review, earns no job, and claims nothing either way — a model
+outage must never read as a green.
 _Avoid_: check, expectation, validation
 
 **Pin**:

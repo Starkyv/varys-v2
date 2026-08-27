@@ -287,15 +287,27 @@ export const runAssertions = pgTable(
     /** The plain-language check AS IT READ on this run (the definition's may have changed since). */
     checkText: text("check_text").notNull(),
     /**
-     * `passed` | `relation-false` | `extraction-failed`.
+     * `passed` | `relation-false` | `extraction-failed` | `judge-failed` | `judge-unavailable`.
      *
-     * The last two are deliberately separate values rather than one `failed`: `relation-false`
-     * means both values were read and they disagree (the APP is wrong), `extraction-failed` means
-     * a side produced no value at all (the TEST is wrong — a locator missed). Slice 10 wires the
+     * These are deliberately separate values rather than one `failed`: `relation-false` means both
+     * values were read and they disagree (the APP is wrong), `extraction-failed` means a side
+     * produced no value at all (the TEST is wrong — a locator missed). Slice 10 wires the
      * consequence off this column, so collapsing them would erase the distinction the assertion
      * story rests on.
+     *
+     * The last two are the judge fallback (slice 11): `judge-failed` is the model answering no,
+     * and `judge-unavailable` is NO ANSWER AT ALL — the run made no claim either way, which is why
+     * it is neither a pass nor a failure and marks the run needs-review instead.
      */
     outcome: text("outcome").notNull(),
+    /**
+     * `pinned` | `judged` — how this verdict was reached (slice 11). Recorded per run rather than
+     * read off today's definition, because an assertion that gets pinned next week must not
+     * retroactively claim its old approximate verdicts were exact.
+     */
+    mode: text("mode").notNull().default("pinned"),
+    /** The judge's one-line rationale for a `judged` verdict. Null for every pinned one. */
+    reasoning: text("reasoning"),
     /** Why extraction failed — `unresolved` (a locator problem) | `coercion` (a definition
      *  problem). Null for every other outcome. */
     cause: text("cause"),
@@ -803,6 +815,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS run_assertions_run_assertion_uq ON run_asserti
 -- Which side's target could not be read (slice 10) — what a repair re-pins. Added after the table,
 -- so an install that already has it is unaffected.
 ALTER TABLE run_assertions ADD COLUMN IF NOT EXISTS side text;
+-- Exact or approximate, and the judge's own words (slice 11). Existing rows default to pinned,
+-- which is what they were: the judge fallback did not exist when they were written.
+ALTER TABLE run_assertions ADD COLUMN IF NOT EXISTS mode text NOT NULL DEFAULT 'pinned';
+ALTER TABLE run_assertions ADD COLUMN IF NOT EXISTS reasoning text;
 CREATE TABLE IF NOT EXISTS run_steps (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   run_id uuid NOT NULL REFERENCES runs(id),

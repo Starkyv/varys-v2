@@ -2,10 +2,13 @@ import {
   type AssertionResult,
   type Coercion,
   type ExtractedSide,
+  type JudgedVerdict,
   evaluateAssertion,
+  evaluateJudgedAssertion,
   unresolved,
   values,
 } from "@varys/assertion-engine";
+import { type JudgeProvider, judgeAssertion } from "@varys/judge-engine";
 import { resolve, searchRootFor } from "@varys/locator-engine";
 import type { Assertion, Fingerprint } from "@varys/step-schema";
 import type { Page } from "playwright";
@@ -93,19 +96,40 @@ export async function extractSide(
   }
 }
 
+/** Why a judged assertion could not be judged when nothing is configured to judge it. */
+const NO_JUDGE_CONFIGURED =
+  "no judge provider is configured (set one on the Configurations page or via VARYS_JUDGE_*)";
+
 /**
- * Evaluate every PINNED assertion of a definition against the page as it stands, with no model
- * call. An assertion with no pinned form is documentation and is skipped (it produces no result
- * row, so it can never colour a run).
+ * Evaluate every assertion of a definition against the page as it stands (Slice 19, slices 09+11).
+ *
+ * Two paths, and which one an assertion takes is decided by the definition alone:
+ *
+ *  - **pinned** — two extractions and a relation, in the worker, with NO model call. Exact.
+ *  - **judged** — no pinned form, so the check falls back to the `JudgeProvider`, which reads the
+ *    page from one screenshot and answers in prose. Approximate, and recorded as such.
+ *
+ * The screenshot is taken ONCE, lazily, and only if some assertion actually needs it: a definition
+ * whose assertions are all pinned must stay free of both the model call and the capture, which is
+ * the property that makes assertions cheap enough to run nightly on a whole corpus.
+ *
+ * A judge that throws — or one that was never configured — is `judge-unavailable`, never a pass.
  */
 export async function evaluateAssertions(
   page: Page,
   assertions: Assertion[] | undefined,
+  judge?: JudgeProvider,
 ): Promise<AssertionResult[]> {
   const out: AssertionResult[] = [];
+  /** Captured at most once per run, and shared by every judged assertion: they are all asking
+   *  about the same final page state, so a second capture would only cost time. */
+  const shot: { png: Buffer | null } = { png: null };
   for (const declared of assertions ?? []) {
     const pinned = declared.pinned;
-    if (!pinned) continue;
+    if (!pinned) {
+      out.push(evaluateJudgedAssertion(declared, await judgeOne(page, declared, judge, shot)));
+      continue;
+    }
     const left = await extractSide(page, pinned.left.target, pinned.left.as);
     const right =
       "literal" in pinned.right
@@ -114,5 +138,28 @@ export async function evaluateAssertions(
     out.push(evaluateAssertion(declared, { left, right }));
   }
   return out;
+}
+
+/** One judged assertion. Never throws: every way this can go wrong IS a `judge-unavailable`
+ *  result, because a run must not die — and must not go green — because a model was unreachable. */
+async function judgeOne(
+  page: Page,
+  declared: Assertion,
+  judge: JudgeProvider | undefined,
+  shot: { png: Buffer | null },
+): Promise<JudgedVerdict> {
+  if (!judge) return { ok: false, error: NO_JUDGE_CONFIGURED };
+  try {
+    if (!shot.png) {
+      // Full page, not the viewport: an author's claim ("the chart looks reasonable") is about the
+      // page, and a check silently answered against only the part above the fold would be wrong in
+      // the direction that looks right.
+      shot.png = await page.screenshot({ fullPage: true });
+    }
+    const r = await judgeAssertion(judge, { check: declared.check, screenshot: shot.png });
+    return { ok: true, verdict: r.verdict, reasoning: r.reasoning };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }
 

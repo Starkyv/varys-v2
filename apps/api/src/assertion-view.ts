@@ -1,3 +1,4 @@
+import { PINNABLE_CHECK_HELP } from "@varys/assertion-engine";
 import type { PinnedAssertionView, TestConfigAssertion } from "@varys/review-contract";
 import type { Assertion, PinnedAssertion } from "@varys/step-schema";
 import { summarizeFingerprint } from "./fingerprint-summary";
@@ -27,11 +28,20 @@ export function summarizePinnedAssertion(pinned: PinnedAssertion | undefined): P
   };
 }
 
-/** One declared assertion as the test editor shows it. */
+/**
+ * One declared assertion as the test editor shows it.
+ *
+ * `mode` and `pinningHelp` are the author-facing half of slice 11: an author has to be able to see
+ * which of their checks are exact and which are approximate, and — for an approximate one — what
+ * would make it exact. Learning months later that "the totals are right" was only ever being
+ * eyeballed by a model is the failure this exists to prevent.
+ */
 export function summarizeAssertion(declared: Assertion): TestConfigAssertion {
   return {
     id: declared.id,
     check: declared.check,
+    mode: declared.pinned ? "pinned" : "judged",
     pinned: summarizePinnedAssertion(declared.pinned),
+    pinningHelp: declared.pinned ? null : PINNABLE_CHECK_HELP,
   };
 }

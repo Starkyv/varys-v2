@@ -144,10 +144,12 @@ export class RunsService {
         assertionId: runAssertions.assertionId,
         checkText: runAssertions.checkText,
         outcome: runAssertions.outcome,
+        mode: runAssertions.mode,
         cause: runAssertions.cause,
         leftValue: runAssertions.leftValue,
         rightValue: runAssertions.rightValue,
         detail: runAssertions.detail,
+        reasoning: runAssertions.reasoning,
       })
       .from(runAssertions)
       .where(eq(runAssertions.runId, runId))
@@ -192,10 +194,12 @@ export class RunsService {
       id: r.assertionId,
       check: r.checkText,
       outcome: r.outcome as AssertionOutcome,
+      mode: r.mode === "judged" ? "judged" : "pinned",
       cause: (r.cause as AssertionResultView["cause"]) ?? null,
       left: r.leftValue,
       right: r.rightValue,
       detail: r.detail,
+      reasoning: r.reasoning,
       pinned: summarizePinnedAssertion(declaredById.get(r.assertionId)?.pinned),
       // Newest kept when there are more than the cap, but still oldest-first for the strip.
       history: (historyById.get(r.assertionId) ?? []).slice(-ASSERTION_HISTORY_LIMIT),

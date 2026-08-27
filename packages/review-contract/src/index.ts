@@ -1427,7 +1427,25 @@ export type Relation =
  * A surface that collapsed these two into one "failed" would be telling the reader that the
  * application is wrong when what actually happened is that Varys could not look.
  */
-export type AssertionOutcome = "passed" | "relation-false" | "extraction-failed";
+export type AssertionOutcome =
+  | "passed"
+  | "relation-false"
+  | "extraction-failed"
+  /** The fallback judge read the page and answered no (slice 11) — approximate evidence about the
+   *  app. It fails the run, like any other failing assertion, and is never repairable. */
+  | "judge-failed"
+  /** The fallback judge could not be reached at all, so NOTHING was checked. Neither a pass nor a
+   *  failure: the run goes needs-review, because a model outage must not read as a green. */
+  | "judge-unavailable";
+
+/**
+ * How an assertion was evaluated — exact (`pinned`) or approximate (`judged`).
+ *
+ * The author-facing half of slice 11. An approximate check wearing an exact one's clothes is how
+ * someone discovers months later that "the totals are right" was never really being verified, so
+ * every surface that shows a verdict shows which machinery produced it.
+ */
+export type AssertionMode = "pinned" | "judged";
 
 /** Why extraction failed: `unresolved` (a locator problem) | `coercion` (a definition problem). */
 export type ExtractionCause = "unresolved" | "coercion";
@@ -1474,6 +1492,8 @@ export interface AssertionResultView {
   /** The plain-language check AS IT READ on this run (the definition's may have moved on). */
   check: string;
   outcome: AssertionOutcome;
+  /** Exact or approximate — which machinery reached this verdict (slice 11). */
+  mode: AssertionMode;
   /** Set only when `outcome` is `extraction-failed`. */
   cause: ExtractionCause | null;
   /** The two coerced values compared, rendered; null for a side that produced none. */
@@ -1481,6 +1501,9 @@ export interface AssertionResultView {
   right: string | null;
   /** The engine's one-line explanation — what was compared and what happened. */
   detail: string;
+  /** The judge's own rationale, shown beside the check text. Null for a pinned verdict — its
+   *  `detail` IS its reasoning, and there is no second, softer account of it to give. */
+  reasoning: string | null;
   /** The pinned form the run evaluated, for display; null if the definition no longer pins it. */
   pinned: PinnedAssertionView | null;
   /** This assertion's verdicts on earlier runs of the same test, oldest first, INCLUDING this
@@ -1493,8 +1516,23 @@ export interface TestConfigAssertion {
   /** Stable and author-chosen — editing `check` never changes it. */
   id: string;
   check: string;
-  /** The pinned form, or null when the assertion is declared but unpinned (never evaluated). */
+  /**
+   * How every run will evaluate this assertion (slice 11): `pinned` ⇒ exactly, in the worker, with
+   * no model call; `judged` ⇒ approximately, by the vision judge reading the page.
+   *
+   * Derivable from `pinned` being null, and sent anyway — the editor's badge is the one place an
+   * author learns which of their checks are exact, and a surface that has to infer that from a
+   * null is a surface that will one day infer it wrong.
+   */
+  mode: AssertionMode;
+  /** The pinned form, or null when the assertion is judged rather than pinned. */
   pinned: PinnedAssertionView | null;
+  /**
+   * What the pinned vocabulary CAN express, so an author looking at an approximate check knows how
+   * to rephrase it into an exact one. Null for an assertion that is already pinned — there is
+   * nothing to rephrase.
+   */
+  pinningHelp: string | null;
 }
 
 /**

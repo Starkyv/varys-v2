@@ -10,7 +10,11 @@ import {
   JudgeTransportError,
   JUDGE_TOOL_NAME,
   JUDGE_TOOL_SCHEMA,
+  ASSERTION_JUDGE_SYSTEM,
+  ASSERTION_JUDGE_TOOL_SCHEMA,
+  buildAssertionJudgePrompt,
   buildRepairJustificationPrompt,
+  judgeAssertion,
   judgeRepairJustification,
   REPAIR_JUSTIFICATION_SYSTEM,
   REPAIR_JUSTIFICATION_TOOL_SCHEMA,
@@ -418,5 +422,77 @@ describe("repair-justification gate", () => {
 
   it("keeps the rubric's tie-break in the tool schema, so a model reading only that still fails closed", () => {
     expect(REPAIR_JUSTIFICATION_TOOL_SCHEMA.properties.verdict.description).toMatch(/in doubt, fail/i);
+  });
+});
+
+/**
+ * The assertion fallback (Slice 19, slice 11).
+ *
+ * The seam is the same one the `context` checkpoint and the justification gate already ride, which
+ * is the entire argument for reusing it: a fake provider covers it for free, and a thrown transport
+ * error is already "not a pass". What is new here is the RUBRIC, and specifically its refusal to do
+ * arithmetic — a judge summing a 40-row column and answering confidently is the failure mode this
+ * whole fallback has to be prevented from becoming.
+ */
+describe("the assertion fallback", () => {
+  const check = "The revenue chart looks reasonable";
+  const screenshot = Buffer.from("page-png");
+
+  it("sends the author's own sentence, the page, and the assertion rubric", async () => {
+    let seen: JudgeInput | null = null;
+    const p = new FakeJudgeProvider((i) => {
+      seen = i;
+      return { verdict: "pass", reasoning: "bars render, axis labelled" };
+    });
+    expect(await judgeAssertion(p, { check, screenshot })).toEqual({
+      verdict: "pass",
+      reasoning: "bars render, axis labelled",
+    });
+    const sent = seen as unknown as JudgeInput;
+    // The page as the run left it — and NO baseline: there is nothing to compare against, and a
+    // rubric that thought there was would grade the wrong question.
+    expect(sent.current).toBe(screenshot);
+    expect(sent.baseline).toBeUndefined();
+    // The author's wording travels verbatim; a paraphrase would check something they never wrote.
+    expect(sent.prompt).toContain(check);
+    expect(sent.system).toBe(ASSERTION_JUDGE_SYSTEM);
+    expect(sent.toolSchema).toBe(ASSERTION_JUDGE_TOOL_SCHEMA);
+  });
+
+  it("propagates a fail verdict with its reasoning", async () => {
+    const p = new FakeJudgeProvider({ verdict: "fail", reasoning: "the chart area is empty" });
+    expect(await judgeAssertion(p, { check, screenshot })).toEqual({
+      verdict: "fail",
+      reasoning: "the chart area is empty",
+    });
+  });
+
+  it("THROWS rather than answering when the transport fails", async () => {
+    // The caller's contract, and the reason this test exists: a throw is "nothing was checked",
+    // which the runner records as needs-review. A provider that swallowed this into a pass would
+    // turn every model outage into a silent green across the whole corpus.
+    const p = new FakeJudgeProvider(() => {
+      throw new JudgeTransportError(429, "rate limited");
+    });
+    await expect(judgeAssertion(p, { check, screenshot })).rejects.toThrow(/rate limited/i);
+  });
+
+  it("refuses quantitative work in the rubric AND in the tool schema", () => {
+    // Both, deliberately: a model that reads only the forced-tool definition still declines, and
+    // a confident wrong PASS on an arithmetic claim is worse than no check at all.
+    expect(ASSERTION_JUDGE_SYSTEM).toMatch(/must NOT read exact figures/i);
+    expect(ASSERTION_JUDGE_SYSTEM).toMatch(/pinned/i);
+    expect(ASSERTION_JUDGE_TOOL_SCHEMA.properties.verdict.description).toMatch(/arithmetic/i);
+    expect(ASSERTION_JUDGE_TOOL_SCHEMA.properties.verdict.description).toMatch(/pinned/i);
+    // …and it fails closed when the screenshot does not settle the question.
+    expect(ASSERTION_JUDGE_SYSTEM).toMatch(/does not show enough to decide/i);
+  });
+
+  it("asks about one claim only, and never about a previous version", () => {
+    const prompt = buildAssertionJudgePrompt("  The legend is readable  ");
+    expect(prompt).toContain("The legend is readable");
+    // Trimmed, so an author's stray whitespace does not reach the model as content.
+    expect(prompt).not.toContain("  The legend");
+    expect(ASSERTION_JUDGE_SYSTEM).toMatch(/have not been shown one/i);
   });
 });

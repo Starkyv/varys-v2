@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, Inject, Injectable, Logger, Not
 import {
   COERCION_NEVER_REPAIRABLE,
   isRepairableAssertionFailure,
+  JUDGE_FAILED_NEVER_REPAIRABLE,
   pinnedSideTarget,
   RELATION_FALSE_NEVER_REPAIRABLE,
 } from "@varys/assertion-engine";
@@ -259,7 +260,16 @@ export class RepairJobsService {
         detail: runAssertions.detail,
       })
       .from(runAssertions)
-      .where(and(eq(runAssertions.runId, runId), ne(runAssertions.outcome, "passed")))
+      .where(
+        and(
+          eq(runAssertions.runId, runId),
+          ne(runAssertions.outcome, "passed"),
+          // `judge-unavailable` is not a failure (slice 11): the judge was unreachable, so the run
+          // reached no verdict at all. Naming it as "the assertion that broke" would hand a drainer
+          // a finding nobody established.
+          ne(runAssertions.outcome, "judge-unavailable"),
+        ),
+      )
       .orderBy(runAssertions.assertionId);
   }
 
@@ -300,6 +310,12 @@ export class RepairJobsService {
     const relationFalse = failing.find((r) => r.outcome === "relation-false");
     if (relationFalse) {
       return `Assertion "${relationFalse.checkText}" is not repairable: ${RELATION_FALSE_NEVER_REPAIRABLE}`;
+    }
+    // A judged `fail` (slice 11) is the same rule with softer evidence: a model read the page and
+    // answered no, which is about the APP. Re-pinning until a model agrees hides the same bugs.
+    const judgeFailed = failing.find((r) => r.outcome === "judge-failed");
+    if (judgeFailed) {
+      return `Assertion "${judgeFailed.checkText}" is not repairable: ${JUDGE_FAILED_NEVER_REPAIRABLE}`;
     }
     const unusable = failing.find(
       (r) => r.outcome === "extraction-failed" && r.cause !== "unresolved",

@@ -173,18 +173,42 @@ export const unresolved = (reason: string): ExtractedSide => ({ kind: "unresolve
 // ---- results ------------------------------------------------------------------------------
 
 /**
- * The three outcomes, and why the last two are not the same thing:
+ * The outcomes, and why no two of them are the same thing:
  *
- *  - `passed`            — both sides produced a value and the relation holds.
+ *  - `passed`            — the check holds. Exactly, for a pinned assertion; approximately, for a
+ *                          judged one — {@link AssertionMode} is what says which.
  *  - `relation-false`    — both sides produced a value and the relation does NOT hold. Evidence
  *                          about the APP: the total really doesn't match its rows.
  *  - `extraction-failed` — a side produced no value, so no relation was ever evaluated. Evidence
  *                          about the TEST: a locator missed, or the text read was not a number.
+ *  - `judge-failed`      — the fallback judge looked at the page and said the check does not hold
+ *                          (slice 11). Evidence about the APP, like `relation-false`, but
+ *                          APPROXIMATE — a model's reading, not arithmetic.
+ *  - `judge-unavailable` — a judged assertion could not be judged at all: no provider configured,
+ *                          or the transport threw. NOTHING was checked, so this must never read as
+ *                          a pass and must never read as the app being wrong either. It marks the
+ *                          run needs-review — a model outage is not a silent green.
  *
  * Slice 10 wires the consequence (an extraction failure is a repairable locator problem, a false
  * relation is not); this package's job is to make the distinction impossible to lose.
  */
-export type AssertionOutcome = "passed" | "relation-false" | "extraction-failed";
+export type AssertionOutcome =
+  | "passed"
+  | "relation-false"
+  | "extraction-failed"
+  | "judge-failed"
+  | "judge-unavailable";
+
+/**
+ * HOW an assertion was evaluated — the author-facing half of slice 11.
+ *
+ * `pinned` is exact: two extractions and a relation, decided in the worker with no model call.
+ * `judged` is approximate: a model looked at the page and answered the check in prose. Both can
+ * fail a run, and an author has to be able to tell them apart at a glance — an approximate check
+ * silently wearing an exact one's clothes is how someone discovers months later that "the totals
+ * are right" was never really being verified.
+ */
+export type AssertionMode = "pinned" | "judged";
 
 /** Why extraction failed — the sub-distinction slice 10 keys on. Null unless `extraction-failed`. */
 export type ExtractionCause =
@@ -201,6 +225,8 @@ export type AssertionSideName = "left" | "right";
 
 export interface AssertionEvaluation {
   outcome: AssertionOutcome;
+  /** Which machinery produced this verdict — exact (`pinned`) or approximate (`judged`). */
+  mode: AssertionMode;
   cause: ExtractionCause | null;
   /**
    * Which side failed to extract — the side whose TARGET slice 10 re-pins. Null for every other
@@ -216,6 +242,12 @@ export interface AssertionEvaluation {
   right: CoercedValue | null;
   /** One line, always present: what was compared and what happened. Shown to a human verbatim. */
   detail: string;
+  /**
+   * The judge's own rationale for a `judged` verdict, shown beside the check text on run detail.
+   * Null for every pinned evaluation — a pinned assertion's `detail` IS its reasoning, and there
+   * is no second, softer account of it to give.
+   */
+  reasoning: string | null;
 }
 
 /** An evaluated assertion — its identity and text, plus the verdict. */
@@ -478,10 +510,15 @@ export function evaluatePinned<T>(
 ): AssertionEvaluation {
   const unary = isUnaryRelation(pinned.relation);
   const symbol = SYMBOL[pinned.relation];
+  /** Everything a pinned verdict carries regardless of how it went: it was decided exactly, and
+   *  there is no model prose to show. Factored for the same reason {@link evaluateJudged} factors
+   *  its own — five return sites repeating two constants is five chances to disagree. */
+  const base = { mode: "pinned" as const, reasoning: null };
 
   const leftCoerced = coerce(sides.left, pinned.left.as);
   if (!leftCoerced.ok) {
     return {
+      ...base,
       outcome: "extraction-failed",
       cause: leftCoerced.cause,
       side: "left",
@@ -500,6 +537,7 @@ export function evaluatePinned<T>(
     } else {
       if (!sides.right) {
         return {
+          ...base,
           outcome: "extraction-failed",
           cause: "unresolved",
           side: "right",
@@ -511,6 +549,7 @@ export function evaluatePinned<T>(
       const rightCoerced = coerce(sides.right, pinned.right.as);
       if (!rightCoerced.ok) {
         return {
+          ...base,
           outcome: "extraction-failed",
           cause: rightCoerced.cause,
           side: "right",
@@ -527,6 +566,7 @@ export function evaluatePinned<T>(
   const applied = applyRelation(pinned.relation, leftCoerced.value, right, tolerance);
   if ("unusable" in applied) {
     return {
+      ...base,
       outcome: "extraction-failed",
       cause: "coercion",
       // The relation could not use the pair, so neither side is individually at fault — and a
@@ -543,6 +583,7 @@ export function evaluatePinned<T>(
     ? `${displayValue(leftCoerced.value)} ${symbol}`
     : `${displayValue(leftCoerced.value)} ${symbol} ${displayValue(right)}${slack}`;
   return {
+    ...base,
     outcome: applied.held ? "passed" : "relation-false",
     cause: null,
     side: null,
@@ -559,7 +600,7 @@ export function evaluateAssertion<T>(
 ): AssertionResult {
   if (!declared.pinned) {
     throw new Error(
-      `assertion "${declared.id}" has no pinned form — an unpinned assertion is documentation and is never evaluated`,
+      `assertion "${declared.id}" has no pinned form — evaluate it with evaluateJudged (slice 11), not as a pinned relation`,
     );
   }
   return {
@@ -569,9 +610,100 @@ export function evaluateAssertion<T>(
   };
 }
 
+// ---- the judge fallback (slice 11) ---------------------------------------------------------
+
+/**
+ * What the caller got back from the judge for an unpinnable assertion.
+ *
+ * Structural on purpose: this package stays free of `@varys/judge-engine` (and therefore of every
+ * transport it can reach), exactly as it stays free of Playwright. The runner does the calling and
+ * hands the answer — or the failure — back here to be turned into a result.
+ */
+export type JudgedVerdict =
+  | { ok: true; verdict: "pass" | "fail"; reasoning: string }
+  /** The judge could not answer: no provider configured, or the transport threw. */
+  | { ok: false; error: string };
+
+/**
+ * Turn a judge's answer into an assertion evaluation (Slice 19, slice 11).
+ *
+ * Not every check reduces to two extractions and a relation. "The chart looks reasonable" cannot be
+ * pinned, and the honest answer is to judge it rather than to pretend. This is where that honesty
+ * is enforced, and the asymmetry is the whole point:
+ *
+ *  - `pass` → `passed`, with `mode: "judged"` so nothing downstream can mistake an approximate
+ *    green for an exact one.
+ *  - `fail` → `judge-failed`. It fails the run, like any other failing assertion.
+ *  - a THROW → `judge-unavailable`, never a pass. A model outage must not manufacture a green, and
+ *    it must not manufacture a red either — nothing was checked, so the run is needs-review and a
+ *    human looks.
+ *
+ * Note the deliberate boundary the fallback lives inside: a judge reading `$1,203,441` off an image
+ * and summing a 40-row column is exactly where a model hallucinates. The fallback is for
+ * QUALITATIVE checks; the pinned vocabulary is for quantitative ones (see {@link PINNABLE_CHECK_HELP}).
+ */
+export function evaluateJudged(answer: JudgedVerdict): AssertionEvaluation {
+  const base = { mode: "judged" as const, cause: null, side: null, left: null, right: null };
+  if (!answer.ok) {
+    return {
+      ...base,
+      outcome: "judge-unavailable",
+      detail: `this check has no pinned form and could not be judged: ${answer.error}`,
+      reasoning: null,
+    };
+  }
+  return {
+    ...base,
+    outcome: answer.verdict === "pass" ? "passed" : "judge-failed",
+    detail:
+      answer.verdict === "pass"
+        ? "judged: the check holds (approximate — no pinned form, so a model read the page)"
+        : "judged: the check does not hold (approximate — no pinned form, so a model read the page)",
+    reasoning: answer.reasoning,
+  };
+}
+
+/** {@link evaluateJudged} for a whole declared assertion, carrying its identity into the result. */
+export function evaluateJudgedAssertion<T>(
+  declared: Assertion<T>,
+  answer: JudgedVerdict,
+): AssertionResult {
+  return {
+    assertionId: declared.id,
+    check: declared.check,
+    ...evaluateJudged(answer),
+  };
+}
+
+/**
+ * What the pinned vocabulary CAN express, in the words an author needs to rephrase a check that
+ * fell back to the judge (Slice 19, slice 11).
+ *
+ * The surface that shows an assertion as "approximate" has to also say what would make it exact,
+ * or the badge is a shrug. Lives here because the vocabulary lives here: a help string maintained
+ * beside the editor would drift the first time a coercion is added.
+ */
+export const PINNABLE_CHECK_HELP =
+  "A check can be pinned when it compares two things: something read off the page on the left, " +
+  `against another element or a fixed value on the right. Each side is read as one of ${coercionSchema.options.join(", ")}, ` +
+  `and the two are compared with one of ${relationSchema.options.join(", ")} (numeric comparisons may carry a tolerance). ` +
+  "Rephrase towards that shape — \"the total equals the sum of the amount column\" pins; \"the page looks right\" " +
+  "does not. A check that is genuinely qualitative is meant to be judged, and leaving it approximate is the honest answer.";
+
+/**
+ * Did this outcome FAIL — as in, the run is red because of it?
+ *
+ * `judge-unavailable` is deliberately not a failure: nothing was checked, so there is no finding to
+ * be red about. It is the one outcome that is neither a pass nor a failure, and collapsing it into
+ * either is how a model outage becomes a silent green (or a fake bug report).
+ */
+export function isAssertionFailure(outcome: AssertionOutcome): boolean {
+  return outcome !== "passed" && outcome !== "judge-unavailable";
+}
+
 /** Did any assertion of this run fail? The one definition of "a failing assertion fails the run". */
 export function anyAssertionFailed(results: AssertionResult[]): boolean {
-  return results.some((r) => r.outcome !== "passed");
+  return results.some((r) => isAssertionFailure(r.outcome));
 }
 
 /**
@@ -579,14 +711,35 @@ export function anyAssertionFailed(results: AssertionResult[]): boolean {
  * they open anything. Names the assertions rather than dumping every detail.
  */
 export function summarizeAssertionFailures(results: AssertionResult[]): string | null {
-  const failed = results.filter((r) => r.outcome !== "passed");
+  const failed = results.filter((r) => isAssertionFailure(r.outcome));
   if (failed.length === 0) return null;
   const parts = failed.map((r) => {
-    const what = r.outcome === "extraction-failed" ? "couldn't be checked" : "is false";
+    const what =
+      r.outcome === "extraction-failed"
+        ? "couldn't be checked"
+        : r.outcome === "judge-failed"
+          ? "was judged false"
+          : "is false";
     return `"${r.check}" ${what} (${r.detail})`;
   });
   const head =
     failed.length === 1 ? "1 assertion failed" : `${failed.length} assertions failed`;
+  return `${head}: ${parts.join("; ")}`;
+}
+
+/**
+ * One line for the assertions that went UNCHECKED — what a reviewer sees on the amber run a judge
+ * outage produces. Deliberately worded as "not checked" rather than "failed": the run is silent
+ * about these, and a summary that implied otherwise would invent a verdict nobody reached.
+ */
+export function summarizeUncheckedAssertions(results: AssertionResult[]): string | null {
+  const unchecked = results.filter((r) => r.outcome === "judge-unavailable");
+  if (unchecked.length === 0) return null;
+  const parts = unchecked.map((r) => `"${r.check}" (${r.detail})`);
+  const head =
+    unchecked.length === 1
+      ? "1 assertion could not be judged"
+      : `${unchecked.length} assertions could not be judged`;
   return `${head}: ${parts.join("; ")}`;
 }
 
@@ -609,7 +762,16 @@ export function summarizeAssertionFailures(results: AssertionResult[]): string |
  *                     wrong, not its locator and not the app — re-pinning would not address it, so
  *                     it is not repairable either. It earns a diagnosis.
  */
-export type AssertionRepairability = "repairable" | "app-failure" | "definition-failure";
+export type AssertionRepairability =
+  | "repairable"
+  | "app-failure"
+  | "definition-failure"
+  /**
+   * The judge could not be reached, so the assertion has no verdict at all (slice 11). Not a
+   * repair (nothing is broken about the locator), and not a diagnosis either (there is nothing to
+   * diagnose — the model was down). It earns NO job; the run goes needs-review and a human looks.
+   */
+  | "unavailable";
 
 /** The narrow shape the repairability question is asked of — so the runner (which holds full
  *  results) and the API (which holds `run_assertions` rows) ask it of the same predicate rather
@@ -624,7 +786,10 @@ export function assertionRepairability(
   result: AssertionVerdictShape,
 ): AssertionRepairability | null {
   if (result.outcome === "passed") return null;
-  if (result.outcome === "relation-false") return "app-failure";
+  if (result.outcome === "judge-unavailable") return "unavailable";
+  // A judged `fail` is the app's, exactly as a false relation is — only approximately so. Repairing
+  // it would mean re-pinning until the model agrees, which is the same machine for hiding bugs.
+  if (result.outcome === "relation-false" || result.outcome === "judge-failed") return "app-failure";
   return result.cause === "unresolved" ? "repairable" : "definition-failure";
 }
 
@@ -647,8 +812,14 @@ export interface AssertionFailureVerdict {
   consequence: AssertionConsequence;
   /** Failures whose extraction target no longer resolves, in declaration order. */
   repairable: AssertionResult[];
-  /** Failures no repair may ever touch — a false relation, or an unusable value. */
+  /** Failures no repair may ever touch — a false relation, a judged fail, or an unusable value. */
   unrepairable: AssertionResult[];
+  /**
+   * Assertions that reached no verdict because the judge was unreachable (slice 11). They earn no
+   * job of either kind — there is nothing to repair and nothing to diagnose — but they are carried
+   * here rather than dropped, because the run status turns on whether any exist.
+   */
+  unavailable: AssertionResult[];
 }
 
 /**
@@ -664,14 +835,16 @@ export interface AssertionFailureVerdict {
 export function assertionFailureVerdict(results: AssertionResult[]): AssertionFailureVerdict {
   const repairable: AssertionResult[] = [];
   const unrepairable: AssertionResult[] = [];
+  const unavailable: AssertionResult[] = [];
   for (const r of results) {
     const where = assertionRepairability(r);
     if (where === "repairable") repairable.push(r);
+    else if (where === "unavailable") unavailable.push(r);
     else if (where !== null) unrepairable.push(r);
   }
   const consequence: AssertionConsequence =
     unrepairable.length > 0 ? "triage" : repairable.length > 0 ? "repair" : "none";
-  return { consequence, repairable, unrepairable };
+  return { consequence, repairable, unrepairable, unavailable };
 }
 
 /**
@@ -713,6 +886,13 @@ export const RELATION_FALSE_NEVER_REPAIRABLE =
   "A false assertion is never repairable — under any policy, at any threshold, by any agent — because " +
   "repairing it would mean re-pinning until the numbers agree, and that hides the exact bugs assertions " +
   "exist to catch. Fix the application, or change the assertion by hand if the check itself is wrong.";
+
+/** The same, for a judged assertion the model failed. Approximate evidence is still evidence
+ *  about the APP, and a repair that re-pins until a model agrees hides the same bugs. */
+export const JUDGE_FAILED_NEVER_REPAIRABLE =
+  "this assertion has no pinned form, so a model read the page and answered the check — and it answered no. " +
+  "That is (approximate) evidence about the APP, not about a locator, so no repair may touch it. Fix the " +
+  "application, or pin the check so it is evaluated exactly instead of judged.";
 
 /** The same, for a failure whose value could not be coerced: re-pinning addresses nothing. */
 export const COERCION_NEVER_REPAIRABLE =

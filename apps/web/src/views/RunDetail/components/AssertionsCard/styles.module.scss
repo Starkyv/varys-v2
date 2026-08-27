@@ -79,6 +79,20 @@
   background: var(--color-warning-soft);
 }
 
+/* The judge read the page and said no. Red like a false relation — it is evidence about the app,
+ * even though it is a reading rather than arithmetic. The "Approximate" badge is what carries
+ * that caveat; the colour carries the verdict. */
+.judge-failed {
+  border-left-color: var(--color-danger);
+  background: var(--color-danger-soft);
+}
+
+/* The judge was unreachable, so nothing was checked. Deliberately UNCOLOURED: the run claims
+ * nothing about this check either way, and any status colour here would invent a verdict. */
+.judge-unavailable {
+  border-left-color: var(--color-border-strong);
+}
+
 .itemHead {
   display: flex;
   align-items: center;
@@ -95,6 +109,21 @@
   margin: 0;
   font-size: var(--font-size-xs);
   color: var(--color-text-muted);
+}
+
+/* The judge's own sentence, set apart from the engine's `detail` so a reader can tell a model's
+ * prose from the system's account of what it did. */
+.reasoning {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text);
+  font-style: italic;
+}
+
+.reasoningLabel {
+  font-style: normal;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-subtle);
 }
 
 .blurb {
@@ -176,6 +205,14 @@
 
 .dot_extraction-failed {
   background: var(--color-warning);
+}
+
+.dot_judge-failed {
+  background: var(--color-danger);
+}
+
+.dot_judge-unavailable {
+  background: var(--color-border-strong);
 }
 
 .historyMeta {

@@ -441,11 +441,13 @@ async function persistAssertionResults(
         assertionId: r.assertionId,
         checkText: r.check,
         outcome: r.outcome,
+        mode: r.mode,
         cause: r.cause,
         side: r.side,
         leftValue: r.left === null ? null : String(r.left),
         rightValue: r.right === null ? null : String(r.right),
         detail: r.detail,
+        reasoning: r.reasoning,
       })),
     )
     .onConflictDoUpdate({
@@ -453,11 +455,13 @@ async function persistAssertionResults(
       set: {
         checkText: sql`excluded.check_text`,
         outcome: sql`excluded.outcome`,
+        mode: sql`excluded.mode`,
         cause: sql`excluded.cause`,
         side: sql`excluded.side`,
         leftValue: sql`excluded.left_value`,
         rightValue: sql`excluded.right_value`,
         detail: sql`excluded.detail`,
+        reasoning: sql`excluded.reasoning`,
       },
     });
 }
@@ -569,12 +573,13 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
   const { testId } = row;
   const recorded = row.definition as TestDefinition;
 
-  // Build the context-compare judge only when this run has a context checkpoint. `deps.judge`
-  // (tests) wins; otherwise it's built from the Configurations/app_settings (env fallback), read
-  // per run so a settings edit applies without a redeploy.
-  const needsJudge = recorded.steps.some(
-    (s) => s.type === "screenshot" && s.compareMode === "context",
-  );
+  // Build the judge only when this run actually needs one — a `context` checkpoint, or an
+  // assertion with no pinned form falling back to it (slice 11). `deps.judge` (tests) wins;
+  // otherwise it's built from the Configurations/app_settings (env fallback), read per run so a
+  // settings edit applies without a redeploy.
+  const needsJudge =
+    recorded.steps.some((s) => s.type === "screenshot" && s.compareMode === "context") ||
+    (recorded.assertions ?? []).some((a) => !a.pinned);
   let judge = deps.judge;
   let judgeDefaultPrompt = "";
   if (needsJudge) {
@@ -917,7 +922,7 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
     // history off its stable id.
     let assertionResults: AssertionResult[] = [];
     try {
-      assertionResults = await evaluateAssertions(page, recorded.assertions);
+      assertionResults = await evaluateAssertions(page, recorded.assertions, judge);
       await persistAssertionResults(db, runId, assertionResults);
     } catch (assertionErr) {
       // Extraction never throws (a failure to read is a result), so this is the persist — and an
@@ -939,6 +944,12 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
     // false is evidence about the app and never is. The verdict is the pure engine's, so the rule
     // lives in one unit-tested place rather than in this branch.
     const assertionVerdict = assertionFailureVerdict(assertionResults);
+    // …and the verdict's third bucket is the one that is NEITHER (slice 11): the judge was
+    // unreachable, so nothing was checked and the run claims nothing about those checks — not a
+    // pass, and not a failure either. It marks the run needs-review, so a model outage is never a
+    // silent green and never a manufactured bug report. Read off the verdict rather than derived
+    // again here, so "which assertions earn nothing" has exactly one definition.
+    const assertionUnchecked = assertionVerdict.unavailable.length > 0;
     // The fingerprint a repair would re-pin, or undefined. Present only when the verdict says
     // repair AND a target was actually recoverable: an assertion the definition no longer pins has
     // nothing to re-pin, and a failure whose cluster key cannot be derived is not a job.
@@ -954,7 +965,7 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
     // however its screenshots compare, and `failed` (not `needs_review`) is what says so.
     const status = assertionFailure
       ? "failed"
-      : reviewStates.some((s) => s !== "passed")
+      : reviewStates.some((s) => s !== "passed") || assertionUnchecked
         ? "needs_review"
         : "passed";
     // A red run that never THREW: a baseline existed and the capture differs. Nothing a re-pinned
