@@ -109,6 +109,12 @@ export interface RepairJobSummary {
   status: RepairJobStatus;
   /** Stable identity of the broken locator: failures sharing this key share a root cause. */
   clusterKey: string;
+  /** How many TESTS this job's Failure Cluster covers, and their names (Slice 19, slice 07).
+   *  `testId`/`testName` above are the ANCHOR — the oldest failure, the one a drainer opens its
+   *  session on. `clusterSize` is 1 for an ordinary single-test break; anything more is one app
+   *  change that broke several tests and will be repaired as one reviewable fix. */
+  clusterSize: number;
+  clusterTestNames: string[];
   /** How many times a drainer has attempted this job. */
   attempts: number;
   /** Who holds the claim, and since when (ISO) — both null while the job is unclaimed. */
@@ -138,6 +144,11 @@ export interface ClaimedRepairJob {
   /** The Brief the test states its intent as (`tests.intent`), or null if it has none. */
   brief: string | null;
   clusterKey: string;
+  /** Every test this job covers (Slice 19, slice 07) — the Failure Cluster, and precisely the set
+   *  the claim's credential reaches. `testId` above is the anchor and is always in here. A repair
+   *  applied through `apply_fix` is fanned out across all of them as ONE reviewable change, so a
+   *  drainer does not (and must not) repair them one at a time. */
+  clusterTests: Array<{ testId: string; testName: string; runId: string | null }>;
   /** The step that failed, as recorded on the run — null when the run has been purged. */
   failingStep: {
     index: number;
@@ -179,8 +190,14 @@ export interface ReportedRepair {
   /** The RE-RUN this repair triggered (Slice 19, slice 06) — a fresh run of the test against the
    *  repaired definition, queued the moment the justification gate let the repair stand. It is a
    *  new run, not a resurrection of `runId`: the failure that started this is history. Null when
-   *  the re-run could not be queued (the repair still stands; nothing is retried automatically). */
+   *  the re-run could not be queued (the repair still stands; nothing is retried automatically).
+   *  For a clustered repair this is the ANCHOR's re-run; see `rerunIds`. */
   rerunId: string | null;
+  /** Every test the repair was applied to (Slice 19, slice 07) and the re-run queued for each.
+   *  A clustered job writes one unreviewed version per member test, all under this job, and they
+   *  are accepted or rejected together — one app change, one reviewable fix. */
+  clusterTestIds: string[];
+  rerunIds: string[];
   /** The brief-clause justification the gate accepted, and the judge's one-line reasoning
    *  (Slice 19, slice 05). A repair only reaches this payload by passing that gate. */
   justification: string;
@@ -235,6 +252,72 @@ export interface RepairReviewItem {
    *  re-run exists (or for a version written before re-runs did). */
   rerunRunId: string | null;
   rerunOutcome: RunOutcome | null;
+  /** The Failure Cluster this repair covers (Slice 19, slice 07). `testId`/`version` above are the
+   *  ANCHOR; accepting or rejecting this item decides every test named here, because one app change
+   *  is one reviewable fix. `clusterSize` is 1 for an ordinary single-test repair. */
+  clusterSize: number;
+  clusterTestNames: string[];
+}
+
+/**
+ * The repair circuit breaker's current state (Slice 19, slice 07) — read by the queue view, so a
+ * project whose jobs have stopped appearing can see WHY.
+ *
+ * The distinction the whole view exists for: `tripped` means Varys is deliberately refusing to
+ * repair anything because too much broke at once, which is a completely different situation from
+ * "nothing is draining the queue" (slice 01's unclaimed-vs-slow distinction).
+ */
+export interface RepairBreakerView {
+  /** True while the most recent census was over threshold — repair is suppressed right now. */
+  tripped: boolean;
+  /** The project threshold in force, and the built-in default it falls back to. */
+  threshold: number;
+  defaultThreshold: number;
+  /** How far back "simultaneous" reaches, in minutes. */
+  windowMinutes: number;
+  /** Distinct tests broken on a locator inside the window, and how many broken locators they are
+   *  spread across. One cluster of forty is a rename; forty clusters is a broken app. */
+  failingTests: number;
+  clusters: number;
+  /** Failures the breaker refused to enqueue and nobody has released yet. */
+  suppressed: SuppressedFailureItem[];
+}
+
+/** One locator failure the breaker refused to enqueue, awaiting a human's decision. */
+export interface SuppressedFailureItem {
+  id: string;
+  testId: string;
+  testName: string;
+  /** The run the failure was observed in — null once that run has been purged. */
+  runId: string | null;
+  clusterKey: string;
+  /** The threshold in force, and the count that breached it, AT SUPPRESSION TIME — so the record
+   *  still explains itself after somebody changes the setting. */
+  threshold: number;
+  failingTests: number;
+  createdAt: string;
+}
+
+/** What releasing a tripped breaker did: the suppressed failures became jobs, clustered. */
+export interface RepairBreakerOverride {
+  ok: true;
+  /** How many suppressed failures were released, and how many JOBS they collapsed into. The gap
+   *  between the two numbers is the clustering doing its work. */
+  released: number;
+  jobsCreated: number;
+  jobIds: string[];
+  note: string;
+}
+
+/** The circuit-breaker threshold as the Configurations page reads and writes it. */
+export interface RepairBreakerSettings {
+  /** Tests simultaneously broken on a locator BEYOND which no repair job is created at all. */
+  threshold: number;
+  /** The built-in default, so the UI can say what "unset" means. */
+  defaultThreshold: number;
+  /** How far back "simultaneous" reaches, in minutes. Not editable — shown so the threshold's
+   *  units are unambiguous. */
+  windowMinutes: number;
 }
 
 /** The outcome of accepting or rejecting a repaired version. */

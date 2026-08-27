@@ -145,6 +145,13 @@
   }
 }
 
+/* "N tests, one change" — the blast radius of a clustered repair, said before the decision. */
+.clusterNote {
+  margin-top: var(--space-4);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
 .cluster {
   font-family: var(--font-mono);
   font-size: var(--font-size-xs);

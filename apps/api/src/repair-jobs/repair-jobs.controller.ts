@@ -36,6 +36,24 @@ export class RepairJobsController {
     return this.reviews.reject(versionId, user.email);
   }
 
+  /**
+   * The circuit breaker's state (slice 07) — why the queue has stopped filling.
+   *
+   * Declared above `:id` for the same reason `reviews` is: "breaker" must never be read as a job id.
+   */
+  @Get("breaker")
+  breaker() {
+    return this.jobs.breaker();
+  }
+
+  /** The deliberate human override: release everything the breaker suppressed into the queue,
+   *  clustered. Web-only and attributed — overriding a safety guard is an audited human act. */
+  @Post("breaker/release")
+  @HttpCode(200) // releases existing suppressed failures; the jobs it opens are a consequence
+  releaseBreaker(@CurrentUser() user: AuthUser) {
+    return this.jobs.releaseBreaker(user.email);
+  }
+
   // The repair queue. Open jobs (queued + claimed) by default; `?all=1` includes finished,
   // failed and cancelled ones.
   @Get()

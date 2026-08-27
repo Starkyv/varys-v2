@@ -49,6 +49,8 @@ import {
   fetchEnvironments,
   fetchFolders,
   fetchNeedsReview,
+  fetchRepairBreaker,
+  fetchRepairBreakerSettings,
   fetchRepairJobs,
   fetchRuns,
   fetchRunView,
@@ -75,6 +77,8 @@ import {
   updateRunNotes,
   updateTest,
   verifyLocator,
+  releaseRepairBreaker,
+  saveRepairBreakerSettings,
 } from "./api";
 
 /** TanStack Query owns the run read-model; the key is reused for invalidation
@@ -776,6 +780,51 @@ export function useEnqueueRepairJob() {
 }
 
 /** Cancel a queued repair job. */
+/**
+ * The circuit breaker. Polled with the queue, because "no new jobs" is exactly the symptom this
+ * answers — a queue that has gone quiet is either drained or suppressed, and those look identical
+ * until you can see the breaker.
+ */
+export function useRepairBreaker() {
+  return useQuery({
+    queryKey: ["repair-breaker"],
+    queryFn: fetchRepairBreaker,
+    refetchInterval: 5000,
+  });
+}
+
+/** Release the suppressed failures into the queue (the human override). */
+export function useReleaseRepairBreaker() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => releaseRepairBreaker(),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["repair-breaker"] });
+      qc.invalidateQueries({ queryKey: ["repair-jobs"] });
+    },
+  });
+}
+
+/** The circuit-breaker threshold, on the Configurations page. */
+export function useRepairBreakerSettings() {
+  return useQuery({
+    queryKey: ["repair-breaker-settings"],
+    queryFn: fetchRepairBreakerSettings,
+  });
+}
+
+export function useSaveRepairBreakerSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (threshold: number) => saveRepairBreakerSettings(threshold),
+    onSuccess: (data) => {
+      qc.setQueryData(["repair-breaker-settings"], data);
+      // The queue's breaker card reads the same threshold — a raise must show there immediately.
+      qc.invalidateQueries({ queryKey: ["repair-breaker"] });
+    },
+  });
+}
+
 export function useCancelRepairJob() {
   const qc = useQueryClient();
   return useMutation({

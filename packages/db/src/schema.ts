@@ -413,14 +413,15 @@ export type RepairJobStatus = "queued" | "claimed" | "done" | "failed" | "cancel
  * ALREADY detected (never by a separate scanner), and only when that test's Repair Policy is
  * `auto` — or when a human enqueues it by hand from a failed run.
  *
- * `cluster_key` is written now even though clustering *behaviour* is slice 07, so there is
- * nothing to backfill. Claiming under a lease is slice 03; `claimed_by`/`claimed_at` exist here
- * because the queue view's whole job is to tell UNCLAIMED from in-progress.
+ * Since slice 07 a job is one request to fix one **Failure Cluster**, which may span many tests:
+ * `test_id`/`run_id` are the ANCHOR (the oldest failure, the one a drainer opens its session on)
+ * and {@link repairJobTests} carries the full membership. Thirty-eight tests broken by one renamed
+ * button are one job, proposed once and applied across the cluster as a single reviewable change.
  *
- * A partial unique index over (test_id, cluster_key) WHERE status = 'queued' is what makes "one
- * failure, one job" true: the same test failing the same locator on ten nightly runs leaves one
- * queued job, not ten. It deliberately does not cover finished jobs, so the same break can be
- * re-enqueued after a repair was completed or cancelled.
+ * The partial unique index is therefore over `cluster_key` alone WHERE status = 'queued' —
+ * project-wide, not per test, which is what makes "one app change, one job" true. It deliberately
+ * does not cover finished jobs, so the same break can be re-enqueued after a repair completed or
+ * was cancelled.
  */
 export const repairJobs = pgTable(
   "repair_jobs",
@@ -453,11 +454,73 @@ export const repairJobs = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
-    openUq: uniqueIndex("repair_jobs_queued_uq")
-      .on(t.testId, t.clusterKey)
+    // Project-wide: one QUEUED job per broken locator, however many tests it broke (slice 07).
+    openUq: uniqueIndex("repair_jobs_cluster_queued_uq")
+      .on(t.clusterKey)
       .where(sql`status = 'queued'`),
   }),
 );
+
+/**
+ * The tests one Repair Job covers — the Failure Cluster's membership (Slice 19, slice 07).
+ *
+ * A job's `test_id` is only its anchor. This is the list a clustered repair is applied across, a
+ * clustered reject reverts, and a Repair Agent credential's reach is scoped to: without it, "the
+ * tests covered by a job it has claimed" would be a single test and thirty-seven others would be
+ * repaired one divergent proposal at a time.
+ *
+ * One row per (job, test): a test that keeps failing the same locator while the job is open
+ * updates its `run_id` rather than joining twice.
+ */
+export const repairJobTests = pgTable(
+  "repair_job_tests",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    jobId: uuid("job_id")
+      .notNull()
+      .references(() => repairJobs.id, { onDelete: "cascade" }),
+    /** A test in the cluster. Dies with its test — a deleted test is not part of any blast radius. */
+    testId: uuid("test_id")
+      .notNull()
+      .references(() => tests.id, { onDelete: "cascade" }),
+    /** The run that surfaced THIS test's failure (each member has its own). SET NULL on purge. */
+    runId: uuid("run_id").references(() => runs.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({ memberUq: uniqueIndex("repair_job_tests_uq").on(t.jobId, t.testId) }),
+);
+
+/**
+ * A locator failure the circuit breaker refused to enqueue (Slice 19, slice 07).
+ *
+ * When more tests are simultaneously broken than the project's threshold allows, NO jobs are
+ * created — mass failure means the app broke or was redesigned, and repairing through it would
+ * rewrite the corpus into agreement with a bug. The failures are recorded here instead, which is
+ * what makes the suppression visible and what makes the human override possible: releasing a
+ * tripped breaker enqueues from these rows, so nothing has to be re-run to recover the work.
+ *
+ * `target` is the failing fingerprint, stored because the cluster key alone cannot be re-derived
+ * and a release must be able to enqueue without the original run.
+ */
+export const suppressedFailures = pgTable("suppressed_failures", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  testId: uuid("test_id")
+    .notNull()
+    .references(() => tests.id, { onDelete: "cascade" }),
+  runId: uuid("run_id").references(() => runs.id, { onDelete: "set null" }),
+  /** Stable identity of the broken locator — the same `deriveClusterKey` the queue uses. */
+  clusterKey: text("cluster_key").notNull(),
+  /** The recorded fingerprint that missed, so an override can enqueue from this row alone. */
+  target: jsonb("target").notNull(),
+  /** The threshold in force, and the count that breached it, AT SUPPRESSION TIME — so the record
+   *  still explains itself after somebody raises the setting. */
+  threshold: integer("threshold").notNull(),
+  failingTests: integer("failing_tests").notNull(),
+  /** When a human released this for repair (the override). Null while still suppressed. */
+  releasedAt: timestamp("released_at", { withTimezone: true }),
+  releasedBy: text("released_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
 
 /**
  * A Repair Agent credential (Slice 19, slice 02 — ADR-0005): the long-lived secret an unattended
@@ -506,6 +569,8 @@ export const schema = {
   testSchedules,
   appSettings,
   repairJobs,
+  repairJobTests,
+  suppressedFailures,
   agentCredentials,
 };
 
@@ -764,9 +829,45 @@ CREATE TABLE IF NOT EXISTS repair_jobs (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE UNIQUE INDEX IF NOT EXISTS repair_jobs_queued_uq
-  ON repair_jobs (test_id, cluster_key) WHERE status = 'queued';
 CREATE INDEX IF NOT EXISTS repair_jobs_status_idx ON repair_jobs (status, created_at);
+-- Clustering (slice 07) moves the "one failure, one job" index from (test_id, cluster_key) to
+-- cluster_key alone: a job now covers a whole Failure Cluster, so the same broken locator in a
+-- second test JOINS the open job instead of opening a rival one. The old index has to go or it
+-- would still admit one queued job per test.
+DROP INDEX IF EXISTS repair_jobs_queued_uq;
+CREATE UNIQUE INDEX IF NOT EXISTS repair_jobs_cluster_queued_uq
+  ON repair_jobs (cluster_key) WHERE status = 'queued';
+-- The Failure Cluster's membership: every test one job covers. repair_jobs.test_id is the anchor.
+CREATE TABLE IF NOT EXISTS repair_job_tests (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  job_id uuid NOT NULL REFERENCES repair_jobs(id) ON DELETE CASCADE,
+  test_id uuid NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+  run_id uuid REFERENCES runs(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS repair_job_tests_uq ON repair_job_tests (job_id, test_id);
+-- Backfill: every pre-clustering job is a cluster of one. Doing it here rather than leaving the
+-- readers to fall back to repair_jobs.test_id keeps membership the single source of truth, so no
+-- query has to ask "clustered or not?".
+INSERT INTO repair_job_tests (job_id, test_id, run_id)
+  SELECT id, test_id, run_id FROM repair_jobs
+  ON CONFLICT DO NOTHING;
+-- Failures the circuit breaker refused to enqueue (slice 07). Recorded rather than dropped: this
+-- is what makes a tripped breaker visible, and what the human override enqueues from.
+CREATE TABLE IF NOT EXISTS suppressed_failures (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  test_id uuid NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+  run_id uuid REFERENCES runs(id) ON DELETE SET NULL,
+  cluster_key text NOT NULL,
+  target jsonb NOT NULL,
+  threshold integer NOT NULL,
+  failing_tests integer NOT NULL,
+  released_at timestamptz,
+  released_by text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS suppressed_failures_open_idx
+  ON suppressed_failures (created_at) WHERE released_at IS NULL;
 -- A Claim is a lease (slice 03): a claimed job carries the instant its claim lapses, after which
 -- it is swept back to 'queued' with attempts incremented. Added by ALTER so an existing queue
 -- gains the column without the CREATE TABLE above (IF NOT EXISTS) silently skipping it.
@@ -800,7 +901,7 @@ CREATE TABLE IF NOT EXISTS app_settings (
 -- app-under-test login vault. better-auth manages these tables itself (via its kysely
 -- pg adapter); they are NOT queried through Drizzle, so they have no pgTable object
 -- above — only this DDL so they exist at bootstrap. Generated verbatim by
--- better-auth's schema CLI and made idempotent here (\`IF NOT EXISTS\`) to match the
+-- better-auth's schema CLI and made idempotent here (\IF NOT EXISTS\) to match the
 -- repo's bootstrap-DDL convention. The quoted camelCase identifiers are REQUIRED —
 -- better-auth queries them case-sensitively; do not snake_case them.
 CREATE TABLE IF NOT EXISTS "user" (

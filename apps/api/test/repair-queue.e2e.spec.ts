@@ -11,7 +11,7 @@ import type { RepairJobSummary } from "@varys/review-contract";
 import { processRun } from "@varys/runner";
 import { LocalFsAdapter } from "@varys/storage-adapter";
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
 import { authed, prepareAuth } from "./auth-harness";
 import { startTestDb, type TestDb } from "./db-harness";
@@ -128,6 +128,24 @@ describe("Repair policy → a locator failure enqueues a visible job", () => {
   async function jobsFor(testId: string, all = false): Promise<RepairJobSummary[]> {
     return (await queue(all)).filter((j) => j.testId === testId);
   }
+
+  /**
+   * Clear the queue between cases.
+   *
+   * Every case here breaks the SAME fixture control, so since clustering (slice 07) they would
+   * otherwise join one another's Failure Cluster instead of opening their own job — the queue is
+   * project-wide, and "one app change, one job" is exactly the point. Each case wants a queue of
+   * its own; clustering behaviour itself is pinned in `repair-cluster.e2e.spec.ts`.
+   */
+  beforeEach(async () => {
+    // Straight to the table rather than through `cancel`: a CLAIMED job is open too, and one case
+    // here leaves a claim behind on purpose. Cancel deliberately refuses those (a claimed job is
+    // its drainer's to release), so the API cannot clear them and the next case would silently
+    // join the claim's cluster instead of opening its own job.
+    await consumerDb.db.execute(
+      `update repair_jobs set status = 'cancelled' where status in ('queued', 'claimed')`,
+    );
+  });
 
   it("defaults every test to manual, so nothing starts self-editing on its own", async () => {
     const testId = await createTest(definitionClickingSave("policy default"));

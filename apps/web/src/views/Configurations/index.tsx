@@ -30,6 +30,8 @@ import {
   useSaveImageComparisonSettings,
   useSaveJudgeSettings,
   useRevokeAgentCredential,
+  useRepairBreakerSettings,
+  useSaveRepairBreakerSettings,
   useSaveSlackSettings,
   useSendSlackTest,
   useSlackSettings,
@@ -91,6 +93,7 @@ export function Configurations() {
       <ImageComparisonCard settings={query.data} />
       <JudgeCard />
       <SlackCard />
+      <RepairBreakerCard />
       <AgentCredentialsCard />
       <p className={styles.comingSoon}>More settings coming soon — capture and schedules.</p>
     </div>
@@ -649,6 +652,99 @@ function SlackCardForm({ settings }: { settings: SlackSettingsView }) {
       <div className={styles.setting}>
         <Button variant="secondary" size="sm" loading={test.isPending || save.isPending} disabled={!canTest} onClick={() => void onTest()}>
           Send test message
+        </Button>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * The repair circuit-breaker threshold (Slice 19, slice 07).
+ *
+ * The setting reads as a safety limit rather than a tuning knob, because that is what it is: below
+ * it Varys repairs drift unattended, above it it refuses and asks a human. The copy leads with the
+ * consequence of raising it, since the failure mode is silent — a threshold set too high never
+ * announces itself, it just lets a bad deploy rewrite the corpus.
+ */
+function RepairBreakerCard() {
+  const query = useRepairBreakerSettings();
+  const save = useSaveRepairBreakerSettings();
+  const { toast } = useToast();
+  const [value, setValue] = useState("");
+
+  const settings = query.data;
+  useEffect(() => {
+    if (settings) setValue(String(settings.threshold));
+  }, [settings]);
+
+  if (query.isLoading) return <Skeleton height={220} radius="var(--radius-xl)" />;
+  if (query.isError || !settings) {
+    return (
+      <ErrorState
+        title="Couldn’t load the repair breaker"
+        description="Fetching the circuit-breaker threshold failed."
+        onRetry={() => query.refetch()}
+      />
+    );
+  }
+
+  const parsed = Number(value);
+  const valid = Number.isFinite(parsed) && Number.isInteger(parsed) && parsed >= 1;
+  const dirty = valid && parsed !== settings.threshold;
+
+  const onSave = () => {
+    save.mutate(parsed, {
+      onSuccess: (next) =>
+        toast(`Repair is suppressed above ${next.threshold} simultaneous locator failures.`),
+      onError: (e) => toast(e instanceof Error ? e.message : "Couldn’t save the threshold"),
+    });
+  };
+
+  return (
+    <section className={styles.card}>
+      <header className={styles.header}>
+        <span className={styles.headerIcon}>
+          <Sliders size={19} />
+        </span>
+        <div className={styles.headerText}>
+          <h2 className={styles.title}>Repair circuit breaker</h2>
+          <p className={styles.subtitle}>
+            How many tests may be broken on a locator at once before Varys stops repairing anything
+            and asks you instead. Mass failure means the app broke or was redesigned — a decision
+            that is yours, not an agent’s.
+          </p>
+        </div>
+      </header>
+
+      <div className={styles.setting}>
+        <div className={styles.settingHead}>
+          <span className={styles.settingTitle}>Threshold</span>
+        </div>
+        <p className={styles.settingDesc}>
+          Above this many tests failing on a locator within {settings.windowMinutes} minutes, no
+          repair jobs are created at all — the failures are recorded, an alert fires, and you can
+          release them for repair once you have confirmed the change was intended. Default{" "}
+          <code>{settings.defaultThreshold}</code>. Raising it is not free: the higher it is, the
+          larger the breakage an agent will quietly repair your tests into agreeing with.
+        </p>
+        <Input
+          type="number"
+          min={1}
+          value={value}
+          aria-label="Circuit breaker threshold"
+          onChange={(e) => setValue(e.target.value)}
+        />
+      </div>
+
+      <div className={styles.setting}>
+        <Button
+          variant="primary"
+          size="md"
+          loading={save.isPending}
+          disabled={!dirty}
+          onClick={onSave}
+        >
+          Save changes
         </Button>
       </div>
     </section>

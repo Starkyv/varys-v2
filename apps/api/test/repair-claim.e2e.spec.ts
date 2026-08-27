@@ -150,7 +150,16 @@ describe("A Repair Job is claimed under a lease", () => {
 
   // ---- fixtures --------------------------------------------------------------------------
 
-  function definitionClickingSave(name: string) {
+  /**
+   * A test that clicks the control the broken variant renames.
+   *
+   * `locator` overrides which control, and therefore which FAILURE CLUSTER the break belongs to.
+   * Since clustering (slice 07) a job covers a cluster rather than a test, so two tests that
+   * record the SAME broken control share one job — which is correct, and is why the cases here
+   * that need two independent jobs ask for two independent breaks. A locator that is not on the
+   * page at all fails to resolve exactly as a renamed one does, which is all those cases need.
+   */
+  function definitionClickingSave(name: string, locator = "save-btn") {
     return {
       name,
       viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
@@ -160,11 +169,11 @@ describe("A Repair Job is claimed under a lease", () => {
           type: "click",
           target: {
             tag: "button",
-            testId: "save-btn",
+            testId: locator,
             role: "button",
             accessibleName: "Save changes",
             nameFromAttr: true,
-            attributes: { id: "save-btn", "data-testid": "save-btn" },
+            attributes: { id: locator, "data-testid": locator },
             ancestors: [{ tag: "section", id: "form-panel" }, { tag: "body" }, { tag: "html" }],
             boundingBox: { x: 24, y: 168, width: 140, height: 36 },
             domIndex: 0,
@@ -192,8 +201,14 @@ describe("A Repair Job is claimed under a lease", () => {
    * A real queued job: a test whose click target the broken variant renamed, run once under an
    * `auto` policy so the worker enqueues at the point the locator failure is detected.
    */
-  async function queuedJob(name: string): Promise<{ testId: string; runId: string; jobId: string }> {
-    const created = await authed(app).post("/tests").send(definitionClickingSave(name)).expect(201);
+  async function queuedJob(
+    name: string,
+    locator = "save-btn",
+  ): Promise<{ testId: string; runId: string; jobId: string }> {
+    const created = await authed(app)
+      .post("/tests")
+      .send(definitionClickingSave(name, locator))
+      .expect(201);
     const testId = created.body.id as string;
     await authed(app).patch(`/tests/${testId}`).send({ repairPolicy: "auto" }).expect(200);
     const runId = await runToFailure(testId);
@@ -266,8 +281,11 @@ describe("A Repair Job is claimed under a lease", () => {
 
   it("is exclusive: two drainers claiming at once end up with different jobs, never the same one", async () => {
     await emptyQueue();
-    const first = await queuedJob("race one");
-    const second = await queuedJob("race two");
+    // Two DIFFERENT broken controls, so they are two Failure Clusters and therefore two jobs.
+    // Two tests broken by the same control would (correctly, since slice 07) be one job, and
+    // there would be nothing for the second drainer to win.
+    const first = await queuedJob("race one", "race-one-btn");
+    const second = await queuedJob("race two", "race-two-btn");
 
     const [a, b] = await Promise.all([claim(drainerA), claim(drainerB)]);
     const claimed = [a?.jobId, b?.jobId].filter(Boolean);
@@ -368,8 +386,10 @@ describe("A Repair Job is claimed under a lease", () => {
 
   it("scopes the claimer to the test it claimed, and nothing else", async () => {
     await emptyQueue();
-    const claimed = await queuedJob("in scope");
-    const other = await queuedJob("out of scope");
+    // Different clusters again: a test in the SAME cluster is deliberately IN scope now, because a
+    // clustered repair has to be written across all of them. "Nothing else" means another cluster.
+    const claimed = await queuedJob("in scope", "in-scope-btn");
+    const other = await queuedJob("out of scope", "out-of-scope-btn");
     const job = await claim(drainerA);
     expect(job?.jobId).toBe(claimed.jobId);
 

@@ -1,18 +1,34 @@
 import { BadRequestException, ConflictException, Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { judgeRepairJustification, type JudgeProvider, type JudgeResult } from "@varys/judge-engine";
-import { deriveClusterKey } from "@varys/repair-policy";
+import {
+  breakerVerdict,
+  clusterFailures,
+  DEFAULT_BREAKER_THRESHOLD,
+  deriveClusterKey,
+} from "@varys/repair-policy";
+import {
+  BREAKER_THRESHOLD_KEY,
+  BREAKER_WINDOW_MS,
+  breakerThreshold,
+  joinCluster,
+  recentLocatorFailures,
+} from "@varys/runner";
 import type {
   ClaimedRepairJob,
+  RepairBreakerOverride,
+  RepairBreakerView,
   RepairJobKind,
   RepairJobStatus,
   RepairJobSummary,
   ReportedRepair,
+  SuppressedFailureItem,
 } from "@varys/review-contract";
-import { describeStep, type TestDefinition } from "@varys/step-schema";
-import { and, asc, desc, eq, gt, inArray, lt, lte, sql } from "drizzle-orm";
+import { describeStep, type Fingerprint, type TestDefinition } from "@varys/step-schema";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, sql } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
-import { repairJobs, runs, tests, testVersions } from "../db/schema";
+import { appSettings, repairJobs, repairJobTests, runs, suppressedFailures, tests, testVersions } from "../db/schema";
 import { RunsService } from "../runs/runs.service";
+import { TestsService } from "../tests/tests.service";
 import { CLOCK, type Clock } from "./clock";
 import { JUDGE_SOURCE, type JudgeSource } from "./judge";
 import { describeRepairChange } from "./repair-diff";
@@ -63,6 +79,9 @@ export class RepairJobsService {
     @Inject(RepairReviewsService) private readonly reviews: RepairReviewsService,
     // The re-run a stood-up repair triggers (slice 06) goes through the ordinary single-run path.
     @Inject(RunsService) private readonly runs: RunsService,
+    // The cluster fan-out (slice 07) writes its versions through the SAME `saveConfig` a drainer's
+    // own `apply_fix` uses — version numbering, attribution and the unreviewed flag all in one place.
+    @Inject(TestsService) private readonly tests: TestsService,
   ) {}
 
   /**
@@ -98,6 +117,11 @@ export class RepairJobsService {
       .where(opts?.all ? undefined : inArray(repairJobs.status, [...OPEN_STATUSES]))
       .orderBy(desc(repairJobs.createdAt));
 
+    // The Failure Cluster each job covers (slice 07). A job is one app change, not one test, so
+    // the queue has to say how many tests it will fix — otherwise "1 job" reads as "1 test" and a
+    // thirty-eight-test repair looks like a trivial one.
+    const members = await this.clusterMembers(rows.map((r) => r.id));
+
     return rows.map((r) => ({
       id: r.id,
       testId: r.testId,
@@ -106,6 +130,8 @@ export class RepairJobsService {
       kind: r.kind as RepairJobKind,
       status: r.status as RepairJobStatus,
       clusterKey: r.clusterKey,
+      clusterSize: members.get(r.id)?.length ?? 1,
+      clusterTestNames: (members.get(r.id) ?? []).map((m) => m.testName),
       attempts: r.attempts,
       claimedBy: r.claimedBy,
       claimedAt: r.claimedAt ? r.claimedAt.toISOString() : null,
@@ -122,9 +148,15 @@ export class RepairJobsService {
    * that missed, and more importantly a pixel regression or a crash must not become repairable
    * just because a human asked loudly. Those get a Triage Job instead (slice 08).
    *
-   * Idempotent: asking twice hands back the job that is already OPEN for this test and cluster
-   * rather than stacking a second one — including when a drainer has already claimed it, which
-   * the partial unique index alone would not catch.
+   * Idempotent: asking twice hands back the job that is already OPEN for this cluster rather than
+   * stacking a second one — including when a drainer has already claimed it, which the partial
+   * unique index alone would not catch.
+   *
+   * **The circuit breaker does not gate this path, deliberately** (slice 07). The breaker exists to
+   * stop a bad deploy rewriting the corpus *unattended*; a person opening one failed run and asking
+   * for it to be repaired IS the human decision the breaker is holding out for, at the finest grain
+   * there is. Gating it would leave a tripped breaker with no way to repair a single known-good case
+   * short of releasing everything.
    */
   async enqueueForRun(runId: string): Promise<RepairJobSummary> {
     const [run] = await this.db
@@ -153,13 +185,14 @@ export class RepairJobsService {
     }
     const clusterKey = deriveClusterKey(target);
 
+    // Project-wide, not per test (slice 07): if this locator is already open as a job, this run's
+    // test JOINS that Failure Cluster rather than opening a rival job for the same app change.
     const openJob = () =>
       this.db
         .select({ id: repairJobs.id })
         .from(repairJobs)
         .where(
           and(
-            eq(repairJobs.testId, run.testId),
             eq(repairJobs.clusterKey, clusterKey),
             inArray(repairJobs.status, [...OPEN_STATUSES]),
           ),
@@ -179,9 +212,184 @@ export class RepairJobsService {
       id = inserted?.id ?? (await openJob())[0]?.id;
     }
     if (!id) throw new ConflictException("the repair job could not be enqueued");
+    await joinCluster(this.db, id, { testId: run.testId, runId });
 
     const [job] = (await this.list({ all: true })).filter((j) => j.id === id);
     return job;
+  }
+
+  /**
+   * The tests each job's Failure Cluster covers, keyed by job id (Slice 19, slice 07).
+   *
+   * Read from `repair_job_tests`, which the DDL backfills for every pre-clustering job, so there
+   * is no "clustered or not?" branch anywhere: a single-test break is simply a cluster of one.
+   */
+  private async clusterMembers(
+    jobIds: string[],
+  ): Promise<Map<string, Array<{ testId: string; testName: string; runId: string | null }>>> {
+    const byJob = new Map<string, Array<{ testId: string; testName: string; runId: string | null }>>();
+    if (jobIds.length === 0) return byJob;
+    const rows = await this.db
+      .select({
+        jobId: repairJobTests.jobId,
+        testId: repairJobTests.testId,
+        testName: tests.name,
+        runId: repairJobTests.runId,
+      })
+      .from(repairJobTests)
+      .innerJoin(tests, eq(tests.id, repairJobTests.testId))
+      .where(inArray(repairJobTests.jobId, jobIds))
+      .orderBy(asc(repairJobTests.createdAt));
+    for (const r of rows) {
+      const list = byJob.get(r.jobId) ?? [];
+      list.push({ testId: r.testId, testName: r.testName, runId: r.runId });
+      byJob.set(r.jobId, list);
+    }
+    return byJob;
+  }
+
+  /**
+   * The circuit breaker's current state (Slice 19, slice 07) — what the queue view reads so a
+   * project whose jobs have stopped appearing can see why.
+   *
+   * Recomputed on read from the same census the enqueue path uses, rather than stored: a stored
+   * "tripped" flag would need clearing, and something has to decide when — which is exactly the
+   * judgement the window already makes. Reading it live means the breaker un-trips by itself an
+   * hour after the mass failure stops, and the answer is never stale.
+   */
+  async breaker(): Promise<RepairBreakerView> {
+    const threshold = await breakerThreshold(this.db);
+    const verdict = breakerVerdict(await recentLocatorFailures(this.db, this.clock.now()), threshold);
+    const rows = await this.db
+      .select({
+        id: suppressedFailures.id,
+        testId: suppressedFailures.testId,
+        testName: tests.name,
+        runId: suppressedFailures.runId,
+        clusterKey: suppressedFailures.clusterKey,
+        threshold: suppressedFailures.threshold,
+        failingTests: suppressedFailures.failingTests,
+        createdAt: suppressedFailures.createdAt,
+      })
+      .from(suppressedFailures)
+      .innerJoin(tests, eq(tests.id, suppressedFailures.testId))
+      .where(isNull(suppressedFailures.releasedAt))
+      .orderBy(desc(suppressedFailures.createdAt));
+
+    return {
+      tripped: verdict.tripped,
+      threshold: verdict.threshold,
+      defaultThreshold: DEFAULT_BREAKER_THRESHOLD,
+      windowMinutes: Math.round(BREAKER_WINDOW_MS / 60_000),
+      failingTests: verdict.failingTests,
+      clusters: verdict.clusters,
+      suppressed: rows.map(
+        (r): SuppressedFailureItem => ({
+          id: r.id,
+          testId: r.testId,
+          testName: r.testName,
+          runId: r.runId,
+          clusterKey: r.clusterKey,
+          threshold: r.threshold,
+          failingTests: r.failingTests,
+          createdAt: r.createdAt.toISOString(),
+        }),
+      ),
+    };
+  }
+
+  /**
+   * The deliberate human override (Slice 19, slice 07): release everything the breaker suppressed
+   * into the queue, clustered.
+   *
+   * This is the whole reason suppressed failures are RECORDED rather than dropped. A genuine mass
+   * redesign is something you do want repaired in bulk — once a person has looked at it and said
+   * so. Nothing has to be re-run to recover the work: each suppressed row carries the fingerprint
+   * that missed, so the jobs are built from the record.
+   *
+   * Clustered on the way out, exactly as the enqueue path would have done: forty suppressed
+   * failures on one renamed control become ONE job. The gap between `released` and `jobsCreated`
+   * is that clustering, made visible.
+   *
+   * It does not raise the threshold. An override is a decision about THESE failures, not a
+   * standing instruction to stop guarding — a project that wants a higher bar edits the setting.
+   */
+  async releaseBreaker(actor: string): Promise<RepairBreakerOverride> {
+    const rows = await this.db
+      .select({
+        id: suppressedFailures.id,
+        testId: suppressedFailures.testId,
+        runId: suppressedFailures.runId,
+        clusterKey: suppressedFailures.clusterKey,
+      })
+      .from(suppressedFailures)
+      .where(isNull(suppressedFailures.releasedAt))
+      .orderBy(asc(suppressedFailures.createdAt));
+    if (rows.length === 0) {
+      return {
+        ok: true,
+        released: 0,
+        jobsCreated: 0,
+        jobIds: [],
+        note: "The breaker has nothing suppressed — there is nothing to release.",
+      };
+    }
+
+    const jobIds: string[] = [];
+    for (const cluster of clusterFailures(rows.map((r) => ({ ...r })))) {
+      const anchor = cluster.failures[0];
+      const [open] = await this.db
+        .select({ id: repairJobs.id })
+        .from(repairJobs)
+        .where(
+          and(
+            eq(repairJobs.clusterKey, cluster.clusterKey),
+            inArray(repairJobs.status, [...OPEN_STATUSES]),
+          ),
+        )
+        .limit(1);
+      let jobId = open?.id;
+      if (!jobId) {
+        const [inserted] = await this.db
+          .insert(repairJobs)
+          .values({
+            testId: anchor.testId,
+            runId: anchor.runId ?? null,
+            kind: "repair",
+            status: "queued",
+            clusterKey: cluster.clusterKey,
+          })
+          .onConflictDoNothing()
+          .returning({ id: repairJobs.id });
+        jobId = inserted?.id;
+        if (jobId) jobIds.push(jobId);
+      }
+      if (!jobId) continue; // lost a race with a concurrent enqueue; its members are joined below
+      for (const failure of cluster.failures) {
+        await joinCluster(this.db, jobId, { testId: failure.testId, runId: failure.runId ?? null });
+      }
+    }
+
+    const now = this.clock.now();
+    await this.db
+      .update(suppressedFailures)
+      .set({ releasedAt: now, releasedBy: actor })
+      .where(
+        inArray(
+          suppressedFailures.id,
+          rows.map((r) => r.id),
+        ),
+      );
+    this.log.warn(
+      `circuit breaker OVERRIDDEN by ${actor}: released ${rows.length} suppressed failure(s) into ${jobIds.length} job(s)`,
+    );
+    return {
+      ok: true,
+      released: rows.length,
+      jobsCreated: jobIds.length,
+      jobIds,
+      note: `Released ${rows.length} suppressed failure${rows.length === 1 ? "" : "s"} into ${jobIds.length} repair job${jobIds.length === 1 ? "" : "s"}. The threshold is unchanged — if this keeps happening, raise it deliberately rather than overriding every time.`,
+    };
   }
 
   /**
@@ -200,15 +408,20 @@ export class RepairJobsService {
   /** The id of the job this principal currently holds a live claim on for `testId`, or null.
    *  {@link hasClaimOn} asks the same question; this one is for the writes that must RECORD which
    *  job they were made under, so a version awaiting review can be traced to the failure it
-   *  claims to fix. */
+   *  claims to fix.
+   *
+   *  Matched through `repair_job_tests`, not `repair_jobs.test_id` (Slice 19, slice 07): a claim
+   *  reaches the whole Failure Cluster, because a clustered repair has to be applied to every test
+   *  in it. The anchor is a member of its own cluster, so a single-test break is unchanged. */
   async claimedJobId(principalId: string, testId: string): Promise<string | null> {
     if (!principalId || !testId) return null;
     const [row] = await this.db
       .select({ id: repairJobs.id })
       .from(repairJobs)
+      .innerJoin(repairJobTests, eq(repairJobTests.jobId, repairJobs.id))
       .where(
         and(
-          eq(repairJobs.testId, testId),
+          eq(repairJobTests.testId, testId),
           eq(repairJobs.status, "claimed"),
           eq(repairJobs.claimedBy, principalId),
           gt(repairJobs.claimExpiresAt, this.clock.now()),
@@ -392,6 +605,11 @@ export class RepairJobsService {
 
     const verdict = await this.judgeJustification(job, written, note, claim);
 
+    // The cluster fan-out (Slice 19, slice 07). The drainer repaired the ANCHOR; the same app
+    // change broke every other test in the cluster, and they are fixed here — one proposal, one
+    // decision — rather than left for thirty-seven more claims that could each land differently.
+    const fanned = await this.applyAcrossCluster(job, written, claimant);
+
     const now = this.clock.now();
     await this.db
       .update(repairJobs)
@@ -401,10 +619,14 @@ export class RepairJobsService {
       .where(eq(repairJobs.id, jobId));
     // Stored on the VERSION, not the job: the justification is what a reviewer weighs against the
     // Brief, so it has to sit beside the version it justifies for as long as that version exists.
+    // Every version the job wrote carries it, the fanned-out ones included: a reviewer opening any
+    // test in the cluster must see the argument the repair was allowed to stand on.
     await this.db
       .update(testVersions)
       .set({ justification: claim, justificationReasoning: verdict.reasoning })
-      .where(eq(testVersions.id, version.id));
+      .where(
+        inArray(testVersions.id, [version.id, ...fanned.map((f) => f.versionId)]),
+      );
 
     const [run] = job.runId
       ? await this.db
@@ -415,6 +637,17 @@ export class RepairJobsService {
       : [];
 
     const rerunId = await this.triggerRerun(job, claimant, run?.environmentId ?? null);
+    // Every repaired test earns its own evidence: a cluster with one healed member and one that
+    // regressed is exactly what a reviewer needs to see before accepting the whole change.
+    const fannedReruns: string[] = [];
+    for (const member of fanned) {
+      const id = await this.triggerRerun(
+        { id: job.id, testId: member.testId },
+        claimant,
+        member.environmentId,
+      );
+      if (id) fannedReruns.push(id);
+    }
 
     return {
       ok: true,
@@ -427,6 +660,8 @@ export class RepairJobsService {
       runId: job.runId,
       runStatus: run?.status ?? null,
       rerunId,
+      clusterTestIds: [job.testId, ...fanned.map((f) => f.testId)],
+      rerunIds: [...(rerunId ? [rerunId] : []), ...fannedReruns],
       justification: claim,
       justificationReasoning: verdict.reasoning,
       note:
@@ -435,8 +670,167 @@ export class RepairJobsService {
         (rerunId
           ? `A re-run against the repaired definition has been queued (run ${rerunId}); if it verifies it will read HEALED, which is a review queue item, not a pass. `
           : "The re-run could not be queued, so nothing is retried automatically. ") +
+        (fanned.length
+          ? `The same fix was applied across this job's Failure Cluster — ${fanned.length} other test${fanned.length === 1 ? "" : "s"} broken by the same change — as ONE reviewable fix, each with its own re-run. Accepting or rejecting decides all of them together. `
+          : "") +
         "Report it as a proposed fix awaiting review, not as fixed.",
     };
+  }
+
+  /**
+   * Apply the anchor's repair to the rest of its Failure Cluster (Slice 19, slice 07).
+   *
+   * The premise of clustering is that these tests are broken by ONE app change, so they take ONE
+   * fix — proposed once, reviewed once, accepted or rejected together. Repairing them
+   * independently is the failure mode the slice exists to prevent: thirty-eight claims, thirty-eight
+   * judgements, and a corpus that no longer agrees with itself about what the button is called.
+   *
+   * The fix is read out of what the anchor actually became, not out of what the drainer said: the
+   * step whose recorded locator carried this job's cluster key before the repair now carries a new
+   * target, and that target is what every other member gets. Members are matched by cluster key
+   * too, so a test whose broken step sits at a different index is still repaired, and a test that
+   * no longer has that locator at all is left alone rather than guessed at.
+   *
+   * Runs AFTER the justification gate: the fanned-out change is the same change the judge already
+   * accepted, applied to more tests. If any member fails to take it, everything written under this
+   * job is reverted and the report is refused — a half-applied cluster is the one outcome worse
+   * than no repair, because it looks finished.
+   */
+  private async applyAcrossCluster(
+    job: { id: string; testId: string },
+    written: Array<{ id: string; version: number; definition: unknown }>,
+    claimant: string,
+  ): Promise<Array<{ testId: string; versionId: string; version: number; environmentId: string | null }>> {
+    const members = (await this.clusterMembers([job.id])).get(job.id) ?? [];
+    const others = members.filter((m) => m.testId !== job.testId);
+    if (others.length === 0) return [];
+
+    const [jobRow] = await this.db
+      .select({ clusterKey: repairJobs.clusterKey })
+      .from(repairJobs)
+      .where(eq(repairJobs.id, job.id))
+      .limit(1);
+    const clusterKey = jobRow?.clusterKey;
+    if (!clusterKey) return [];
+
+    // What the anchor's broken locator BECAME. Diffed against the definition immediately below the
+    // first version this job wrote, so it is the repair as recorded rather than as described.
+    const [before] = await this.db
+      .select({ definition: testVersions.definition })
+      .from(testVersions)
+      .where(and(eq(testVersions.testId, job.testId), lt(testVersions.version, written[0].version)))
+      .orderBy(desc(testVersions.version))
+      .limit(1);
+    const newTarget = repairedTarget(
+      before?.definition as TestDefinition | undefined,
+      written[written.length - 1].definition as TestDefinition,
+      clusterKey,
+    );
+    if (!newTarget) {
+      // The repair was not a locator re-pin this job's cluster key can be traced through (an
+      // `edit_test` that restructured the steps, say). Fanning a change we cannot identify across
+      // other people's tests would be a guess, so the cluster stays a proposal about the anchor
+      // only — said plainly in the report rather than left to be discovered in review.
+      this.log.warn(
+        `job ${job.id}: could not identify the re-pinned locator for cluster ${clusterKey}; the repair was NOT fanned out to ${others.length} other test(s)`,
+      );
+      return [];
+    }
+
+    const applied: Array<{ testId: string; versionId: string; version: number; environmentId: string | null }> = [];
+    try {
+      for (const member of others) {
+        const [latest] = await this.db
+          .select({ version: testVersions.version, definition: testVersions.definition })
+          .from(testVersions)
+          .where(eq(testVersions.testId, member.testId))
+          .orderBy(desc(testVersions.version))
+          .limit(1);
+        if (!latest) continue;
+        const index = stepIndexForCluster(latest.definition as TestDefinition, clusterKey);
+        if (index === null) {
+          // This member has already been edited past the break (or never really shared it).
+          // Skipped, not failed: the cluster is a hypothesis about a root cause, and a member that
+          // no longer holds the broken locator has nothing to repair.
+          this.log.log(
+            `job ${job.id}: test ${member.testId} no longer carries cluster ${clusterKey} — nothing to fan out`,
+          );
+          continue;
+        }
+        const { version, versionId } = await this.tests.saveConfig(
+          member.testId,
+          { baseVersion: latest.version, steps: [{ index, target: newTarget }] },
+          `${claimant} (Claude repair, clustered)`,
+          { unreviewed: true, repairJobId: job.id },
+        );
+        applied.push({
+          testId: member.testId,
+          versionId,
+          version,
+          environmentId: await this.environmentOfRun(member.runId),
+        });
+      }
+    } catch (err) {
+      // Fail closed, loudly: undo the anchor AND every member already written, then refuse. A
+      // cluster half-applied is worse than none, because the queue would call it done.
+      this.log.error(
+        `job ${job.id}: fanning the repair across its cluster failed — reverting everything it wrote: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      await this.revertCluster(job.id, [
+        { testId: job.testId, versionIds: written.map((w) => w.id), revertBefore: written[0].version },
+        ...applied.map((a) => ({
+          testId: a.testId,
+          versionIds: [a.versionId],
+          revertBefore: a.version,
+        })),
+      ], "cluster fan-out", `the fix could not be applied across the whole cluster`, {
+        id: job.id,
+        set: { status: "queued", claimedBy: null, claimedAt: null, claimExpiresAt: null },
+      });
+      throw new BadRequestException(
+        `The repair was NOT applied: it could not be written across every test in this job's Failure Cluster, and a cluster half-repaired is worse than one not repaired at all. Everything this job wrote has been reverted and the job is back in the queue.`,
+      );
+    }
+    return applied;
+  }
+
+  /** Undo a repair across several tests — the clustered form of a revert, through the SAME
+   *  per-test path a human Reject uses. The job update is applied once, on the first revert. */
+  private async revertCluster(
+    jobId: string,
+    targets: Array<{ testId: string; versionIds: string[]; revertBefore: number }>,
+    actor: string,
+    because: string,
+    jobUpdate: { id: string; set: Record<string, unknown> } | null,
+  ): Promise<void> {
+    let job = jobUpdate;
+    for (const target of targets) {
+      try {
+        await this.reviews.revertRepair({ ...target, actor, because, jobUpdate: job });
+        job = null; // the job moves once, however many tests the cluster covers
+      } catch (err) {
+        this.log.error(
+          `job ${jobId}: could not revert test ${target.testId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    if (job) {
+      await this.db
+        .update(repairJobs)
+        .set({ ...job.set, updatedAt: this.clock.now() })
+        .where(eq(repairJobs.id, job.id));
+    }
+  }
+
+  /** The environment a member's failing run used, so its re-run re-tests the break where it broke. */
+  private async environmentOfRun(runId: string | null): Promise<string | null> {
+    if (!runId) return null;
+    const [row] = await this.db
+      .select({ environmentId: runs.environmentId })
+      .from(runs)
+      .where(eq(runs.id, runId))
+      .limit(1);
+    return row?.environmentId ?? null;
   }
 
   /**
@@ -677,6 +1071,10 @@ export class RepairJobsService {
       }
     }
 
+    // The cluster the claim reaches. A drainer must know it is repairing an app change, not a
+    // test: the fix it applies is fanned out across all of these as one reviewable change.
+    const members = (await this.clusterMembers([job.id])).get(job.id) ?? [];
+
     return {
       jobId: job.id,
       kind: job.kind as RepairJobKind,
@@ -685,6 +1083,9 @@ export class RepairJobsService {
       runId: job.runId,
       brief: job.brief,
       clusterKey: job.clusterKey,
+      clusterTests: members.length
+        ? members
+        : [{ testId: job.testId, testName: job.testName, runId: job.runId }],
       failingStep,
       attempts: job.attempts,
       attemptsRemaining: Math.max(0, ATTEMPT_CAP - job.attempts),
@@ -716,4 +1117,33 @@ export class RepairJobsService {
     if (!existing) throw new NotFoundException(`Repair job ${id} not found`);
     throw new ConflictException(`a ${existing.status} job cannot be cancelled`);
   }
+}
+
+/**
+ * The target a repair re-pinned a broken locator to: the step that carried `clusterKey` BEFORE the
+ * repair, read back off the definition AFTER it. Null when no such step exists any more, or when
+ * its target is unchanged — either way there is no identified re-pin to fan out, and guessing one
+ * would edit other people's tests on a hunch.
+ */
+function repairedTarget(
+  before: TestDefinition | undefined,
+  after: TestDefinition,
+  clusterKey: string,
+): Fingerprint | null {
+  if (!before) return null;
+  const index = stepIndexForCluster(before, clusterKey);
+  if (index === null) return null;
+  const step = after.steps[index];
+  const target = step && "target" in step ? step.target : undefined;
+  if (!target) return null;
+  return deriveClusterKey(target) === clusterKey ? null : target;
+}
+
+/** The index of the step whose recorded locator has this cluster key, or null. */
+function stepIndexForCluster(def: TestDefinition, clusterKey: string): number | null {
+  for (const [index, step] of def.steps.entries()) {
+    if (!("target" in step) || !step.target) continue;
+    if (deriveClusterKey(step.target) === clusterKey) return index;
+  }
+  return null;
 }

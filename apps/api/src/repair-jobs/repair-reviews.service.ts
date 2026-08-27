@@ -62,6 +62,8 @@ export class RepairReviewsService {
         >`(select max(version) from test_versions v where v.test_id = ${testVersions.testId} and v.version < ${testVersions.version})`,
         runId: repairJobs.runId,
         report: repairJobs.report,
+        /** The job's ANCHOR test — the one a clustered repair is shown under. */
+        jobTestId: repairJobs.testId,
       })
       .from(testVersions)
       .innerJoin(tests, eq(tests.id, testVersions.testId))
@@ -73,7 +75,32 @@ export class RepairReviewsService {
     // a link on the run: a run of this exact version IS a run of this repair, whoever started it.
     const rerunByVersion = await this.rerunOutcomes(rows.map((r) => r.versionId));
 
-    return rows.map((r) => ({
+    // A CLUSTERED repair (slice 07) wrote one unreviewed version per test in its Failure Cluster,
+    // all under one job. That is one app change and must read as one decision, so the queue shows
+    // the ANCHOR — the job's own test — and names the rest, rather than listing thirty-eight rows
+    // a reviewer would have to accept one at a time and could accept inconsistently.
+    const anchorByJob = new Map<string, string>();
+    for (const r of rows) {
+      if (r.jobId && r.testId === r.jobTestId && !anchorByJob.has(r.jobId)) {
+        anchorByJob.set(r.jobId, r.versionId);
+      }
+    }
+    const clusterNames = new Map<string, string[]>();
+    for (const r of rows) {
+      if (!r.jobId) continue;
+      const list = clusterNames.get(r.jobId) ?? [];
+      list.push(r.testName);
+      clusterNames.set(r.jobId, list);
+    }
+    const visible = rows.filter((r) => {
+      if (!r.jobId) return true; // no job behind it — it stands alone
+      const anchor = anchorByJob.get(r.jobId);
+      // No anchor version (the job's own test was already decided, or its member row is gone):
+      // fall back to showing every sibling rather than hiding work from the reviewer.
+      return anchor === undefined ? true : anchor === r.versionId;
+    });
+
+    return visible.map((r) => ({
       versionId: r.versionId,
       testId: r.testId,
       testName: r.testName,
@@ -90,6 +117,8 @@ export class RepairReviewsService {
       isActiveDefinition: Number(r.latestVersion) === r.version,
       rerunRunId: rerunByVersion.get(r.versionId)?.runId ?? null,
       rerunOutcome: rerunByVersion.get(r.versionId)?.outcome ?? null,
+      clusterSize: r.jobId ? (clusterNames.get(r.jobId)?.length ?? 1) : 1,
+      clusterTestNames: r.jobId ? (clusterNames.get(r.jobId) ?? [r.testName]) : [r.testName],
     }));
   }
 
@@ -162,17 +191,32 @@ export class RepairReviewsService {
    */
   async accept(versionId: string, reviewer: string): Promise<RepairReviewDecision> {
     const version = await this.unreviewed(versionId);
+    // A CLUSTERED repair is one app change, so it is one decision (Slice 19, slice 07): accepting
+    // it accepts every test the job repaired. Accepting them one at a time would let a reviewer
+    // leave half a cluster agreeing with the new button name and half with the old.
+    const siblings = await this.clusterVersions(version);
     await this.db
       .update(testVersions)
       .set({ reviewState: "reviewed", reviewedBy: reviewer, reviewedAt: this.clock.now() })
-      .where(eq(testVersions.id, versionId));
-    this.log.log(`accepted repaired v${version.version} of test ${version.testId} (${reviewer})`);
+      .where(
+        inArray(
+          testVersions.id,
+          siblings.map((v) => v.id),
+        ),
+      );
+    const extra = siblings.length - 1;
+    this.log.log(
+      `accepted repaired v${version.version} of test ${version.testId}${extra > 0 ? ` and ${extra} clustered sibling(s)` : ""} (${reviewer})`,
+    );
     return {
       ok: true,
       versionId,
       reviewState: "reviewed",
       revertedToVersion: null,
-      note: `v${version.version} is accepted and is the test's active definition.`,
+      note:
+        extra > 0
+          ? `Accepted across the whole Failure Cluster — ${siblings.length} tests, one app change. Each is now its test's active definition.`
+          : `v${version.version} is accepted and is the test's active definition.`,
     };
   }
 
@@ -187,26 +231,77 @@ export class RepairReviewsService {
    */
   async reject(versionId: string, reviewer: string): Promise<RepairReviewDecision> {
     const version = await this.unreviewed(versionId);
-    const { previousVersion, revertedToVersion } = await this.revertRepair({
-      testId: version.testId,
-      versionIds: [versionId],
-      revertBefore: version.version,
-      actor: reviewer,
-      because: `rejected repair v${version.version}`,
-      // Terminal, and terminally UNSUCCESSFUL: `failed` is how the queue already says "every
-      // attempt was spent and the test is still yours to fix", which is exactly true here.
-      jobUpdate: version.repairJobId ? { id: version.repairJobId, set: { status: "failed" } } : null,
-    });
+    // Same reasoning as accept, and more load-bearing: rejecting a clustered repair has to revert
+    // EVERY test in the cluster (Slice 19, slice 07). Reverting only the one a reviewer happened to
+    // click would leave the other thirty-seven quietly repaired by a fix a human just refused.
+    const siblings = await this.clusterVersions(version);
+    // Group by test — each one is its own append-the-previous-definition revert.
+    const byTest = new Map<string, typeof siblings>();
+    for (const v of siblings) byTest.set(v.testId, [...(byTest.get(v.testId) ?? []), v]);
+
+    let anchor: { previousVersion: number; revertedToVersion: number } | null = null;
+    // Terminal, and terminally UNSUCCESSFUL: `failed` is how the queue already says "every
+    // attempt was spent and the test is still yours to fix", which is exactly true here. It moves
+    // once, however many tests the cluster covers.
+    let jobUpdate = version.repairJobId
+      ? { id: version.repairJobId, set: { status: "failed" } as Record<string, unknown> }
+      : null;
+    for (const [testId, versions] of byTest) {
+      const result = await this.revertRepair({
+        testId,
+        versionIds: versions.map((v) => v.id),
+        revertBefore: Math.min(...versions.map((v) => v.version)),
+        actor: reviewer,
+        because: `rejected repair v${version.version}`,
+        jobUpdate,
+      });
+      jobUpdate = null;
+      if (testId === version.testId) anchor = result;
+    }
+    if (!anchor) throw new NotFoundException(`Version ${versionId} could not be reverted`);
+    const extra = byTest.size - 1;
     this.log.log(
-      `rejected repaired v${version.version} of test ${version.testId}: reverted to v${previousVersion}'s definition as v${revertedToVersion} (${reviewer})`,
+      `rejected repaired v${version.version} of test ${version.testId}${extra > 0 ? ` and ${extra} clustered sibling test(s)` : ""}: reverted to v${anchor.previousVersion}'s definition as v${anchor.revertedToVersion} (${reviewer})`,
     );
     return {
       ok: true,
       versionId,
       reviewState: "rejected",
-      revertedToVersion,
-      note: `The repair was rejected. The test is back on what v${previousVersion} said, written as v${revertedToVersion}; the rejected version is retained in the history.`,
+      revertedToVersion: anchor.revertedToVersion,
+      note:
+        extra > 0
+          ? `The repair was rejected across the whole Failure Cluster — all ${byTest.size} tests are back on what they said before, each written as a new version. The rejected versions are retained in their histories.`
+          : `The repair was rejected. The test is back on what v${anchor.previousVersion} said, written as v${anchor.revertedToVersion}; the rejected version is retained in the history.`,
     };
+  }
+
+  /**
+   * Every still-unreviewed version this repair covers: the one being decided, plus its clustered
+   * siblings when a job wrote across a whole Failure Cluster (Slice 19, slice 07).
+   *
+   * A version with no job behind it is a cluster of one — the same shape, so accept and reject need
+   * no "is this clustered?" branch.
+   */
+  private async clusterVersions(version: {
+    id: string;
+    testId: string;
+    version: number;
+    repairJobId: string | null;
+  }): Promise<Array<{ id: string; testId: string; version: number }>> {
+    if (!version.repairJobId) {
+      return [{ id: version.id, testId: version.testId, version: version.version }];
+    }
+    const rows = await this.db
+      .select({ id: testVersions.id, testId: testVersions.testId, version: testVersions.version })
+      .from(testVersions)
+      .where(
+        and(
+          eq(testVersions.repairJobId, version.repairJobId),
+          eq(testVersions.reviewState, "unreviewed"),
+        ),
+      )
+      .orderBy(desc(testVersions.version));
+    return rows.length ? rows : [{ id: version.id, testId: version.testId, version: version.version }];
   }
 
   /**

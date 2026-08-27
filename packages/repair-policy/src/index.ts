@@ -9,8 +9,11 @@ import type { Fingerprint } from "@varys/step-schema";
  * a model call. The queue tables, the enqueue point and the drainer live elsewhere; what lives
  * here is *what a policy may say* and *which failures are the same failure*.
  *
- * Clustering behaviour (one job per cluster) and the circuit breaker land in slice 07; slice 01
- * only writes the cluster key onto each job, so there is nothing to backfill later.
+ * Three things, in the order the queue uses them (slice 07): cluster-key derivation from a
+ * failing locator's strong signals, clustering of failure records, and the circuit-breaker
+ * predicate. Everything downstream — which rows get written, which alert fires, which override
+ * releases what — is the API's business; the semantics are here, where they can be tested without
+ * a database.
  */
 
 /** What a test does when a run fails on a locator it cannot resolve. */
@@ -87,4 +90,125 @@ export function deriveClusterKey(target: Fingerprint): string {
     neighborText: (target.neighborText ?? []).map(norm),
   });
   return `weak:${tag}:${createHash("sha1").update(weak).digest("hex").slice(0, 12)}`;
+}
+
+// ── clustering (slice 07) ──────────────────────────────────────────────────────────────────────
+
+/**
+ * One recorded locator failure, as the queue sees it: which test failed, which run surfaced it,
+ * and the {@link deriveClusterKey} identity of the locator that missed.
+ *
+ * Deliberately not the fingerprint itself. Clustering is a decision about identity, and identity
+ * is the cluster key — passing the whole fingerprint would invite a second, divergent notion of
+ * "same failure" to grow in here.
+ */
+export interface FailureRecord {
+  testId: string;
+  /** The run the failure was observed in. Null for a failure whose run has been purged. */
+  runId?: string | null;
+  clusterKey: string;
+}
+
+/** A group of failures that are all the same broken locator. */
+export interface FailureCluster {
+  clusterKey: string;
+  /** Distinct tests this cluster covers, in first-seen order — the blast radius of ONE app change. */
+  testIds: string[];
+  /** Every failure record in the cluster, in the order given. */
+  failures: FailureRecord[];
+}
+
+/**
+ * Group failures by the locator that broke — the whole point of the slice: thirty-eight tests
+ * broken by one renamed button are ONE cluster, so they become one job, proposed once and applied
+ * across the cluster as a single reviewable change rather than thirty-eight repairs free to
+ * diverge from each other.
+ *
+ * Clusters come back in first-seen order, and so do the failures inside each one, so the oldest
+ * failure is the natural anchor (the run a drainer opens its session on). A test that failed twice
+ * on the same locator appears once in `testIds` and twice in `failures`: the blast radius is
+ * counted in tests, the evidence is kept whole.
+ *
+ * Unrelated failures do not merge, by construction — different locators derive different keys.
+ */
+export function clusterFailures(failures: readonly FailureRecord[]): FailureCluster[] {
+  const byKey = new Map<string, FailureCluster>();
+  for (const failure of failures) {
+    let cluster = byKey.get(failure.clusterKey);
+    if (!cluster) {
+      cluster = { clusterKey: failure.clusterKey, testIds: [], failures: [] };
+      byKey.set(failure.clusterKey, cluster);
+    }
+    cluster.failures.push(failure);
+    if (!cluster.testIds.includes(failure.testId)) cluster.testIds.push(failure.testId);
+  }
+  return [...byKey.values()];
+}
+
+// ── the circuit breaker (slice 07) ─────────────────────────────────────────────────────────────
+
+/**
+ * How many tests may be simultaneously broken on a locator before repair is suppressed entirely.
+ *
+ * Ten is chosen to sit above the size of an ordinary drift event and below the size of a bad
+ * deploy. A renamed control usually breaks a handful of tests; a broken build, a failed migration
+ * or a redesign breaks tens. The cost of the two mistakes is not symmetric — suppressing a repair
+ * that would have been fine costs a human five minutes with an override button, while repairing
+ * through a bad deploy rewrites the corpus into agreement with a bug and destroys the evidence
+ * that it ever happened. So the default errs low.
+ */
+export const DEFAULT_BREAKER_THRESHOLD = 10;
+
+/**
+ * Coerce a stored/untrusted threshold (an `app_settings` string, a request body) to a usable one.
+ * Anything that is not a positive integer falls back to {@link DEFAULT_BREAKER_THRESHOLD} — a
+ * corrupt setting must not silently disable the guard by reading as `0` or `Infinity`.
+ */
+export function normalizeBreakerThreshold(value: unknown): number {
+  const n = typeof value === "string" ? Number(value) : value;
+  if (typeof n !== "number" || !Number.isFinite(n)) return DEFAULT_BREAKER_THRESHOLD;
+  const floored = Math.floor(n);
+  return floored >= 1 ? floored : DEFAULT_BREAKER_THRESHOLD;
+}
+
+/** What the breaker decided, and the numbers it decided from — so a human reading a suppression
+ *  can tell a mass rename (many tests, one cluster) from a broken app (many tests, many clusters). */
+export interface BreakerVerdict {
+  /** True when repair must be suppressed: no jobs at all, the failures recorded instead. */
+  tripped: boolean;
+  threshold: number;
+  /** Distinct tests simultaneously broken on a locator. This is what the threshold compares to. */
+  failingTests: number;
+  /** How many distinct broken locators those tests are spread across. */
+  clusters: number;
+}
+
+/**
+ * The breaker predicate: is this many simultaneous locator failures a drift event, or an app that
+ * broke? Above the threshold it is the latter, and repair is suppressed entirely — mass failure is
+ * a human decision, and one bad deploy must not be allowed to rewrite the corpus into agreement
+ * with a bug.
+ *
+ * **Counted in distinct TESTS, not clusters.** A single cluster of forty is exactly the case
+ * clustering handles well, so counting clusters would let the largest, most consequential rewrite
+ * of all through the guard untouched. `clusters` is reported alongside instead, because it is what
+ * tells a human which kind of event this is — and the override exists precisely so that a
+ * confirmed mass redesign can be repaired in bulk.
+ *
+ * Strictly ABOVE the threshold trips it: a threshold of ten means ten simultaneous failures are
+ * still repaired and the eleventh is not.
+ */
+export function breakerVerdict(
+  failures: readonly FailureRecord[],
+  threshold: number = DEFAULT_BREAKER_THRESHOLD,
+): BreakerVerdict {
+  const clusters = clusterFailures(failures);
+  const failingTests = new Set(failures.map((f) => f.testId)).size;
+  const limit = normalizeBreakerThreshold(threshold);
+  return {
+    tripped: failingTests > limit,
+    threshold: limit,
+    failingTests,
+    clusters: clusters.length,
+  };
 }

@@ -34,6 +34,18 @@ export class SettingsController {
   }
 
   // The LLM judge config for context checkpoints. GET is masked (never returns the API key).
+  /** The repair circuit-breaker threshold (Slice 19, slice 07) — a project setting with a
+   *  documented default, shown on the Configurations page beside the other global guards. */
+  @Get("repair-breaker")
+  getRepairBreaker() {
+    return this.settings.getRepairBreaker();
+  }
+
+  @Put("repair-breaker")
+  saveRepairBreaker(@Body() body: { threshold?: number }) {
+    return this.settings.saveRepairBreaker(body ?? {});
+  }
+
   @Get("judge")
   getJudge(): Promise<JudgeSettingsView> {
     return this.settings.getJudge();

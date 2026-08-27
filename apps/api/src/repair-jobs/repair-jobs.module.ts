@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { DB, type Db } from "../db/db.module";
 import { RunsModule } from "../runs/runs.module";
+import { TestsModule } from "../tests/tests.module";
 import { CLOCK, SYSTEM_CLOCK } from "./clock";
 import { createDbJudgeSource, JUDGE_SOURCE } from "./judge";
 import { RepairJobsController } from "./repair-jobs.controller";
@@ -10,7 +11,8 @@ import { RepairReviewsService } from "./repair-reviews.service";
 @Module({
   // RunsModule: an accepted repair triggers a RE-RUN (slice 06), created through the same
   // single-run path everything else uses (latest-version pin + enqueue) rather than a second one.
-  imports: [RunsModule],
+  // TestsModule: the cluster fan-out (slice 07) writes member versions through TestsService.
+  imports: [RunsModule, TestsModule],
   controllers: [RepairJobsController],
   // The clock is a provider so an E2E can override it and step over a lease expiry without
   // sleeping (slice 03) — see `./clock`.

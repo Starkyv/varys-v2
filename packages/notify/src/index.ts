@@ -450,6 +450,65 @@ export async function notifyRunComplete(
   });
 }
 
+/**
+ * Alert that the repair circuit breaker has tripped (Slice 19, slice 07) — more tests are
+ * simultaneously broken on a locator than the project's threshold allows, so NO repair jobs are
+ * being created at all.
+ *
+ * This is the one notification in here that is NOT about a run, and it is not gated per-source for
+ * that reason: `notifyManual` / `notifySchedule` / `notifySuite` say which RUNS you want to hear
+ * about, and a tripped breaker is not a run — it is Varys declining to repair anything until a
+ * human looks. Muting run notifications must not silently mute the guard.
+ *
+ * Best-effort like everything else here: never throws. A suppression is recorded before this is
+ * called, so an unsendable alert costs visibility in Slack, not the record itself.
+ *
+ * The cluster spread is in the message on purpose. "40 tests, 1 cluster" is a rename somebody can
+ * confirm and override in a minute; "40 tests, 31 clusters" is a broken deploy, and the answer is
+ * to fix the app, not the tests.
+ */
+export async function notifyBreakerTripped(
+  db: Db,
+  event: {
+    failingTests: number;
+    clusters: number;
+    threshold: number;
+    /** The test whose failure tripped it — context, not the cause. */
+    latestTestName?: string | null;
+  },
+): Promise<{ sent: boolean; error?: string }> {
+  const cfg = await readSlackConfig(db);
+  if (!cfg) return { sent: false };
+
+  const spread =
+    event.clusters === 1
+      ? "all of them on ONE broken locator — likely a single rename, which an override can repair in bulk once you have confirmed it"
+      : `spread across ${event.clusters} different broken locators — that looks like the app broke or was redesigned, not test drift`;
+  const headline = `🛑 Repair suppressed · circuit breaker tripped`;
+  const detail =
+    `*${event.failingTests}* tests are broken on a locator (threshold *${event.threshold}*), ${spread}.
+` +
+    "No repair jobs have been created. Nothing will be repaired automatically until someone overrides the breaker." +
+    (event.latestTestName ? `
+Most recent: ${esc(event.latestTestName)}.` : "");
+  const message: SlackMessage = {
+    text: `🛑 Repair suppressed — ${event.failingTests} tests broken on a locator (threshold ${event.threshold})`,
+    blocks: [
+      { type: "section", text: { type: "mrkdwn", text: `*${headline}*` } },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `${detail}
+${link(cfg.baseUrl, "?view=repair-queue", "Review the suppressed failures")}`,
+        },
+      },
+    ],
+  };
+  const res = await sendSlackMessage(cfg, message);
+  return res.ok ? { sent: true } : { sent: false, error: res.error };
+}
+
 /** Fan-in: post the suite summary iff every child is terminal AND this call wins the one-shot
  *  claim on `suite_runs.notified_at`. */
 async function notifySuiteIfComplete(

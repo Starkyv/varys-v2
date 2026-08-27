@@ -1,12 +1,15 @@
 import { BadRequestException, Inject, Injectable } from "@nestjs/common";
 import { appSettings } from "@varys/db";
 import { sendSlackMessage, SLACK_SETTINGS_KEYS } from "@varys/notify";
+import { DEFAULT_BREAKER_THRESHOLD, normalizeBreakerThreshold } from "@varys/repair-policy";
+import { BREAKER_THRESHOLD_KEY, BREAKER_WINDOW_MS } from "@varys/runner";
 import {
   DEFAULT_IMAGE_COMPARISON_SETTINGS,
   type ImageComparisonSettings,
   type JudgeProviderName,
   type JudgeSettingsPatch,
   type JudgeSettingsView,
+  type RepairBreakerSettings,
   type SlackSettingsPatch,
   type SlackSettingsView,
 } from "@varys/review-contract";
@@ -87,6 +90,42 @@ export class SettingsService {
         });
     }
     return this.getImageComparison();
+  }
+
+  /**
+   * The repair circuit-breaker threshold (Slice 19, slice 07): how many tests may be
+   * simultaneously broken on a locator before repair is suppressed entirely.
+   *
+   * A project setting with a documented default, read fresh by the enqueue path on every failure,
+   * so raising it after a mass event takes effect on the next run without a redeploy.
+   */
+  async getRepairBreaker(): Promise<RepairBreakerSettings> {
+    const rows = await this.db
+      .select({ key: appSettings.key, value: appSettings.value })
+      .from(appSettings)
+      .where(inArray(appSettings.key, [BREAKER_THRESHOLD_KEY]));
+    const stored = rows.find((r) => r.key === BREAKER_THRESHOLD_KEY)?.value;
+    return {
+      threshold: normalizeBreakerThreshold(stored),
+      defaultThreshold: DEFAULT_BREAKER_THRESHOLD,
+      windowMinutes: Math.round(BREAKER_WINDOW_MS / 60_000),
+    };
+  }
+
+  /** Set the threshold. Normalized rather than trusted — a stored `0` would read as "trip on
+   *  everything" and quietly turn auto-repair off altogether. */
+  async saveRepairBreaker(patch: { threshold?: number }): Promise<RepairBreakerSettings> {
+    if (typeof patch?.threshold === "number") {
+      const value = String(normalizeBreakerThreshold(patch.threshold));
+      await this.db
+        .insert(appSettings)
+        .values({ key: BREAKER_THRESHOLD_KEY, value })
+        .onConflictDoUpdate({
+          target: appSettings.key,
+          set: { value, updatedAt: new Date() },
+        });
+    }
+    return this.getRepairBreaker();
   }
 
   /** The judge config for the Configurations page — MASKED: the stored API key is never returned,

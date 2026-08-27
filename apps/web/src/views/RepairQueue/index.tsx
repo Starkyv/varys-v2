@@ -20,8 +20,10 @@ import { StatusBadge } from "../../lib/status";
 import {
   useCancelRepairJob,
   useDecideRepairReview,
+  useRepairBreaker,
   useRepairJobs,
   useRepairReviews,
+  useReleaseRepairBreaker,
 } from "../../queries";
 import styles from "./styles.module.scss";
 
@@ -114,7 +116,10 @@ function RepairReviews() {
     if (action === "reject") {
       const ok = await confirm({
         title: "Reject this repair?",
-        message: `“${item.testName}” goes back to what v${item.previousVersion ?? "?"} said. The rejected version is kept in the test's history, and the test stays broken until you fix it.`,
+        message:
+          item.clusterSize > 1
+            ? `All ${item.clusterSize} tests in this Failure Cluster go back to what they said before — ${item.clusterTestNames.join(", ")}. The rejected versions are kept in their histories, and the tests stay broken until you fix them.`
+            : `“${item.testName}” goes back to what v${item.previousVersion ?? "?"} said. The rejected version is kept in the test's history, and the test stays broken until you fix it.`,
         confirmLabel: "Reject and revert",
       });
       if (!ok) return;
@@ -159,6 +164,13 @@ function RepairReviews() {
               {` · ${relativeTime(item.createdAt)}`}
               {!item.isActiveDefinition && " · a later edit has landed on top"}
             </div>
+            {/* One app change is one decision: say so before the Accept/Reject buttons, not after,
+                because the reviewer is about to decide for every test named here. */}
+            {item.clusterSize > 1 && (
+              <div className={styles.clusterNote}>
+                {item.clusterSize} tests, one change — {item.clusterTestNames.join(", ")}
+              </div>
+            )}
             {item.report && <p className={styles.report}>{item.report}</p>}
             {/* The justification and the Brief, together and in that order: the agent's claim is
                 only checkable against the thing it was checked against, so showing a verdict
@@ -222,9 +234,97 @@ function RepairReviews() {
   );
 }
 
+/**
+ * The circuit breaker (slice 07) — shown FIRST, and only when it has something to say.
+ *
+ * The question this answers is the one a quiet queue cannot: "why has nothing been enqueued?"
+ * Slice 01 made unclaimed distinguishable from slow; this makes *suppressed* distinguishable from
+ * both. A tripped breaker is not a malfunction — it is Varys declining to repair a corpus-wide
+ * failure unattended — so it reads as a decision awaiting confirmation, not as an error.
+ */
+function CircuitBreaker() {
+  const breaker = useRepairBreaker();
+  const release = useReleaseRepairBreaker();
+  const { toast } = useToast();
+  const confirm = useConfirm();
+
+  const data = breaker.data;
+  // Nothing tripped and nothing held back: the guard is working and has nothing to report, so it
+  // stays out of the way rather than becoming a permanent "all clear" banner.
+  if (!data || (!data.tripped && data.suppressed.length === 0)) return null;
+
+  const clusters = data.suppressed.length
+    ? new Set(data.suppressed.map((s) => s.clusterKey)).size
+    : data.clusters;
+  // The single most useful thing on this card: one cluster is a rename somebody can confirm in a
+  // minute; many clusters is a broken deploy, and the answer is to fix the app, not the tests.
+  const reading =
+    clusters <= 1
+      ? "All of them on ONE broken locator — that looks like a single rename, which an override would repair in bulk as one reviewable change."
+      : `Spread across ${clusters} different broken locators — that looks like the app broke or was redesigned, not test drift. Overriding would ask an agent to rewrite your tests to agree with it.`;
+
+  const held = data.suppressed.length;
+  async function onRelease() {
+    const ok = await confirm({
+      title: "Override the circuit breaker?",
+      message: `${held} suppressed failure${held === 1 ? "" : "s"} will be released into the repair queue. Do this only if you have confirmed the app change is intended — otherwise a repair agent will rewrite these tests to agree with whatever broke them.`,
+      confirmLabel: "Release for repair",
+    });
+    if (!ok) return;
+    release.mutate(undefined, {
+      onSuccess: (res) => toast(res.note),
+      onError: (e) => toast(e instanceof Error ? e.message : "Couldn’t release the breaker"),
+    });
+  }
+
+  return (
+    <div className={styles.card}>
+      <header className={styles.header}>
+        <h3 className={styles.title}>
+          Circuit breaker {data.tripped ? "tripped" : "recently tripped"}
+        </h3>
+        <Badge tone={data.tripped ? "danger" : "warning"} appearance="soft" size="sm">
+          repair suppressed
+        </Badge>
+      </header>
+      <div className={styles.notice}>
+        {data.failingTests} test{data.failingTests === 1 ? "" : "s"} broke on a locator in the last{" "}
+        {data.windowMinutes} minutes, over the threshold of {data.threshold}. No repair jobs were
+        created. {reading}
+      </div>
+      {data.suppressed.length > 0 && (
+        <div className={styles.review}>
+          <div className={styles.reviewMain}>
+            <div className={styles.reviewMeta}>
+              {data.suppressed.length} suppressed failure
+              {data.suppressed.length === 1 ? "" : "s"} held back, across {clusters} cluster
+              {clusters === 1 ? "" : "s"}:
+            </div>
+            <p className={styles.report}>
+              {[...new Set(data.suppressed.map((f) => f.testName))].slice(0, 12).join(", ")}
+              {new Set(data.suppressed.map((f) => f.testName)).size > 12 ? " …" : ""}
+            </p>
+          </div>
+          <div className={styles.reviewActions}>
+            <Button
+              variant="danger"
+              size="sm"
+              disabled={release.isPending}
+              onClick={() => void onRelease()}
+            >
+              Override
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function RepairQueue() {
   return (
     <div className={styles.stack}>
+      <CircuitBreaker />
       <RepairReviews />
       <Queue />
     </div>
@@ -364,6 +464,17 @@ function Queue() {
                   >
                     {j.testName}
                   </button>
+                  {/* A job is one app change, not one test. Without this a thirty-eight-test
+                      repair reads as a trivial one, and the queue understates its own blast radius. */}
+                  {j.clusterSize > 1 && (
+                    <div
+                      className={styles.clusterNote}
+                      title={j.clusterTestNames.join(", ")}
+                    >
+                      + {j.clusterSize - 1} more test{j.clusterSize - 1 === 1 ? "" : "s"} broken by
+                      the same change
+                    </div>
+                  )}
                   {j.runId && (
                     <button
                       type="button"

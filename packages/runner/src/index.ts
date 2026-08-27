@@ -48,7 +48,16 @@ import { enqueueRepairIfAuto, LocatorUnresolvedError } from "./repair-jobs";
 // The repair-queue seam: the typed locator failure the runner throws, and the policy-gated
 // enqueue it triggers. Re-exported so the API and its tests can use both without reaching
 // into the runner's internals.
-export { enqueueRepairIfAuto, LocatorUnresolvedError } from "./repair-jobs";
+export {
+  BREAKER_THRESHOLD_KEY,
+  BREAKER_WINDOW_MS,
+  breakerThreshold,
+  enqueueRepairIfAuto,
+  type EnqueueOutcome,
+  joinCluster,
+  LocatorUnresolvedError,
+  recentLocatorFailures,
+} from "./repair-jobs";
 
 /** Extra Chromium flags from VARYS_BROWSER_ARGS (comma-separated). In containers the
  *  browser runs unprivileged with a small /dev/shm, so set

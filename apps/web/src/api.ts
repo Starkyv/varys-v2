@@ -26,6 +26,9 @@ import type {
   ReEvaluation,
   RepairJobSummary,
   RepairReviewDecision,
+  RepairBreakerOverride,
+  RepairBreakerSettings,
+  RepairBreakerView,
   RepairReviewItem,
   RepairPolicy,
   SetRepairPolicyRequest,
@@ -834,6 +837,39 @@ export async function decideRepairReview(
     throw new Error(await errorMessage(res, `Failed to ${action} the repair`));
   }
   return res.json() as Promise<RepairReviewDecision>;
+}
+
+/** The repair circuit breaker's state (slice 07) — why the queue may have stopped filling. */
+export async function fetchRepairBreaker(): Promise<RepairBreakerView> {
+  const res = await fetch(`${API_BASE}/repair-jobs/breaker`);
+  if (!res.ok) throw new Error(`Failed to load the circuit breaker (${res.status})`);
+  return res.json() as Promise<RepairBreakerView>;
+}
+
+/** Release everything the breaker suppressed into the queue — the deliberate human override. */
+export async function releaseRepairBreaker(): Promise<RepairBreakerOverride> {
+  const res = await fetch(`${API_BASE}/repair-jobs/breaker/release`, { method: "POST" });
+  if (!res.ok) throw new Error(await errorMessage(res, "Failed to release the circuit breaker"));
+  return res.json() as Promise<RepairBreakerOverride>;
+}
+
+/** The circuit-breaker threshold as the Configurations page reads and writes it. */
+export async function fetchRepairBreakerSettings(): Promise<RepairBreakerSettings> {
+  const res = await fetch(`${API_BASE}/settings/repair-breaker`);
+  if (!res.ok) throw new Error(`Failed to load the repair breaker settings (${res.status})`);
+  return res.json() as Promise<RepairBreakerSettings>;
+}
+
+export async function saveRepairBreakerSettings(
+  threshold: number,
+): Promise<RepairBreakerSettings> {
+  const res = await fetch(`${API_BASE}/settings/repair-breaker`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ threshold }),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res, "Failed to save the threshold"));
+  return res.json() as Promise<RepairBreakerSettings>;
 }
 
 /** Cancel a queued (unclaimed) repair job. */

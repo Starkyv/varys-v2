@@ -161,7 +161,16 @@ describe("A claimed Repair Job is repaired into an unreviewed version", () => {
   // ---- fixtures --------------------------------------------------------------------------
 
   /** A test clicking the control that the broken variant renamed away. */
-  function definitionClickingSave(name: string) {
+  /**
+   * A test that clicks the control the broken variant renames.
+   *
+   * `locator` overrides which control, and therefore which FAILURE CLUSTER the break belongs to.
+   * Since clustering (slice 07) a job covers a cluster rather than a test, so two tests that
+   * record the SAME broken control share one job — which is correct, and is why the cases here
+   * that need two independent jobs ask for two independent breaks. A locator that is not on the
+   * page at all fails to resolve exactly as a renamed one does, which is all those cases need.
+   */
+  function definitionClickingSave(name: string, locator = "save-btn") {
     return {
       name,
       viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
@@ -171,11 +180,11 @@ describe("A claimed Repair Job is repaired into an unreviewed version", () => {
           type: "click",
           target: {
             tag: "button",
-            testId: "save-btn",
+            testId: locator,
             role: "button",
             accessibleName: "Save changes",
             nameFromAttr: true,
-            attributes: { id: "save-btn", "data-testid": "save-btn" },
+            attributes: { id: locator, "data-testid": locator },
             ancestors: [{ tag: "section", id: "form-panel" }, { tag: "body" }, { tag: "html" }],
             boundingBox: { x: 24, y: 168, width: 140, height: 36 },
             domIndex: 0,
@@ -217,8 +226,11 @@ describe("A claimed Repair Job is repaired into an unreviewed version", () => {
 
   /** A real queued job: a test whose click target the variant renamed, run once under an `auto`
    *  policy so the worker enqueues where the locator failure is detected. */
-  async function queuedJob(name: string) {
-    const created = await authed(app).post("/tests").send(definitionClickingSave(name)).expect(201);
+  async function queuedJob(name: string, locator = "save-btn") {
+    const created = await authed(app)
+      .post("/tests")
+      .send(definitionClickingSave(name, locator))
+      .expect(201);
     const testId = created.body.id as string;
     // A Brief is now a precondition of automatic repair: the gate has to have a clause to check
     // the agent's justification against (slice 05).
@@ -392,8 +404,11 @@ describe("A claimed Repair Job is repaired into an unreviewed version", () => {
 
   it("refuses the repair tools for a test the claim does not cover, and for a lapsed claim", async () => {
     await emptyQueue();
-    const mine = await queuedJob("in scope");
-    const theirs = await queuedJob("out of scope"); // queued, unclaimed by anyone
+    // Two DIFFERENT broken controls, so they are two Failure Clusters and therefore two jobs.
+    // Since slice 07 a claim reaches every test in ITS cluster — that is how a clustered repair is
+    // written — so "a test the claim does not cover" means one in another cluster.
+    const mine = await queuedJob("in scope", "in-scope-btn");
+    const theirs = await queuedJob("out of scope", "out-of-scope-btn"); // queued, unclaimed by anyone
     const claimed = (await ok(drainer, "claim_repair_job")).job as ClaimedRepairJob;
 
     // Whichever job came back, the OTHER test is out of reach — and not merely unwritable:
