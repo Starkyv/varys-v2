@@ -8,6 +8,7 @@ import {
 import {
   baselines,
   environments,
+  runAssertions,
   runResults,
   runs,
   runSteps,
@@ -17,6 +18,9 @@ import {
 import { diffPng } from "@varys/diff-engine";
 import { type Boss, enqueueRun } from "@varys/queue";
 import type {
+  AssertionHistoryPoint,
+  AssertionOutcome,
+  AssertionResultView,
   CaptureMode,
   CompareMode,
   CheckpointView,
@@ -38,6 +42,7 @@ import { describeStep, type TestDefinition } from "@varys/step-schema";
 import type { StorageAdapter } from "@varys/storage-adapter";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
+import { summarizePinnedAssertion } from "../assertion-view";
 import { summarizeFingerprint } from "../fingerprint-summary";
 import { BOSS } from "../queue/queue.module";
 import { SettingsService } from "../settings/settings.service";
@@ -55,6 +60,13 @@ function viewportKey(vp: TestDefinition["viewport"]): string {
 function buildFingerprints(def: TestDefinition): (FingerprintSummary | null)[] {
   return def.steps.map((s) => ("target" in s ? summarizeFingerprint(s.target) : null));
 }
+
+/**
+ * How many past verdicts an assertion's history strip carries. A cap rather than the whole
+ * corpus: the strip is a "has this been failing all week?" glance, not the archive — and a test
+ * running nightly for a year would otherwise put 365 points on every payload.
+ */
+const ASSERTION_HISTORY_LIMIT = 30;
 
 export interface CreatedRun {
   runId: string;
@@ -109,6 +121,85 @@ export class RunsService {
 
     await enqueueRun(this.boss, run.id);
     return { runId: run.id };
+  }
+
+  /**
+   * The run's assertion results (slice 09), each with its own history over time.
+   *
+   * The history is keyed on the assertion's stable, author-chosen `id` — which is precisely why
+   * that id must never change: it is what joins tonight's verdict to the one from before someone
+   * reworded the `check`. The rows carry the check text as it READ on each run, so the strip stays
+   * honest about what was being asserted at the time.
+   *
+   * `pinned` comes from the definition the run REPLAYED, not the latest one: showing tonight's
+   * comparison against a form that was edited this morning would misreport what actually ran.
+   */
+  private async assertionResults(
+    runId: string,
+    testId: string,
+    definition: TestDefinition,
+  ): Promise<AssertionResultView[]> {
+    const rows = await this.db
+      .select({
+        assertionId: runAssertions.assertionId,
+        checkText: runAssertions.checkText,
+        outcome: runAssertions.outcome,
+        cause: runAssertions.cause,
+        leftValue: runAssertions.leftValue,
+        rightValue: runAssertions.rightValue,
+        detail: runAssertions.detail,
+      })
+      .from(runAssertions)
+      .where(eq(runAssertions.runId, runId))
+      .orderBy(runAssertions.assertionId);
+    if (rows.length === 0) return [];
+
+    // Every verdict this TEST has recorded for these assertions, oldest first — one query rather
+    // than one per assertion.
+    const past = await this.db
+      .select({
+        assertionId: runAssertions.assertionId,
+        outcome: runAssertions.outcome,
+        runId: runAssertions.runId,
+        runTimestamp: runs.createdAt,
+      })
+      .from(runAssertions)
+      .innerJoin(runs, eq(runs.id, runAssertions.runId))
+      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
+      .where(
+        and(
+          eq(testVersions.testId, testId),
+          inArray(
+            runAssertions.assertionId,
+            rows.map((r) => r.assertionId),
+          ),
+        ),
+      )
+      .orderBy(runs.createdAt);
+    const historyById = new Map<string, AssertionHistoryPoint[]>();
+    for (const p of past) {
+      const list = historyById.get(p.assertionId) ?? [];
+      list.push({
+        runId: p.runId,
+        runTimestamp: p.runTimestamp.toISOString(),
+        outcome: p.outcome as AssertionOutcome,
+      });
+      historyById.set(p.assertionId, list);
+    }
+
+    const declaredById = new Map((definition.assertions ?? []).map((a) => [a.id, a]));
+    return rows.map((r): AssertionResultView => ({
+      id: r.assertionId,
+      check: r.checkText,
+      outcome: r.outcome as AssertionOutcome,
+      cause: (r.cause as AssertionResultView["cause"]) ?? null,
+      left: r.leftValue,
+      right: r.rightValue,
+      detail: r.detail,
+      pinned: summarizePinnedAssertion(declaredById.get(r.assertionId)?.pinned),
+      // Newest kept when there are more than the cap, but still oldest-first for the strip.
+      history: (historyById.get(r.assertionId) ?? []).slice(-ASSERTION_HISTORY_LIMIT),
+    }));
   }
 
   async getById(runId: string): Promise<RunView> {
@@ -265,6 +356,13 @@ export class RunsService {
         outcome: s.outcome as "passed" | "failed",
       }));
 
+    // Assertion results + per-assertion history (slice 09).
+    const assertions = await this.assertionResults(
+      runId,
+      row.testId,
+      row.definition as TestDefinition,
+    );
+
     const checkpoints: CheckpointView[] = dedupedResults.map(
       (r): CheckpointView => ({
         name: r.name,
@@ -321,6 +419,10 @@ export class RunsService {
       triageAt: row.triageAt ? row.triageAt.toISOString() : null,
       repairPolicy: row.repairPolicy === "auto" ? "auto" : "manual",
       checkpoints,
+      // Each assertion separately, with its own history — never folded into the checkpoints, and
+      // never collapsed to a single pass/fail: `extraction-failed` and `relation-false` say
+      // different things about who is wrong.
+      assertions,
     };
   }
 
@@ -489,9 +591,10 @@ export class RunsService {
       for (const b of live) keys.delete(b.key);
     }
 
-    // Non-cascading FK chain: results + steps before the run row, in one transaction.
+    // Non-cascading FK chain: results + assertions + steps before the run row, in one transaction.
     await this.db.transaction(async (tx) => {
       await tx.delete(runResults).where(eq(runResults.runId, runId));
+      await tx.delete(runAssertions).where(eq(runAssertions.runId, runId));
       await tx.delete(runSteps).where(eq(runSteps.runId, runId));
       await tx.delete(runs).where(eq(runs.id, runId));
     });

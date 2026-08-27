@@ -124,3 +124,8 @@
   font-size: var(--font-size-xs);
   color: var(--color-text-muted);
 }
+
+/* The assertions card sits between the run header (and any triage finding) and the notes. */
+.assertions {
+  margin: var(--space-16) 0;
+}

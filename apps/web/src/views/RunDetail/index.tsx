@@ -15,6 +15,7 @@ import {
 } from "../../queries";
 import { NotesCard } from "../../components/NotesCard";
 import { ApproveDialog } from "./components/ApproveDialog";
+import { AssertionsCard } from "./components/AssertionsCard";
 import { CheckpointViewer } from "./components/CheckpointViewer";
 import {
   buildTimelineRows,
@@ -211,6 +212,15 @@ export function RunDetail({ runId }: { runId: string }) {
             A diagnosis, not a fix — nothing about this test or its baselines was changed, and the
             run is still {statusLabel(data.outcome).toLowerCase()}.
           </p>
+        </div>
+      )}
+
+      {/* Assertions (slice 09): checks on a RELATIONSHIP, not on an image. Above the timeline
+          because a failing one is why the run is red — and separate from the checkpoints because
+          there is no baseline to approve and no decision to take, only something to read. */}
+      {data.assertions.length > 0 && (
+        <div className={styles.assertions}>
+          <AssertionsCard assertions={data.assertions} />
         </div>
       )}
 

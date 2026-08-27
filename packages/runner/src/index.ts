@@ -6,11 +6,17 @@ import {
   baselines,
   type Db,
   environments,
+  runAssertions,
   runResults,
   runs,
   runSteps,
   testVersions,
 } from "@varys/db";
+import {
+  type AssertionResult,
+  anyAssertionFailed,
+  summarizeAssertionFailures,
+} from "@varys/assertion-engine";
 import { diffPng } from "@varys/diff-engine";
 import {
   buildJudge,
@@ -44,6 +50,7 @@ import {
   type Page,
 } from "playwright";
 import { classifyThrownFailure } from "@varys/repair-policy";
+import { evaluateAssertions } from "./assertions";
 import {
   enqueueRepairIfAuto,
   enqueueTriageIfAuto,
@@ -412,6 +419,44 @@ const RESULT_CONFLICT = {
     judgeReasoning: sql`excluded.judge_reasoning`,
   },
 };
+
+/**
+ * Persist a run's assertion results (slice 09). Upserted on `(run_id, assertion_id)` for the same
+ * reason the checkpoints are: a redelivered job must overwrite its prior row rather than give the
+ * assertion's history two entries for one night.
+ */
+async function persistAssertionResults(
+  db: Db,
+  runId: string,
+  results: AssertionResult[],
+): Promise<void> {
+  if (results.length === 0) return;
+  await db
+    .insert(runAssertions)
+    .values(
+      results.map((r) => ({
+        runId,
+        assertionId: r.assertionId,
+        checkText: r.check,
+        outcome: r.outcome,
+        cause: r.cause,
+        leftValue: r.left === null ? null : String(r.left),
+        rightValue: r.right === null ? null : String(r.right),
+        detail: r.detail,
+      })),
+    )
+    .onConflictDoUpdate({
+      target: [runAssertions.runId, runAssertions.assertionId],
+      set: {
+        checkText: sql`excluded.check_text`,
+        outcome: sql`excluded.outcome`,
+        cause: sql`excluded.cause`,
+        leftValue: sql`excluded.left_value`,
+        rightValue: sql`excluded.right_value`,
+        detail: sql`excluded.detail`,
+      },
+    });
+}
 
 /** Thrown by the cooperative-cancel check to unwind the replay when the run has been cancelled
  *  or its test deleted mid-flight. Caught in processRun's catch, where it is NOT recorded as a
@@ -861,10 +906,39 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
     failedStepIndex = null;
     failedStepLabel = "";
 
+    // Assertions (slice 09): a check on a RELATIONSHIP, evaluated against the page as the last step
+    // left it, in the worker, with NO model call. Extraction reads the page; the pure engine decides
+    // whether each relation holds. Every failure — a false relation or a side that could not be
+    // read — is recorded per assertion, so run detail can show each one separately and chart its
+    // history off its stable id.
+    let assertionResults: AssertionResult[] = [];
+    try {
+      assertionResults = await evaluateAssertions(page, recorded.assertions);
+      await persistAssertionResults(db, runId, assertionResults);
+    } catch (assertionErr) {
+      // Extraction never throws (a failure to read is a result), so this is the persist — and an
+      // unwritten assertion row must not cost us the checkpoints we already have. The run then
+      // reads green on its pixels, with no assertion rows to show, which is honest: nothing claims
+      // an assertion passed.
+      // eslint-disable-next-line no-console
+      console.error(`[runner] could not record assertions for run ${runId}:`, assertionErr);
+      assertionResults = [];
+    }
+    // A failing assertion FAILS the run — it is not a review decision. Whether the values disagreed
+    // or a side could not be read at all, the answer to "did this test verify?" is no, and the
+    // per-assertion rows above carry which of the two it was.
+    const assertionFailure = anyAssertionFailed(assertionResults)
+      ? (summarizeAssertionFailures(assertionResults) ?? "an assertion failed")
+      : null;
+
     // Context is closed in `finally` (after the trace is stopped, if any).
-    const status = reviewStates.some((s) => s !== "passed")
-      ? "needs_review"
-      : "passed";
+    // An assertion failure outranks a pixel diff: a run whose arithmetic is wrong has not verified,
+    // however its screenshots compare, and `failed` (not `needs_review`) is what says so.
+    const status = assertionFailure
+      ? "failed"
+      : reviewStates.some((s) => s !== "passed")
+        ? "needs_review"
+        : "passed";
     // A red run that never THREW: a baseline existed and the capture differs. Nothing a re-pinned
     // locator could address, so it is classified and handed to a read-only Triage Job (slice 08)
     // rather than left unexplained. `pending-baseline` is deliberately not red — a first capture
@@ -874,11 +948,26 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
       .update(runs)
       .set({
         status,
-        failureKind: failedCheckpoint?.kind ?? null,
+        // `assertion` first, for the same precedence reason as the status above. Recorded rather
+        // than inferred: it is what decides whether a repair may touch this failure at all.
+        failureKind: assertionFailure ? "assertion" : (failedCheckpoint?.kind ?? null),
+        // A failed run's `error` is what the viewer shows in place of checkpoints, so an assertion
+        // failure states itself there too — it is the reason the run is red.
+        ...(assertionFailure ? { error: assertionFailure } : {}),
         updatedAt: new Date(),
       })
       .where(eq(runs.id, runId));
-    if (failedCheckpoint) {
+    if (assertionFailure) {
+      // Nothing here is repairable by an agent (slice 10 refines that for the extraction half), so
+      // it earns a read-only Triage Job like every other unrepairable class. Best-effort, exactly
+      // as the others are: losing the job must never cost us the run.
+      try {
+        await enqueueTriageIfAuto(db, { testId, runId, kind: "assertion" });
+      } catch (triageErr) {
+        // eslint-disable-next-line no-console
+        console.error(`[runner] could not enqueue a triage job for run ${runId}:`, triageErr);
+      }
+    } else if (failedCheckpoint) {
       // Best-effort, exactly as the repair enqueue is: losing the job must never cost us the run.
       try {
         await enqueueTriageIfAuto(db, { testId, runId, kind: failedCheckpoint.kind });

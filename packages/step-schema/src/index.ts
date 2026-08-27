@@ -1,3 +1,4 @@
+import { assertionSchema } from "@varys/assertion-engine";
 import { z } from "zod";
 
 /**
@@ -287,6 +288,20 @@ export const variable = z.object({
 });
 export type Variable = z.infer<typeof variable>;
 
+/**
+ * A named check on a RELATIONSHIP between things on the page (Slice 19, slice 09) — the total vs
+ * the sum of its rows, the row count vs the badge — evaluated on every run with no model call.
+ *
+ * The vocabulary (coercions, relations, tolerance) and the evaluator belong to
+ * `@varys/assertion-engine`; the TARGET of each side is a Fingerprint, which is this package's, so
+ * the definition-level schema is built here from the engine's factory. That direction matters: the
+ * engine stays pure and browser-free because it never sees a target, only the values the runner
+ * already extracted.
+ */
+export const assertion = assertionSchema(fingerprint);
+export type Assertion = z.infer<typeof assertion>;
+export type PinnedAssertion = NonNullable<Assertion["pinned"]>;
+
 export const testDefinition = z
   .object({
     name: z.string().min(1),
@@ -301,6 +316,11 @@ export const testDefinition = z
      *  here and per-step waits layer on top. Optional/back-compat — old definitions
      *  carry none, and the runner's hard-coded pre-screenshot settle remains a net. */
     defaults: z.object({ waitBefore: z.array(wait).optional() }).optional(),
+    /** The test's declared Assertions (Slice 19, slice 09). Optional/back-compat — every
+     *  definition recorded before this slice carries none, and a test may legitimately have no
+     *  assertion at all. Ids are author-chosen and stable: they are the identity each assertion's
+     *  history hangs off, so an edit to `check` keeps its id (and its past). */
+    assertions: z.array(assertion).optional(),
   })
   // Per-mode requirements: element ⇒ target, region ⇒ rect, fullpage ⇒ neither.
   // (Refined here rather than on screenshotStep so it stays a discriminated-union
@@ -324,6 +344,18 @@ export const testDefinition = z
       }
       // A `context` checkpoint's `prompt` is OPTIONAL: when omitted it inherits the global default
       // judge prompt from the Configurations page (enforced at run time, which knows that default).
+    });
+    // An assertion id is a history key, so a duplicate would silently merge two different checks'
+    // pasts into one line. Rejected rather than de-duplicated.
+    const ids = (def.assertions ?? []).map((a) => a.id);
+    ids.forEach((id, i) => {
+      if (ids.indexOf(id) !== i) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["assertions", i, "id"],
+          message: `assertion id "${id}" is used twice — ids identify an assertion's history and must be unique`,
+        });
+      }
     });
   });
 

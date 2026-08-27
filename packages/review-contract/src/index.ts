@@ -666,6 +666,9 @@ export interface TestConfigView {
   /** The test's Repair Policy (Slice 19). Shown and edited on test detail; written via the
    *  structural `PATCH /tests/:id`, so changing it never writes a new test_version. */
   repairPolicy: RepairPolicy;
+  /** The test's declared Assertions (slice 09), with their pinned form spelled out — which
+   *  elements each side reads and what is compared. Empty for a test that declares none. */
+  assertions: TestConfigAssertion[];
 }
 
 /**
@@ -779,6 +782,22 @@ export interface TestConfigPatch {
    *  the step they name, so they follow it to its new position. Omit to keep the recorded
    *  order. */
   order?: number[];
+  /** Per-assertion edits, keyed by the assertion's stable `id`. Omit to leave them as-is. */
+  assertions?: TestConfigAssertionPatch[];
+}
+
+/**
+ * An edit to one declared assertion, keyed by its id.
+ *
+ * The id is the key and is never patchable: it is the identity the assertion's history hangs off,
+ * so "rename the id" is deleting one assertion and declaring another, and must read that way.
+ */
+export interface TestConfigAssertionPatch {
+  id: string;
+  /** Rewrite the plain-language check. The id — and therefore the history — is untouched. */
+  check?: string;
+  /** Delete this assertion. When set, the other fields are ignored. */
+  remove?: boolean;
 }
 
 /** Result of a config save: the version number of the newly written test_version. */
@@ -1344,6 +1363,111 @@ export interface StepRun {
 }
 
 /**
+ * ---- Assertions (Slice 19, slice 09) -----------------------------------------------------
+ *
+ * The vocabulary below MIRRORS `@varys/assertion-engine`, which owns it. It is restated as plain
+ * string unions rather than imported for the same reason `RecordedTarget` is loose: this contract
+ * is consumed by the SPA and must stay dependency-free. The server validates against the real
+ * schema, so a divergence here surfaces as a type error the first time an API maps one to the
+ * other, not as bad data.
+ */
+
+/** How a side's extracted text becomes a comparable value. */
+export type Coercion = "text" | "number" | "sum-number" | "count" | "exists";
+
+/** The comparison applied to the two coerced values. */
+export type Relation =
+  | "eq"
+  | "neq"
+  | "gt"
+  | "gte"
+  | "lt"
+  | "lte"
+  | "contains"
+  | "non-empty";
+
+/**
+ * An assertion's verdict on one run — and the distinction the whole slice exists to preserve:
+ *
+ *  - `passed`            — both values were read and the relation holds.
+ *  - `relation-false`    — both values were read and they disagree. Evidence about the APP.
+ *  - `extraction-failed` — a side produced no value, so nothing was compared. Evidence about the
+ *                          TEST (a locator missed, or the text read was not a number).
+ *
+ * A surface that collapsed these two into one "failed" would be telling the reader that the
+ * application is wrong when what actually happened is that Varys could not look.
+ */
+export type AssertionOutcome = "passed" | "relation-false" | "extraction-failed";
+
+/** Why extraction failed: `unresolved` (a locator problem) | `coercion` (a definition problem). */
+export type ExtractionCause = "unresolved" | "coercion";
+
+/** One side of a pinned comparison, as a reader sees it: an element to read, or a typed literal. */
+export interface AssertionSideView {
+  /** What the side reads, distilled for display — null when this side is a literal. */
+  target: FingerprintSummary | null;
+  /** How the read text is coerced — null when this side is a literal. */
+  as: Coercion | null;
+  /** The author-typed fixed value — null when this side reads the page. */
+  literal: string | number | null;
+}
+
+/**
+ * The pinned form, for display: which elements it reads, how each is coerced, and what is
+ * compared. Shown on the test editor (so an author can see what a check actually does) and on run
+ * detail beside the verdict. Null on an assertion that is declared but not yet pinned — which is
+ * documentation, and is never evaluated.
+ */
+export interface PinnedAssertionView {
+  left: AssertionSideView;
+  right: AssertionSideView;
+  relation: Relation;
+  /** Numeric slack, for numeric relations only; null when exact. */
+  tolerance: number | null;
+}
+
+/** One past verdict for an assertion — the per-assertion history strip on run detail. */
+export interface AssertionHistoryPoint {
+  runId: string;
+  runTimestamp: string;
+  outcome: AssertionOutcome;
+}
+
+/**
+ * One assertion's result on a run, with its own history.
+ *
+ * `id` is the author-chosen, stable id from the definition: it survives an edit to `check`, which
+ * is exactly what lets `history` span the wording change instead of starting a new line.
+ */
+export interface AssertionResultView {
+  id: string;
+  /** The plain-language check AS IT READ on this run (the definition's may have moved on). */
+  check: string;
+  outcome: AssertionOutcome;
+  /** Set only when `outcome` is `extraction-failed`. */
+  cause: ExtractionCause | null;
+  /** The two coerced values compared, rendered; null for a side that produced none. */
+  left: string | null;
+  right: string | null;
+  /** The engine's one-line explanation — what was compared and what happened. */
+  detail: string;
+  /** The pinned form the run evaluated, for display; null if the definition no longer pins it. */
+  pinned: PinnedAssertionView | null;
+  /** This assertion's verdicts on earlier runs of the same test, oldest first, INCLUDING this
+   *  run — its own history over time. */
+  history: AssertionHistoryPoint[];
+}
+
+/** One declared assertion as the test editor shows it. */
+export interface TestConfigAssertion {
+  /** Stable and author-chosen — editing `check` never changes it. */
+  id: string;
+  check: string;
+  /** The pinned form, or null when the assertion is declared but unpinned (never evaluated). */
+  pinned: PinnedAssertionView | null;
+}
+
+/**
  * A distilled, display-oriented view of the recorded element fingerprint the worker
  * resolves a step against. Surfaced behind the run viewer's on-demand "what the locator
  * was looking for" panel — shown for every step/checkpoint that has a target, so both a
@@ -1444,6 +1568,15 @@ export interface RunView {
   /** The Repair Policy of the run's test, so run detail can say whether a repair would have
    *  been enqueued automatically or needs enqueuing by hand. */
   repairPolicy: RepairPolicy;
+  /**
+   * Every pinned assertion this run evaluated, each with its own verdict and its own history
+   * (slice 09). Empty for a test that declares none, and for every run that predates them.
+   *
+   * Separate from `checkpoints` on purpose: an assertion is not a picture, and a reviewer has no
+   * baseline to approve. A failing one has already made the run `failed` — there is no decision to
+   * take here, only something to read.
+   */
+  assertions: AssertionResultView[];
 }
 
 /**

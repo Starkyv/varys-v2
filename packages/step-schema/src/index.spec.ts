@@ -219,3 +219,76 @@ describe("describeStep", () => {
     );
   });
 });
+
+describe("declared assertions", () => {
+  const steps = [{ type: "navigate", url: "{{baseUrl}}/" }];
+  const total = { tag: "span", testId: "total" };
+  const rows = { tag: "td", cssPath: ".row .amount" };
+
+  it("accepts a test with no assertions at all (back-compat)", () => {
+    expect(parseTestDefinition({ ...base, steps }).assertions).toBeUndefined();
+  });
+
+  it("carries an author-chosen id, plain-language check text, and the pinned form", () => {
+    const def = parseTestDefinition({
+      ...base,
+      steps,
+      assertions: [
+        {
+          id: "total-matches-sum",
+          check: "The total equals the sum of the line items",
+          pinned: {
+            kind: "relation",
+            left: { target: total, as: "number" },
+            right: { target: rows, as: "sum-number" },
+            relation: "eq",
+            tolerance: 0.01,
+          },
+        },
+        { id: "has-rows", check: "The table has rows" },
+      ],
+    });
+    expect(def.assertions?.map((a) => a.id)).toEqual(["total-matches-sum", "has-rows"]);
+    // An unpinned assertion is documentation — legal, and never evaluated.
+    expect(def.assertions?.[1].pinned).toBeUndefined();
+    // The pinned targets are full Fingerprints, validated like any other locator.
+    expect(def.assertions?.[0].pinned?.left.target.testId).toBe("total");
+  });
+
+  it("rejects two assertions sharing an id — an id IS the history key", () => {
+    expect(() =>
+      parseTestDefinition({
+        ...base,
+        steps,
+        assertions: [
+          { id: "same", check: "one" },
+          { id: "same", check: "another" },
+        ],
+      }),
+    ).toThrow(/used twice/);
+  });
+
+  it("rejects a relation or coercion outside the vocabulary Varys owns", () => {
+    const pinned = (over: object) => ({
+      ...base,
+      steps,
+      assertions: [
+        {
+          id: "a",
+          check: "c",
+          pinned: {
+            kind: "relation",
+            left: { target: total, as: "number" },
+            right: { literal: 1 },
+            relation: "eq",
+            ...over,
+          },
+        },
+      ],
+    });
+    expect(() => parseTestDefinition(pinned({ relation: "approximately" }))).toThrow();
+    expect(() => parseTestDefinition(pinned({ left: { target: total, as: "median" } }))).toThrow();
+    // A target that isn't a fingerprint at all.
+    expect(() => parseTestDefinition(pinned({ left: { target: { role: "cell" }, as: "number" } }))).toThrow();
+  });
+});

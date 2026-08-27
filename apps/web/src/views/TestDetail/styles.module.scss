@@ -910,3 +910,8 @@
   font-size: var(--font-size-xs);
   color: var(--color-text-muted);
 }
+
+/* The declared-assertions card, below the steps in the main column. */
+.assertionsCard {
+  margin-top: var(--space-16);
+}

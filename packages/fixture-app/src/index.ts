@@ -24,7 +24,9 @@ export type Variant =
   | "twins"
   | "locatorRepair"
   | "locatorRepairBroken"
-  | "locatorRepairDeleted";
+  | "locatorRepairDeleted"
+  | "totals"
+  | "totalsWrong";
 
 function html(variant: Variant): string {
   // A stable hero with one volatile sub-region (#stamp, top-left) — stampA/stampB
@@ -52,6 +54,38 @@ function html(variant: Variant): string {
 </head>
 <body>
   <div id="hero"><span id="stamp"></span>Hero</div>
+</body>
+</html>`;
+  }
+
+  // An arithmetic RELATIONSHIP, which is what Assertions exist for (Slice 19, slice 09): three
+  // line items and a total. `totals` adds up; `totalsWrong` renders the SAME rows with a total
+  // that does not — pixel-identical in structure, and wrong. No screenshot comparison can catch
+  // that, because the "wrong" page is a perfectly healthy-looking page.
+  if (variant === "totals" || variant === "totalsWrong") {
+    const total = variant === "totals" ? "$60.50" : "$70.50";
+    return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Varys Fixture — Totals</title>
+<style>
+  * { margin: 0; }
+  body { background: #ffffff; font-family: Arial, sans-serif; padding: 24px; }
+  table { border-collapse: collapse; }
+  td, th { padding: 4px 12px; font-size: 16px; text-align: left; }
+  #summary { margin-top: 16px; font-size: 18px; }
+</style>
+</head>
+<body>
+  <table id="invoice">
+    <tbody>
+      <tr><td>Widgets</td><td class="amount" data-testid="row-amount">$10.00</td></tr>
+      <tr><td>Gaskets</td><td class="amount" data-testid="row-amount">$20.00</td></tr>
+      <tr><td>Flanges</td><td class="amount" data-testid="row-amount">$30.50</td></tr>
+    </tbody>
+  </table>
+  <div id="summary">Total <span id="total" data-testid="total">${total}</span></div>
 </body>
 </html>`;
   }

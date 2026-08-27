@@ -30,6 +30,7 @@ import type {
   TestSummary,
 } from "@varys/review-contract";
 import { isRepairPolicy, REPAIR_POLICIES } from "@varys/repair-policy";
+import { summarizeAssertion } from "../assertion-view";
 import {
   describeStep,
   type Fingerprint,
@@ -47,6 +48,7 @@ import {
   draftPreviews,
   environments,
   folders,
+  runAssertions,
   runResults,
   runs,
   runSteps,
@@ -818,6 +820,9 @@ export class TestsService {
       brief: meta?.brief ?? null,
       repairPolicy: asRepairPolicy(meta?.repairPolicy),
       needsEnvironment: usesBaseUrl(def),
+      // The pinned form spelled out: which elements each side reads, how each is coerced, what is
+      // compared. An author cannot review a check they cannot see.
+      assertions: (def.assertions ?? []).map(summarizeAssertion),
       defaults: (def.defaults?.waitBefore ?? []).map(toConfigWait),
       steps: def.steps.map((s, index): TestConfigStep => ({
         index,
@@ -1096,9 +1101,42 @@ export class TestsService {
       }
     }
 
+    // Assertion edits, keyed by the assertion's STABLE id (slice 09). Only `check` is editable
+    // and only deletion removes: the id is the identity an assertion's history hangs off, so it is
+    // deliberately not patchable — "rename the id" is a delete plus a declare, and has to read as
+    // one rather than silently orphaning every past verdict.
+    let nextAssertions = def.assertions;
+    if (patch.assertions?.length) {
+      const declared = def.assertions ?? [];
+      for (const p of patch.assertions) {
+        if (!declared.some((a) => a.id === p.id)) {
+          throw new BadRequestException(
+            `This test declares no assertion "${p.id}" — reload and re-apply your edits.`,
+          );
+        }
+      }
+      const removed = new Set(patch.assertions.filter((p) => p.remove).map((p) => p.id));
+      const edits = new Map(patch.assertions.filter((p) => !p.remove).map((p) => [p.id, p]));
+      nextAssertions = declared
+        .filter((a) => !removed.has(a.id))
+        .map((a) => {
+          const p = edits.get(a.id);
+          if (!p || p.check === undefined) return a;
+          const check = p.check.trim();
+          if (!check) {
+            throw new BadRequestException(
+              `Assertion "${a.id}" needs some plain-language check text — it is what a reviewer reads.`,
+            );
+          }
+          // The id (and therefore the history) travels through the rewrite untouched.
+          return { ...a, check };
+        });
+    }
+
     const nextDefinition = {
       ...def,
       ...(nextDefaults !== undefined ? { defaults: nextDefaults } : {}),
+      ...(nextAssertions !== undefined ? { assertions: nextAssertions } : {}),
       steps: nextSteps,
     };
 
@@ -1219,6 +1257,7 @@ export class TestsService {
     await this.db.transaction(async (tx) => {
       if (runIds.length) {
         await tx.delete(runResults).where(inArray(runResults.runId, runIds));
+        await tx.delete(runAssertions).where(inArray(runAssertions.runId, runIds));
         await tx.delete(runSteps).where(inArray(runSteps.runId, runIds));
         await tx.delete(runs).where(inArray(runs.id, runIds));
       }

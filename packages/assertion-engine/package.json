@@ -1,5 +1,5 @@
 {
-  "name": "@varys/step-schema",
+  "name": "@varys/assertion-engine",
   "version": "0.0.0",
   "private": true,
   "type": "commonjs",
@@ -17,7 +17,6 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@varys/assertion-engine": "workspace:*",
     "zod": "^3.24.1"
   },
   "devDependencies": {

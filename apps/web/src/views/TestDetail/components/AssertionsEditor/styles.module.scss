@@ -1,0 +1,140 @@
+.head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-10);
+  margin-bottom: var(--space-16);
+}
+
+.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-subtle);
+  color: var(--color-text-muted);
+  flex: none;
+}
+
+.headText {
+  min-width: 0;
+}
+
+.title {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+}
+
+.sub {
+  margin-top: 2px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+
+.count {
+  margin-left: auto;
+  flex: none;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.empty {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-subtle);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  padding: var(--space-12) var(--space-14);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-surface);
+}
+
+/* Staged for removal: dimmed, so it still reads as present until the save writes the version. */
+.removed {
+  opacity: 0.55;
+}
+
+.itemHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+/* The id is shown as code and never as a field — it is the history key, not a label. */
+.id {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  padding: 1px var(--space-4);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-subtle);
+  color: var(--color-text-muted);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.restore {
+  border: 0;
+  background: none;
+  padding: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  cursor: pointer;
+
+  &:hover {
+    color: var(--color-text);
+    text-decoration: underline;
+  }
+}
+
+.checkInput {
+  width: 100%;
+  resize: vertical;
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  line-height: 1.4;
+  padding: var(--space-8);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-surface);
+  color: var(--color-text);
+}
+
+.help {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+
+.pinnedBlock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-8) var(--space-10);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-subtle);
+}
+
+.pinnedLabel {
+  font-size: var(--font-size-xs);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+  color: var(--color-text-subtle);
+}

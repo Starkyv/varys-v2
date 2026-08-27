@@ -265,6 +265,55 @@ export const runResults = pgTable(
 );
 
 /**
+ * Per-assertion run result (Slice 19, slice 09) — one row per DECLARED, pinned assertion of the
+ * definition this run replayed. Run OUTPUT, like run_results: relational, never part of the
+ * versioned definition.
+ *
+ * `assertionId` is the author-chosen id from the definition, which is what makes an assertion's
+ * history a straight query: the id survives an edit to its `check` text, so the row written last
+ * night and the row written tonight belong to the same line on the chart even after the wording
+ * changed. `checkText` is snapshotted per run for exactly the same reason — the history has to be
+ * able to say what the check SAID when it ran.
+ */
+export const runAssertions = pgTable(
+  "run_assertions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => runs.id),
+    /** The definition's stable, author-chosen assertion id. */
+    assertionId: text("assertion_id").notNull(),
+    /** The plain-language check AS IT READ on this run (the definition's may have changed since). */
+    checkText: text("check_text").notNull(),
+    /**
+     * `passed` | `relation-false` | `extraction-failed`.
+     *
+     * The last two are deliberately separate values rather than one `failed`: `relation-false`
+     * means both values were read and they disagree (the APP is wrong), `extraction-failed` means
+     * a side produced no value at all (the TEST is wrong — a locator missed). Slice 10 wires the
+     * consequence off this column, so collapsing them would erase the distinction the assertion
+     * story rests on.
+     */
+    outcome: text("outcome").notNull(),
+    /** Why extraction failed — `unresolved` (a locator problem) | `coercion` (a definition
+     *  problem). Null for every other outcome. */
+    cause: text("cause"),
+    /** The two coerced values compared, rendered for display. Null for a side that produced none. */
+    leftValue: text("left_value"),
+    rightValue: text("right_value"),
+    /** The engine's one-line explanation — what was compared and what happened. */
+    detail: text("detail").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  // One row per assertion per run — lets the worker upsert so a redelivered run can't accumulate
+  // the same assertion twice (and so the history query needs no de-duplication).
+  (t) => ({
+    runAssertionUq: uniqueIndex("run_assertions_run_assertion_uq").on(t.runId, t.assertionId),
+  }),
+);
+
+/**
  * Per-step run timeline — one row per EXECUTED step of a run (every run, traced
  * or not). The data skeleton the future custom timeline UI renders: index +
  * label (the `describeStep` vocabulary) + timing + outcome, with `checkpointName`
@@ -574,6 +623,7 @@ export const schema = {
   testVersions,
   runs,
   runResults,
+  runAssertions,
   runSteps,
   baselines,
   environments,
@@ -727,6 +777,21 @@ ALTER TABLE run_results ADD COLUMN IF NOT EXISTS resolved_by text;
 ALTER TABLE run_results ADD COLUMN IF NOT EXISTS resolved_at timestamptz;
 -- Dynamic-content testing: the LLM judge's rationale for a context-compared checkpoint.
 ALTER TABLE run_results ADD COLUMN IF NOT EXISTS judge_reasoning text;
+CREATE TABLE IF NOT EXISTS run_assertions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_id uuid NOT NULL REFERENCES runs(id),
+  assertion_id text NOT NULL,
+  check_text text NOT NULL,
+  outcome text NOT NULL,
+  cause text,
+  left_value text,
+  right_value text,
+  detail text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+-- One row per assertion per run, so a redelivered run upserts instead of accumulating and the
+-- per-assertion history needs no de-duplication.
+CREATE UNIQUE INDEX IF NOT EXISTS run_assertions_run_assertion_uq ON run_assertions (run_id, assertion_id);
 CREATE TABLE IF NOT EXISTS run_steps (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   run_id uuid NOT NULL REFERENCES runs(id),

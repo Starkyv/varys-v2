@@ -115,7 +115,7 @@ independent of the queue and can run in parallel with all of it.
 | 06 | [`healed` outcome + re-run + digest](heal-06-healed-outcome-rerun.md) | AFK | in-review | 05 |
 | 07 | [Failure clustering + circuit breaker](heal-07-clustering-circuit-breaker.md) | AFK | in-review | 01 |
 | 08 | [Triage jobs (read-only diagnosis)](heal-08-triage-jobs.md) | AFK | in-review | 03 |
-| 09 | [`@varys/assertion-engine` + replay evaluation](heal-09-assertion-engine-replay.md) | AFK | ready-for-agent | — |
+| 09 | [`@varys/assertion-engine` + replay evaluation](heal-09-assertion-engine-replay.md) | AFK | in-review | — |
 | 10 | [Extraction-failed repairable, relation-false never](heal-10-extraction-failed-repairable.md) | AFK | ready-for-agent | 01, 09 |
 | 11 | [Judge fallback for unpinnable assertions](heal-11-judge-fallback-unpinnable.md) | AFK | ready-for-agent | 09 |
 | 12 | [Claude pins assertions during authoring](heal-12-claude-pins-assertions.md) | HITL | needs-design | 09 |

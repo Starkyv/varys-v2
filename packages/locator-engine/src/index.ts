@@ -4,7 +4,11 @@ import type { Frame, Locator, Page } from "playwright";
 /** A search root the scorer can run against — the top page or a descended iframe. Both expose the
  *  `evaluate` + `locator` the matcher needs; the in-page scorer reads `globalThis.document`, which
  *  resolves to whichever document the root belongs to. */
-type SearchRoot = Page | Frame;
+/** Where a fingerprint is searched: the top-level page, or the innermost iframe of its
+ *  `frameChain`. Exported alongside {@link searchRootFor} for callers that address a SET of
+ *  elements rather than one (an assertion's `count` / `sum-number` side), which the scored
+ *  matcher — deliberately single-winner — cannot express. */
+export type SearchRoot = Page | Frame;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -180,6 +184,23 @@ async function rootFor(
 ): Promise<SearchRoot | null> {
   if (!fp.frameChain?.length) return page;
   return descendToFrame(page, fp.frameChain, timeoutMs);
+}
+
+/**
+ * The public form of {@link rootFor}: descend a fingerprint's `frameChain` and return the document
+ * its target lives in, or null when a frame in the chain can't be reached.
+ *
+ * For callers that need a MULTI-element locator (`root.locator(selector)`), where the scored
+ * matcher's single, marked winner is the wrong shape — reading every row of a column to sum it,
+ * say. Frame descent is the part they must not reimplement: matching a set against the top-level
+ * document when the target lives in an iframe silently reads nothing and calls it zero.
+ */
+export async function searchRootFor(
+  page: Page,
+  fp: Fingerprint,
+  timeoutMs = 5000,
+): Promise<SearchRoot | null> {
+  return rootFor(page, fp, timeoutMs);
 }
 
 export async function resolve(

@@ -16,6 +16,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@varys/assertion-engine": "workspace:*",
     "@varys/db": "workspace:*",
     "@varys/diff-engine": "workspace:*",
     "@varys/judge-engine": "workspace:*",

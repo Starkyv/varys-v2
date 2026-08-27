@@ -7,6 +7,7 @@ import type {
   LocatorVerifyResult,
   NewStepInput,
   Rect,
+  TestConfigAssertionPatch,
   TestConfigPatch,
   TestConfigStep,
   TestConfigStepInsert,
@@ -47,6 +48,7 @@ import {
 import { type KeyboardEvent as ReactKeyboardEvent, useRef, useState } from "react";
 import { NotesCard } from "../../components/NotesCard";
 import { ScheduleEditor } from "../../components/ScheduleEditor";
+import { AssertionsEditor } from "./components/AssertionsEditor";
 import { BaselineMaskCanvas } from "./components/BaselineMaskCanvas";
 import { useRouter } from "../../context/router";
 import { useRunDialog } from "../../context/run-dialog";
@@ -233,6 +235,24 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
   const [typedValues, setTypedValues] = useState<Record<number, string>>(initialValues);
   function setTypedValue(index: number, v: string) {
     setTypedValues((prev) => ({ ...prev, [index]: v }));
+  }
+
+  // Declared assertions (slice 09): only the plain-language `check` is editable, and removal.
+  // The id is never editable — it is the identity an assertion's history hangs off, so a rename
+  // would orphan every past verdict.
+  const initialChecks: Record<string, string> = {};
+  for (const a of config.assertions) initialChecks[a.id] = a.check;
+  const [assertionChecks, setAssertionChecks] = useState<Record<string, string>>(initialChecks);
+  const [removedAssertions, setRemovedAssertions] = useState<Set<string>>(new Set());
+  function removeAssertion(id: string) {
+    setRemovedAssertions((prev) => new Set(prev).add(id));
+  }
+  function restoreAssertion(id: string) {
+    setRemovedAssertions((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
   }
 
   // Per-step editable locator signals, seeded from the read-model. Only steps with an
@@ -466,10 +486,28 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
       steps.push(p);
     });
 
-    if (!defaultsChanged && steps.length === 0 && inserts.length === 0) return null;
+    // Assertion edits: a reworded check, or a removal. Keyed by the stable id.
+    const assertionPatches: TestConfigAssertionPatch[] = [];
+    for (const a of config.assertions) {
+      if (removedAssertions.has(a.id)) {
+        assertionPatches.push({ id: a.id, remove: true });
+        continue;
+      }
+      const next = assertionChecks[a.id] ?? "";
+      if (next !== a.check) assertionPatches.push({ id: a.id, check: next });
+    }
+
+    if (
+      !defaultsChanged &&
+      steps.length === 0 &&
+      inserts.length === 0 &&
+      assertionPatches.length === 0
+    )
+      return null;
     const patch: TestConfigPatch = { baseVersion: config.version };
     if (defaultsChanged) patch.defaults = defaultWaits;
     if (steps.length > 0) patch.steps = steps;
+    if (assertionPatches.length > 0) patch.assertions = assertionPatches;
     if (inserts.length > 0) {
       patch.inserts = inserts.map(
         ({ atIndex, position, step }): TestConfigStepInsert => ({ atIndex, position, step }),
@@ -480,9 +518,15 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
 
   const patch = buildPatch();
   // A removed step's threshold can't block the save.
-  const anyInvalid = config.steps.some(
-    (s) => !removed.has(s.index) && (thresholdInvalid(s) || contextPromptInvalid(s)),
-  );
+  const anyInvalid =
+    config.steps.some(
+      (s) => !removed.has(s.index) && (thresholdInvalid(s) || contextPromptInvalid(s)),
+    ) ||
+    // An assertion's check text is the only part of it a reviewer reads, so it can't be blank.
+    // Caught here as well as server-side so the editor says so before the round trip.
+    config.assertions.some(
+      (a) => !removedAssertions.has(a.id) && (assertionChecks[a.id] ?? "").trim() === "",
+    );
   const canSave = patch !== null && !anyInvalid && !save.isPending;
 
   function onSave() {
@@ -1030,6 +1074,19 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
             </div>
           </Card>
         </div>
+      </div>
+
+      {/* Assertions (slice 09) — declared checks on a relationship. Below the steps because they
+          are evaluated after them, against the page the last step left behind. */}
+      <div className={styles.assertionsCard}>
+        <AssertionsEditor
+          assertions={config.assertions}
+          checks={assertionChecks}
+          removed={removedAssertions}
+          onCheckChange={(id, check) => setAssertionChecks((prev) => ({ ...prev, [id]: check }))}
+          onRemove={removeAssertion}
+          onRestore={restoreAssertion}
+        />
       </div>
 
       <div className={styles.saveBar}>

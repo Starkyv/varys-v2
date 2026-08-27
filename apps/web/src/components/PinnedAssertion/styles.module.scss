@@ -1,0 +1,55 @@
+/* The pinned form as one readable line: "number in [data-testid="total"] = sum of every
+ * #invoice .amount ± 0.01". Wraps rather than scrolls — a long selector must never push the
+ * relation off the edge, since the relation is the part being reviewed. */
+.pinned {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-6);
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+}
+
+.side {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-4);
+}
+
+.coercion {
+  color: var(--color-text-muted);
+}
+
+.target {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  padding: 1px var(--space-4);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-subtle);
+  color: var(--color-text);
+  word-break: break-all;
+}
+
+/* The relation is the claim, so it carries the only emphasis in the line. */
+.relation {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+}
+
+.literal {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text);
+}
+
+.tolerance {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+
+.unpinned {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-subtle);
+}

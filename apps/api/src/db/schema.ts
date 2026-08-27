@@ -9,6 +9,7 @@ export {
   folders,
   repairJobs,
   repairJobTests,
+  runAssertions,
   runResults,
   runs,
   runSteps,

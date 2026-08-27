@@ -1,0 +1,190 @@
+.head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-10);
+  margin-bottom: var(--space-16);
+}
+
+.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-subtle);
+  color: var(--color-text-muted);
+  flex: none;
+}
+
+.headText {
+  min-width: 0;
+}
+
+.title {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+}
+
+.sub {
+  margin-top: 2px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+
+.count {
+  margin-left: auto;
+  flex: none;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-10);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* One assertion. The left edge carries the verdict, so a run with several assertions can be
+ * scanned down the rail without reading a word. */
+.item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  padding: var(--space-12) var(--space-14);
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-surface);
+}
+
+.passed {
+  border-left-color: var(--color-success);
+}
+
+/* Both values were read and they disagree: the app is wrong. Red. */
+.relation-false {
+  border-left-color: var(--color-danger);
+  background: var(--color-danger-soft);
+}
+
+/* A value couldn't be read, so nothing was compared. Amber, NOT red — nobody has established
+ * that the application is wrong, and colouring it the same would say they had. */
+.extraction-failed {
+  border-left-color: var(--color-warning);
+  background: var(--color-warning-soft);
+}
+
+.itemHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.check {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-strong);
+}
+
+.detail {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.blurb {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+
+.values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+}
+
+.valueChip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-4);
+  padding: 2px var(--space-6);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-surface);
+}
+
+.valueLabel {
+  font-size: var(--font-size-xs);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+  color: var(--color-text-subtle);
+}
+
+.valueCode {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text);
+}
+
+.valueNone {
+  font-size: var(--font-size-xs);
+  font-style: italic;
+  color: var(--color-text-subtle);
+}
+
+/* The history strip: one dot per past run, oldest → newest. */
+.history {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  margin-top: var(--space-4);
+}
+
+.historyLabel {
+  font-size: var(--font-size-xs);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+  color: var(--color-text-subtle);
+}
+
+.dots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--color-border-strong);
+}
+
+.dot_passed {
+  background: var(--color-success);
+}
+
+.dot_relation-false {
+  background: var(--color-danger);
+}
+
+.dot_extraction-failed {
+  background: var(--color-warning);
+}
+
+.historyMeta {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+
+.historyEmpty {
+  margin: var(--space-4) 0 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
