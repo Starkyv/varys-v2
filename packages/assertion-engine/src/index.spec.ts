@@ -7,6 +7,10 @@ import {
   type Relation,
   anyAssertionFailed,
   assertion,
+  assertionFailureVerdict,
+  assertionRepairability,
+  isRepairableAssertionFailure,
+  pinnedSideTarget,
   coerce,
   evaluateAssertion,
   evaluatePinned,
@@ -384,5 +388,124 @@ describe("an evaluated assertion carries its identity", () => {
     // An extraction failure reads as "couldn't be checked", never as the app being wrong.
     const unreadable = evaluateAssertion(declared, { left: unresolved("rows are gone") });
     expect(summarizeAssertionFailures([unreadable]) ?? "").toContain("couldn't be checked");
+  });
+});
+
+// ---- repairability: the safety property (slice 10) ----------------------------------------
+
+describe("a failing assertion's repairability", () => {
+  const declared: Assertion = {
+    id: "total-matches-sum",
+    check: "The total equals the sum of the line items",
+    pinned: pin("number", "eq", { target: { pretend: "right" }, as: "sum-number" }),
+  };
+  const evaluate = (sides: { left: ExtractedSide; right?: ExtractedSide }) =>
+    evaluateAssertion(declared, sides);
+
+  it("records WHICH side failed to extract, so the repair knows which target to re-pin", () => {
+    const leftGone = evaluate({ left: unresolved("no match"), right: values(["10"]) });
+    expect(leftGone).toMatchObject({ outcome: "extraction-failed", cause: "unresolved", side: "left" });
+
+    const rightGone = evaluate({ left: values(["10"]), right: unresolved("no match") });
+    expect(rightGone).toMatchObject({ outcome: "extraction-failed", cause: "unresolved", side: "right" });
+
+    // A right side the runner never extracted at all is still the right side's failure.
+    const never = evaluate({ left: values(["10"]) });
+    expect(never).toMatchObject({ outcome: "extraction-failed", side: "right" });
+  });
+
+  it("leaves `side` null for every outcome that names no single target", () => {
+    expect(evaluate({ left: values(["60"]), right: values(["60"]) }).side).toBeNull();
+    expect(evaluate({ left: values(["70"]), right: values(["60"]) })).toMatchObject({
+      outcome: "relation-false",
+      side: null,
+    });
+    // A value that isn't a number is the DEFINITION's problem, and blames neither target.
+    expect(evaluate({ left: values(["n/a"]), right: values(["60"]) })).toMatchObject({
+      outcome: "extraction-failed",
+      cause: "coercion",
+    });
+  });
+
+  it("calls an unresolved target repairable, and a false relation never", () => {
+    const missing = evaluate({ left: unresolved("no match"), right: values(["10"]) });
+    const wrong = evaluate({ left: values(["70"]), right: values(["60"]) });
+    const unusable = evaluate({ left: values(["n/a"]), right: values(["60"]) });
+    const passed = evaluate({ left: values(["60"]), right: values(["60"]) });
+
+    expect(assertionRepairability(missing)).toBe("repairable");
+    expect(assertionRepairability(wrong)).toBe("app-failure");
+    expect(assertionRepairability(unusable)).toBe("definition-failure");
+    expect(assertionRepairability(passed)).toBeNull();
+
+    expect(isRepairableAssertionFailure(missing)).toBe(true);
+    // The one line the whole slice rests on.
+    expect(isRepairableAssertionFailure(wrong)).toBe(false);
+    expect(isRepairableAssertionFailure(unusable)).toBe(false);
+  });
+
+  it("earns a repair only when EVERY failure is an unresolved target", () => {
+    const missing = evaluate({ left: unresolved("no match"), right: values(["10"]) });
+    const wrong = evaluate({ left: values(["70"]), right: values(["60"]) });
+    const passed = evaluate({ left: values(["60"]), right: values(["60"]) });
+
+    expect(assertionFailureVerdict([passed]).consequence).toBe("none");
+    expect(assertionFailureVerdict([]).consequence).toBe("none");
+    expect(assertionFailureVerdict([missing, passed])).toMatchObject({
+      consequence: "repair",
+      repairable: [missing],
+      unrepairable: [],
+    });
+    expect(assertionFailureVerdict([wrong])).toMatchObject({
+      consequence: "triage",
+      repairable: [],
+      unrepairable: [wrong],
+    });
+    // Mixed: the false relation wins. A run whose app is known to be wrong is not a run to
+    // repair, however repairable its other failure looks in isolation.
+    expect(assertionFailureVerdict([missing, wrong])).toMatchObject({
+      consequence: "triage",
+      repairable: [missing],
+      unrepairable: [wrong],
+    });
+  });
+});
+
+describe("the target a repair re-pins", () => {
+  const declared: Assertion[] = [
+    {
+      id: "total-matches-sum",
+      check: "The total equals the sum of the line items",
+      pinned: pin("number", "eq", { target: { pretend: "right" }, as: "sum-number" }),
+    },
+    {
+      id: "total-is-positive",
+      check: "The total is greater than zero",
+      pinned: pin("number", "gt", literal(0)),
+    },
+    { id: "someday", check: "Someday this will be checked" },
+  ];
+
+  it("walks to the named side's target", () => {
+    expect(pinnedSideTarget(declared, "total-matches-sum", "left")).toEqual({ pretend: "left" });
+    expect(pinnedSideTarget(declared, "total-matches-sum", "right")).toEqual({ pretend: "right" });
+  });
+
+  it("has nothing to re-pin for a literal, an unpinned assertion, or no side at all", () => {
+    // A literal has no locator by construction.
+    expect(pinnedSideTarget(declared, "total-is-positive", "right")).toBeUndefined();
+    // Documentation, never evaluated.
+    expect(pinnedSideTarget(declared, "someday", "left")).toBeUndefined();
+    expect(pinnedSideTarget(declared, "invented", "left")).toBeUndefined();
+    expect(pinnedSideTarget(undefined, "total-matches-sum", "left")).toBeUndefined();
+  });
+
+  it("refuses a side that is not one, so an untrusted column cannot become a guess", () => {
+    // Every caller holds `side` as text off a database column or the wire. A `coercion` failure
+    // names no side, and defaulting that to `left` would derive a cluster key for a target that
+    // was never the problem.
+    expect(pinnedSideTarget(declared, "total-matches-sum", null)).toBeUndefined();
+    expect(pinnedSideTarget(declared, "total-matches-sum", "")).toBeUndefined();
+    expect(pinnedSideTarget(declared, "total-matches-sum", "LEFT")).toBeUndefined();
   });
 });

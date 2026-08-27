@@ -1,6 +1,6 @@
 import type { AssertionHistoryPoint, AssertionResultView } from "@varys/review-contract";
 import { Badge, Card, Check, cx } from "@varys/ui";
-import { OUTCOME_META, PinnedAssertion } from "../../../../components/PinnedAssertion";
+import { OUTCOME_META, PinnedAssertion, consequenceOf } from "../../../../components/PinnedAssertion";
 import { absoluteTime } from "../../../../lib/format";
 import styles from "./styles.module.scss";
 
@@ -53,7 +53,13 @@ export function AssertionsCard({ assertions }: { assertions: AssertionResultView
 
               <p className={styles.detail}>{a.detail}</p>
 
-              {a.outcome !== "passed" && <p className={styles.blurb}>{meta.blurb}</p>}
+              {a.outcome !== "passed" && (
+                <>
+                  <p className={styles.blurb}>{meta.blurb}</p>
+                  {/* …and what follows from it: which of these is repairable, and which never is. */}
+                  <p className={styles.blurb}>{consequenceOf(a.outcome, a.cause)}</p>
+                </>
+              )}
 
               {/* What it compared: the values this run actually read, then the pinned form that
                   decided how to read them. */}

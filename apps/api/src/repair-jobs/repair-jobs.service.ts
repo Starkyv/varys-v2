@@ -1,4 +1,10 @@
 import { BadRequestException, ConflictException, Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import {
+  COERCION_NEVER_REPAIRABLE,
+  isRepairableAssertionFailure,
+  pinnedSideTarget,
+  RELATION_FALSE_NEVER_REPAIRABLE,
+} from "@varys/assertion-engine";
 import { judgeRepairJustification, type JudgeProvider, type JudgeResult } from "@varys/judge-engine";
 import {
   breakerVerdict,
@@ -14,7 +20,10 @@ import {
   recentLocatorFailures,
 } from "@varys/runner";
 import type {
+  AssertionOutcome,
   ClaimedRepairJob,
+  ExtractionCause,
+  TestConfigPatch,
   RepairBreakerOverride,
   RepairBreakerView,
   RepairJobKind,
@@ -25,9 +34,9 @@ import type {
   SuppressedFailureItem,
 } from "@varys/review-contract";
 import { describeStep, type Fingerprint, type TestDefinition } from "@varys/step-schema";
-import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, ne, sql } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
-import { appSettings, repairJobs, repairJobTests, runs, suppressedFailures, tests, testVersions } from "../db/schema";
+import { appSettings, repairJobs, repairJobTests, runAssertions, runs, suppressedFailures, tests, testVersions } from "../db/schema";
 import { RunsService } from "../runs/runs.service";
 import { TestsService } from "../tests/tests.service";
 import { CLOCK, type Clock } from "./clock";
@@ -149,6 +158,13 @@ export class RepairJobsService {
    * that missed, and more importantly a pixel regression or a crash must not become repairable
    * just because a human asked loudly. Those get a Triage Job instead (slice 08).
    *
+   * An assertion whose extraction target no longer resolves IS a locator failure (slice 10), and is
+   * repairable here like any other — its target comes from the assertion side the run recorded as
+   * unresolved rather than from a failing step, because every step of that run passed. An assertion
+   * whose relation is FALSE is refused, in its own words: that is the one refusal this endpoint
+   * exists to make unbypassable, since "a human asked loudly" is exactly the pressure under which a
+   * corpus gets re-pinned into agreement with a bug.
+   *
    * Idempotent: asking twice hands back the job that is already OPEN for this cluster rather than
    * stacking a second one — including when a drainer has already claimed it, which the partial
    * unique index alone would not catch.
@@ -174,13 +190,20 @@ export class RepairJobsService {
       .limit(1);
     if (!run) throw new NotFoundException(`Run ${runId} not found`);
     if (run.status !== "failed" || run.failureKind !== "locator") {
+      // Say WHY when the answer is "never", rather than leaving a reader to conclude the endpoint
+      // is merely fussy about which run they picked.
+      const unrepairable = await this.unrepairableAssertionOf(runId);
+      if (unrepairable) throw new BadRequestException(unrepairable);
       throw new BadRequestException(
         "only a run that failed on an unresolvable locator can be repaired",
       );
     }
 
-    const step = (run.definition as TestDefinition).steps[run.failedStepIndex ?? -1];
-    const target = step && "target" in step ? step.target : undefined;
+    const definition = run.definition as TestDefinition;
+    const step = definition.steps[run.failedStepIndex ?? -1];
+    const target =
+      (step && "target" in step ? step.target : undefined) ??
+      (await this.unresolvedAssertionTarget(runId, definition));
     if (!target) {
       throw new BadRequestException("the failing step has no recorded locator to repair");
     }
@@ -217,6 +240,74 @@ export class RepairJobsService {
 
     const [job] = (await this.list({ all: true })).filter((j) => j.id === id);
     return job;
+  }
+
+  /**
+   * The failing assertions a run recorded, most repairable first — the slice-10 lookups all read
+   * from here rather than each re-deriving "which assertion, which side" off the rows.
+   */
+  private async failingAssertionsOf(runId: string): Promise<
+    Array<{ assertionId: string; checkText: string; outcome: string; cause: string | null; side: string | null; detail: string }>
+  > {
+    return await this.db
+      .select({
+        assertionId: runAssertions.assertionId,
+        checkText: runAssertions.checkText,
+        outcome: runAssertions.outcome,
+        cause: runAssertions.cause,
+        side: runAssertions.side,
+        detail: runAssertions.detail,
+      })
+      .from(runAssertions)
+      .where(and(eq(runAssertions.runId, runId), ne(runAssertions.outcome, "passed")))
+      .orderBy(runAssertions.assertionId);
+  }
+
+  /**
+   * The fingerprint an assertion repair would re-pin: the target of the side a run recorded as
+   * `unresolved`, read off the definition that ACTUALLY ran.
+   *
+   * The side is read from the row rather than guessed. A left-hand break re-pinned as a right-hand
+   * one would derive the wrong cluster key, and a wrong key is a silent second job for the same app
+   * change — the one thing clustering exists to prevent.
+   */
+  private async unresolvedAssertionTarget(
+    runId: string,
+    definition: TestDefinition,
+  ): Promise<Fingerprint | undefined> {
+    for (const row of await this.failingAssertionsOf(runId)) {
+      if (
+        !isRepairableAssertionFailure({
+          outcome: row.outcome as AssertionOutcome,
+          cause: row.cause as ExtractionCause | null,
+        })
+      ) {
+        continue;
+      }
+      const target = pinnedSideTarget(definition.assertions, row.assertionId, row.side);
+      if (target) return target;
+    }
+    return undefined;
+  }
+
+  /**
+   * The refusal a run earns when its assertion failure is one no repair may ever touch — the
+   * sentence, or null if there is no such failure. One wording, from the engine, so the endpoint,
+   * the queue and the docs cannot drift into three different rules.
+   */
+  private async unrepairableAssertionOf(runId: string): Promise<string | null> {
+    const failing = await this.failingAssertionsOf(runId);
+    const relationFalse = failing.find((r) => r.outcome === "relation-false");
+    if (relationFalse) {
+      return `Assertion "${relationFalse.checkText}" is not repairable: ${RELATION_FALSE_NEVER_REPAIRABLE}`;
+    }
+    const unusable = failing.find(
+      (r) => r.outcome === "extraction-failed" && r.cause !== "unresolved",
+    );
+    if (unusable) {
+      return `Assertion "${unusable.checkText}" is not repairable: ${COERCION_NEVER_REPAIRABLE}`;
+    }
+    return null;
   }
 
   /**
@@ -865,8 +956,8 @@ export class RepairJobsService {
           .orderBy(desc(testVersions.version))
           .limit(1);
         if (!latest) continue;
-        const index = stepIndexForCluster(latest.definition as TestDefinition, clusterKey);
-        if (index === null) {
+        const site = siteForCluster(latest.definition as TestDefinition, clusterKey);
+        if (!site) {
           // This member has already been edited past the break (or never really shared it).
           // Skipped, not failed: the cluster is a hypothesis about a root cause, and a member that
           // no longer holds the broken locator has nothing to repair.
@@ -877,7 +968,7 @@ export class RepairJobsService {
         }
         const { version, versionId } = await this.tests.saveConfig(
           member.testId,
-          { baseVersion: latest.version, steps: [{ index, target: newTarget }] },
+          { baseVersion: latest.version, ...patchForSite(site, newTarget) },
           `${claimant} (Claude repair, clustered)`,
           { unreviewed: true, repairJobId: job.id },
         );
@@ -1169,6 +1260,34 @@ export class RepairJobsService {
     if (!job) throw new NotFoundException(`Repair job ${jobId} not found`);
 
     let failingStep: ClaimedRepairJob["failingStep"] = null;
+    // The assertion that broke, when that is what made the run red (slice 10). A drainer holding a
+    // repair job for an assertion has nothing to look for in `failingStep` — every step of that run
+    // passed — so the thing it must re-pin has to be named here or it is not findable at all.
+    let failingAssertion: ClaimedRepairJob["failingAssertion"] = null;
+    if (job.runId) {
+      // Repairable first: a run can carry several failing assertions, and the one a drainer needs
+      // named is the one it can actually act on.
+      const rows = (await this.failingAssertionsOf(job.runId)).map((row) => ({
+        row,
+        repairable: isRepairableAssertionFailure({
+          outcome: row.outcome as AssertionOutcome,
+          cause: row.cause as ExtractionCause | null,
+        }),
+      }));
+      const chosen = rows.find((r) => r.repairable) ?? rows[0];
+      if (chosen) {
+        failingAssertion = {
+          id: chosen.row.assertionId,
+          check: chosen.row.checkText,
+          outcome: chosen.row.outcome as AssertionOutcome,
+          cause: chosen.row.cause as ExtractionCause | null,
+          side:
+            chosen.row.side === "left" || chosen.row.side === "right" ? chosen.row.side : null,
+          detail: chosen.row.detail,
+          repairable: chosen.repairable,
+        };
+      }
+    }
     if (job.runId) {
       const [run] = await this.db
         .select({
@@ -1205,6 +1324,7 @@ export class RepairJobsService {
         ? members
         : [{ testId: job.testId, testName: job.testName, runId: job.runId }],
       failingStep,
+      failingAssertion,
       attempts: job.attempts,
       attemptsRemaining: Math.max(0, ATTEMPT_CAP - job.attempts),
       claimedAt: (job.claimedAt ?? new Date()).toISOString(),
@@ -1238,8 +1358,20 @@ export class RepairJobsService {
 }
 
 /**
- * The target a repair re-pinned a broken locator to: the step that carried `clusterKey` BEFORE the
- * repair, read back off the definition AFTER it. Null when no such step exists any more, or when
+ * Where in a definition a broken locator lives — a step's target, or one side of an assertion's
+ * pinned form (Slice 19, slice 10).
+ *
+ * Two shapes rather than one, because the EDIT differs: a step is addressed by index and patched
+ * through `steps`, an assertion by its stable id and side and patched through `assertions`. What
+ * they share is the only thing clustering cares about — the cluster key derived from the target.
+ */
+type ClusterSite =
+  | { kind: "step"; index: number }
+  | { kind: "assertion"; id: string; side: "left" | "right" };
+
+/**
+ * The target a repair re-pinned a broken locator to: the site that carried `clusterKey` BEFORE the
+ * repair, read back off the definition AFTER it. Null when no such site exists any more, or when
  * its target is unchanged — either way there is no identified re-pin to fan out, and guessing one
  * would edit other people's tests on a hunch.
  */
@@ -1249,19 +1381,52 @@ function repairedTarget(
   clusterKey: string,
 ): Fingerprint | null {
   if (!before) return null;
-  const index = stepIndexForCluster(before, clusterKey);
-  if (index === null) return null;
-  const step = after.steps[index];
-  const target = step && "target" in step ? step.target : undefined;
+  const site = siteForCluster(before, clusterKey);
+  if (!site) return null;
+  const target = targetAtSite(after, site);
   if (!target) return null;
   return deriveClusterKey(target) === clusterKey ? null : target;
 }
 
-/** The index of the step whose recorded locator has this cluster key, or null. */
-function stepIndexForCluster(def: TestDefinition, clusterKey: string): number | null {
+/** The first site in a definition whose recorded locator has this cluster key, or null. Steps are
+ *  searched before assertions: a step failure is the far commoner break, and the key is the same
+ *  either way, so the order only decides which site an ambiguous definition reports. */
+function siteForCluster(def: TestDefinition, clusterKey: string): ClusterSite | null {
   for (const [index, step] of def.steps.entries()) {
     if (!("target" in step) || !step.target) continue;
-    if (deriveClusterKey(step.target) === clusterKey) return index;
+    if (deriveClusterKey(step.target) === clusterKey) return { kind: "step", index };
+  }
+  for (const assertion of def.assertions ?? []) {
+    if (!assertion.pinned) continue;
+    for (const side of ["left", "right"] as const) {
+      const which = assertion.pinned[side];
+      if (!("target" in which)) continue;
+      if (deriveClusterKey(which.target) === clusterKey) {
+        return { kind: "assertion", id: assertion.id, side };
+      }
+    }
   }
   return null;
+}
+
+/** The fingerprint currently recorded at a site, or undefined if the site is gone. */
+function targetAtSite(def: TestDefinition, site: ClusterSite): Fingerprint | undefined {
+  if (site.kind === "step") {
+    const step = def.steps[site.index];
+    return step && "target" in step ? step.target : undefined;
+  }
+  return pinnedSideTarget(def.assertions, site.id, site.side);
+}
+
+/** The config patch that re-pins a site to a new target — the one place the two shapes of edit
+ *  are chosen between, so a caller fanning a repair out never has to know which it is holding. */
+function patchForSite(
+  site: ClusterSite,
+  target: Fingerprint,
+): Partial<Pick<TestConfigPatch, "steps" | "assertions">> {
+  if (site.kind === "step") return { steps: [{ index: site.index, target }] };
+  // The fan-out transfers the SIGNALS a locator patch carries (the same five a step's does), so
+  // the new target is handed over as the patch — every other captured signal of the member's own
+  // fingerprint survives, exactly as it does on the anchor.
+  return { assertions: [{ id: site.id, [site.side]: target }] };
 }

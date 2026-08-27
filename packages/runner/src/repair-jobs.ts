@@ -3,11 +3,13 @@ import {
   type Db,
   repairJobs,
   repairJobTests,
+  runAssertions,
   runs,
   suppressedFailures,
   tests,
   testVersions,
 } from "@varys/db";
+import { pinnedSideTarget } from "@varys/assertion-engine";
 import { notifyBreakerTripped } from "@varys/notify";
 import {
   breakerVerdict,
@@ -107,6 +109,10 @@ export async function breakerThreshold(db: Db): Promise<number> {
  * threw, so the census cannot disagree with the runs about what failed. Each record's cluster key
  * is derived from the failing step of the version that ACTUALLY ran, so a rename after the fact
  * cannot retroactively re-cluster history.
+ *
+ * `locator` covers an ASSERTION whose extraction target no longer resolves as well (slice 10) — it
+ * has no failing step, so its key comes from the assertion side the run recorded as unresolved.
+ * Without that the breaker would be blind to a mass break that happened to be caught by assertions.
  */
 export async function recentLocatorFailures(
   db: Db,
@@ -130,12 +136,47 @@ export async function recentLocatorFailures(
     .orderBy(desc(runs.createdAt))
     .limit(CENSUS_LIMIT);
 
+  // An ASSERTION whose extraction target no longer resolves is a locator failure too (slice 10),
+  // and it has no failing STEP: the steps all ran. Its target is recovered from the assertion the
+  // run recorded as unresolved, so the census keys it exactly as the enqueue path did — one broken
+  // element read by forty assertions is one cluster here as well, and the breaker sees the mass
+  // failure it exists to catch.
+  const withoutStep = rows.filter((r) => r.failedStepIndex === null);
+  const assertionSides = withoutStep.length
+    ? await db
+        .select({
+          runId: runAssertions.runId,
+          assertionId: runAssertions.assertionId,
+          side: runAssertions.side,
+        })
+        .from(runAssertions)
+        .where(
+          and(
+            inArray(
+              runAssertions.runId,
+              withoutStep.map((r) => r.runId),
+            ),
+            eq(runAssertions.outcome, "extraction-failed"),
+            eq(runAssertions.cause, "unresolved"),
+          ),
+        )
+    : [];
+  const sidesByRun = new Map<string, Array<{ assertionId: string; side: string | null }>>();
+  for (const row of assertionSides) {
+    const list = sidesByRun.get(row.runId) ?? [];
+    list.push({ assertionId: row.assertionId, side: row.side });
+    sidesByRun.set(row.runId, list);
+  }
+
   const failures: FailureRecord[] = [];
   for (const row of rows) {
-    const step = (row.definition as TestDefinition).steps[row.failedStepIndex ?? -1];
-    const target = step && "target" in step ? step.target : undefined;
-    // A locator failure whose step no longer carries a target cannot be clustered — count the
-    // TEST (it is genuinely broken, and the threshold counts tests) under a key of its own.
+    const definition = row.definition as TestDefinition;
+    const step = definition.steps[row.failedStepIndex ?? -1];
+    const target =
+      (step && "target" in step ? step.target : undefined) ??
+      assertionTargetOf(definition, sidesByRun.get(row.runId) ?? []);
+    // A locator failure with no recoverable target cannot be clustered — count the TEST (it is
+    // genuinely broken, and the threshold counts tests) under a key of its own.
     failures.push({
       testId: row.testId,
       runId: row.runId,
@@ -143,6 +184,20 @@ export async function recentLocatorFailures(
     });
   }
   return failures;
+}
+
+/** The first recoverable target among a run's unresolved assertion sides, over the definition that
+ *  actually ran — through the same `pinnedSideTarget` walk the enqueue path uses, so the census
+ *  cannot key a failure differently from the job that was (or was not) opened for it. */
+function assertionTargetOf(
+  definition: TestDefinition,
+  sides: Array<{ assertionId: string; side: string | null }>,
+): Fingerprint | undefined {
+  for (const row of sides) {
+    const target = pinnedSideTarget(definition.assertions, row.assertionId, row.side);
+    if (target) return target;
+  }
+  return undefined;
 }
 
 /**

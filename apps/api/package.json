@@ -14,6 +14,7 @@
     "@nestjs/common": "^11.0.6",
     "@nestjs/core": "^11.0.6",
     "@nestjs/platform-express": "^11.0.6",
+    "@varys/assertion-engine": "workspace:*",
     "@varys/capture": "workspace:*",
     "@varys/db": "workspace:*",
     "@varys/diff-engine": "workspace:*",

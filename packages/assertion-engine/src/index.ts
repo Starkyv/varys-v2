@@ -196,9 +196,21 @@ export type ExtractionCause =
 
 export type CoercedValue = string | number | boolean;
 
+/** Which side of a comparison an extraction failure happened on. */
+export type AssertionSideName = "left" | "right";
+
 export interface AssertionEvaluation {
   outcome: AssertionOutcome;
   cause: ExtractionCause | null;
+  /**
+   * Which side failed to extract — the side whose TARGET slice 10 re-pins. Null for every other
+   * outcome, and for a `coercion` failure the relation raised over both values at once.
+   *
+   * Recorded here rather than re-derived later, and that matters: the repair path needs the exact
+   * fingerprint that missed to derive a cluster key, and "left or right?" recovered by guessing
+   * would scatter one broken locator across two clusters.
+   */
+  side: AssertionSideName | null;
   /** The coerced values compared, or null for a side that produced none. */
   left: CoercedValue | null;
   right: CoercedValue | null;
@@ -472,6 +484,7 @@ export function evaluatePinned<T>(
     return {
       outcome: "extraction-failed",
       cause: leftCoerced.cause,
+      side: "left",
       left: null,
       right: null,
       detail: `couldn't read the left-hand value: ${leftCoerced.detail}`,
@@ -489,6 +502,7 @@ export function evaluatePinned<T>(
         return {
           outcome: "extraction-failed",
           cause: "unresolved",
+          side: "right",
           left: leftCoerced.value,
           right: null,
           detail: "couldn't read the right-hand value: it was never extracted",
@@ -499,6 +513,7 @@ export function evaluatePinned<T>(
         return {
           outcome: "extraction-failed",
           cause: rightCoerced.cause,
+          side: "right",
           left: leftCoerced.value,
           right: null,
           detail: `couldn't read the right-hand value: ${rightCoerced.detail}`,
@@ -514,6 +529,9 @@ export function evaluatePinned<T>(
     return {
       outcome: "extraction-failed",
       cause: "coercion",
+      // The relation could not use the pair, so neither side is individually at fault — and a
+      // `coercion` failure is not repairable anyway (slice 10), so there is no target to name.
+      side: null,
       left: leftCoerced.value,
       right,
       detail: applied.unusable,
@@ -527,6 +545,7 @@ export function evaluatePinned<T>(
   return {
     outcome: applied.held ? "passed" : "relation-false",
     cause: null,
+    side: null,
     left: leftCoerced.value,
     right,
     detail: applied.held ? comparison : `${comparison} — it does not`,
@@ -570,3 +589,133 @@ export function summarizeAssertionFailures(results: AssertionResult[]): string |
     failed.length === 1 ? "1 assertion failed" : `${failed.length} assertions failed`;
   return `${head}: ${parts.join("; ")}`;
 }
+
+// ---- repairability (slice 10) --------------------------------------------------------------
+
+/**
+ * What a failing assertion may have DONE to it — the safety property slice 10 makes executable.
+ *
+ * The three values are not degrees of severity, they are three different owners:
+ *
+ *  - `repairable`   — the extraction target no longer resolves. That is a **locator** failure and
+ *                     nothing else: the app was never asked a question, so it cannot have answered
+ *                     wrongly. Repairable exactly like a broken step locator.
+ *  - `app-failure`  — both sides were read and the relation is false. **Never** repairable: under
+ *                     any policy, at any threshold, by any agent. Repairing it would mean re-pinning
+ *                     until the numbers agree, which is a machine for hiding the exact bugs
+ *                     assertions exist to catch.
+ *  - `definition-failure` — a value was read but could not become what the coercion asked for
+ *                     (`"n/a"` as a number), or the relation cannot use the pair. The ASSERTION is
+ *                     wrong, not its locator and not the app — re-pinning would not address it, so
+ *                     it is not repairable either. It earns a diagnosis.
+ */
+export type AssertionRepairability = "repairable" | "app-failure" | "definition-failure";
+
+/** The narrow shape the repairability question is asked of — so the runner (which holds full
+ *  results) and the API (which holds `run_assertions` rows) ask it of the same predicate rather
+ *  than growing two that can drift. */
+export interface AssertionVerdictShape {
+  outcome: AssertionOutcome;
+  cause: ExtractionCause | null;
+}
+
+/** Where a failing assertion belongs. Null for one that passed. */
+export function assertionRepairability(
+  result: AssertionVerdictShape,
+): AssertionRepairability | null {
+  if (result.outcome === "passed") return null;
+  if (result.outcome === "relation-false") return "app-failure";
+  return result.cause === "unresolved" ? "repairable" : "definition-failure";
+}
+
+/** Whether this failing assertion is the ONE class a repair may touch. The single predicate the
+ *  enqueue path, the manual-enqueue endpoint and the runner all decide from. */
+export function isRepairableAssertionFailure(result: AssertionVerdictShape): boolean {
+  return assertionRepairability(result) === "repairable";
+}
+
+/** What a run's assertion failures earn from the repair queue (slice 10). */
+export type AssertionConsequence =
+  /** Nothing failed. */
+  | "none"
+  /** Every failure is an unresolved extraction target: a locator problem, so a Repair Job. */
+  | "repair"
+  /** At least one failure is the app's or the definition's: a read-only Triage Job, never a repair. */
+  | "triage";
+
+export interface AssertionFailureVerdict {
+  consequence: AssertionConsequence;
+  /** Failures whose extraction target no longer resolves, in declaration order. */
+  repairable: AssertionResult[];
+  /** Failures no repair may ever touch — a false relation, or an unusable value. */
+  unrepairable: AssertionResult[];
+}
+
+/**
+ * The run-level consequence of a run's assertion results (Slice 19, slice 10).
+ *
+ * **One unrepairable failure suppresses repair for the whole run, deliberately.** A run carrying
+ * both a false relation and a missing target is a run whose app is known to be wrong; re-pinning
+ * the missing target there would write a version, queue a re-run, and produce a repair whose
+ * evidence is a still-red run — while the far more important finding (the numbers disagree) went
+ * to the one job that is allowed to say so. Erring towards the read-only job costs a human an
+ * override; erring the other way is how a corpus gets rewritten into agreement with a bug.
+ */
+export function assertionFailureVerdict(results: AssertionResult[]): AssertionFailureVerdict {
+  const repairable: AssertionResult[] = [];
+  const unrepairable: AssertionResult[] = [];
+  for (const r of results) {
+    const where = assertionRepairability(r);
+    if (where === "repairable") repairable.push(r);
+    else if (where !== null) unrepairable.push(r);
+  }
+  const consequence: AssertionConsequence =
+    unrepairable.length > 0 ? "triage" : repairable.length > 0 ? "repair" : "none";
+  return { consequence, repairable, unrepairable };
+}
+
+/**
+ * The target of one side of one assertion's pinned form — the fingerprint a repair re-pins.
+ *
+ * Every consumer of the slice-10 distinction needs this same walk (the runner at enqueue time, the
+ * breaker census, the by-hand enqueue endpoint, the cluster fan-out), and each of them holds `side`
+ * as untrusted text: a `run_assertions` column, or a value off the wire. So the walk and the
+ * left/right validation live here, once. Three copies of it is exactly the drift this package's
+ * `AssertionOutcome` comment warns about — a side recovered differently in two places derives two
+ * cluster keys for one broken element.
+ *
+ * Undefined when there is nothing to re-pin: no such assertion, no pinned form, no side named (a
+ * `coercion` failure blames the definition rather than a target), or a side that is a LITERAL,
+ * which has no locator by construction.
+ *
+ * Target-agnostic like the rest of the package: it navigates the pinned form and never looks INTO
+ * a target.
+ */
+export function pinnedSideTarget<TTarget>(
+  assertions: readonly Assertion<TTarget>[] | undefined,
+  assertionId: string,
+  side: string | null | undefined,
+): TTarget | undefined {
+  if (side !== "left" && side !== "right") return undefined;
+  const pinned = (assertions ?? []).find((a) => a.id === assertionId)?.pinned;
+  if (!pinned) return undefined;
+  const which = side === "left" ? pinned.left : pinned.right;
+  return "target" in which ? which.target : undefined;
+}
+
+/**
+ * Why a false relation is refused a repair, in the words a human (or an agent that asked for one
+ * by hand) reads. One string, in one place: the refusal is a property of the system, and three
+ * call sites wording it three ways would read as three different rules.
+ */
+export const RELATION_FALSE_NEVER_REPAIRABLE =
+  "both values were read and they disagree, which is evidence about the APP, not about the locator. " +
+  "A false assertion is never repairable — under any policy, at any threshold, by any agent — because " +
+  "repairing it would mean re-pinning until the numbers agree, and that hides the exact bugs assertions " +
+  "exist to catch. Fix the application, or change the assertion by hand if the check itself is wrong.";
+
+/** The same, for a failure whose value could not be coerced: re-pinning addresses nothing. */
+export const COERCION_NEVER_REPAIRABLE =
+  "a value was read but could not be used as the assertion asked (a number that isn't one, or a relation " +
+  "that cannot compare the pair). That is the assertion's definition, not its locator, so re-pinning would " +
+  "not address it — edit the assertion instead.";

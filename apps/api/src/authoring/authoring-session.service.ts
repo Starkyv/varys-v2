@@ -8,7 +8,7 @@ import {
   type OnApplicationShutdown,
 } from "@nestjs/common";
 import { captureFingerprint } from "@varys/capture";
-import { environments, runResults, runs, tests as testsTable, testVersions } from "@varys/db";
+import { environments, runAssertions, runResults, runs, tests as testsTable, testVersions } from "@varys/db";
 import { verify, type VerifyOutcome, type VerifyStatus } from "@varys/locator-engine";
 import {
   type EnvCookie,
@@ -19,7 +19,7 @@ import {
   seedLocalStorage,
 } from "@varys/runner";
 import { resolveStep, resolveWaits } from "@varys/variable-resolver";
-import { and, desc, eq, ilike } from "drizzle-orm";
+import { and, desc, eq, ilike, ne } from "drizzle-orm";
 import {
   buildClick,
   buildHover,
@@ -49,6 +49,7 @@ import type {
   NewStepInput,
   TestConfigPatch,
   TestConfigStep,
+  TestConfigAssertionPatch,
   TestConfigStepPatch,
 } from "@varys/review-contract";
 import { type Browser, type BrowserContext, chromium, type Locator, type Page } from "playwright-core";
@@ -410,6 +411,25 @@ export interface TestEditStep {
   locator?: FingerprintPatch;
 }
 
+/**
+ * An edit to one declared Assertion, keyed by its STABLE id (Slice 19, slices 09 + 10).
+ *
+ * `left` / `right` are how an assertion whose extraction target no longer resolves is REPAIRED: a
+ * locator patch on that side's fingerprint, merged exactly as a step's is. The id is never
+ * patchable — it is the identity the assertion's history hangs off.
+ */
+export interface TestEditAssertion {
+  id: string;
+  /** Rewrite the plain-language check text. */
+  check?: string;
+  /** Patch the LEFT side's extraction target (merged onto the recorded fingerprint). */
+  left?: FingerprintPatch;
+  /** Patch the RIGHT side's extraction target. Refused when that side is a literal value. */
+  right?: FingerprintPatch;
+  /** Delete this assertion, and with it every future verdict under its id. */
+  remove?: boolean;
+}
+
 /** A step to add, addressed either by a live page `ref` (a full captured fingerprint) or by a
  *  raw `selector` (used as-is, no bundle behind it). */
 export interface TestEditInsertStep {
@@ -451,6 +471,8 @@ export interface TestEditInput {
   inserts?: TestEditInsert[];
   /** The new order of the surviving steps, by their current 0-based index. */
   order?: number[];
+  /** Edits to the test's declared Assertions, keyed by each one's stable id. */
+  assertions?: TestEditAssertion[];
 }
 
 export interface TestEditResult {
@@ -920,6 +942,26 @@ export class AuthoringSessionService implements OnApplicationShutdown {
     return -1;
   }
 
+  /**
+   * Where to park a run that failed at no step: the first red CHECKPOINT's step, else — when a
+   * failing ASSERTION is what made it red — the last step, which is the page the assertions were
+   * evaluated against. -1 when neither applies.
+   */
+  private async firstRedCheckpointStepOrAssertionPage(
+    runId: string,
+    definition: TestDefinition,
+  ): Promise<number> {
+    const red = await this.firstRedCheckpointStep(runId, definition);
+    if (red >= 0) return red;
+    const [failing] = await this.db
+      .select({ assertionId: runAssertions.assertionId })
+      .from(runAssertions)
+      .where(and(eq(runAssertions.runId, runId), ne(runAssertions.outcome, "passed")))
+      .limit(1);
+    if (!failing) return -1;
+    return definition.steps.length - 1;
+  }
+
   async openRepair(input: {
     owner: { id: string; email: string; kind?: SessionActorKind };
     runId?: string;
@@ -956,8 +998,14 @@ export class AuthoringSessionService implements OnApplicationShutdown {
     // failures a Triage Job diagnoses (Slice 19, slice 08), and "drive to the failure and look" has
     // to mean something for them too — so fall back to the first red CHECKPOINT's screenshot step
     // rather than making a drainer guess an index for a failure Varys already located.
+    // An ASSERTION failure (Slice 19, slices 09/10) is a third shape again: every step ran, no
+    // checkpoint is red, and the assertion was evaluated against the page as the LAST step left it.
+    // So that is where a drainer is parked — the page the assertion actually looked at — rather
+    // than being told there is nothing to park on when Varys knows perfectly well where to look.
     const stepIndex =
-      input.stepIndex ?? row.failedStepIndex ?? (await this.firstRedCheckpointStep(runId, definition));
+      input.stepIndex ??
+      row.failedStepIndex ??
+      (await this.firstRedCheckpointStepOrAssertionPage(runId, definition));
     if (stepIndex < 0) {
       throw new BadRequestException(
         `Run ${runId} did not fail at a step and has no red checkpoint (error: ${row.error ?? "none"}), so there is nothing to park on. Pass an explicit stepIndex to inspect a specific step anyway.`,
@@ -1384,6 +1432,9 @@ export class AuthoringSessionService implements OnApplicationShutdown {
     needsEnvironment: boolean;
     defaults: unknown[];
     steps: Record<string, unknown>[];
+    /** The test's declared Assertions, each with its stable id and the pinned form it evaluates —
+     *  what an assertion edit (a rewording, or the slice-10 target re-pin) is keyed off. */
+    assertions: unknown[];
     /** Set in a repair session: which step the browser is currently parked on. */
     parkedOnStep?: number;
   }> {
@@ -1398,6 +1449,7 @@ export class AuthoringSessionService implements OnApplicationShutdown {
       needsEnvironment: config.needsEnvironment,
       defaults: config.defaults,
       steps: config.steps.map((step) => this.toEditableStep(step)),
+      assertions: config.assertions,
       ...(parked !== undefined ? { parkedOnStep: parked } : {}),
     };
   }
@@ -1547,6 +1599,39 @@ export class AuthoringSessionService implements OnApplicationShutdown {
       changes.push(`inserted a ${insert.step.type} step ${insert.position} step ${atIndex + 1}`);
     }
 
+    // Assertion edits (slice 09), including the slice-10 re-pin. Validated against what the test
+    // actually declares before anything is written, so an agent addressing an assertion that is not
+    // there is told so rather than having its edit silently no-op.
+    const assertions: TestConfigAssertionPatch[] = [];
+    for (const edit of input.assertions ?? []) {
+      const id = String(edit.id ?? "");
+      const declared = config.assertions.find((a) => a.id === id);
+      if (!declared) {
+        throw new BadRequestException(
+          config.assertions.length
+            ? `This test declares no assertion "${id}". It declares: ${config.assertions.map((a) => `"${a.id}"`).join(", ")}. Call read_test and address the assertion by the id it reports.`
+            : `This test declares no assertions at all, so there is no "${id}" to edit.`,
+        );
+      }
+      const patch: TestConfigAssertionPatch = { id };
+      if (edit.remove) {
+        patch.remove = true;
+        changes.push(`removed the assertion "${id}" ("${declared.check}")`);
+        assertions.push(patch);
+        continue;
+      }
+      if (edit.check !== undefined) {
+        patch.check = edit.check;
+        changes.push(`reworded the assertion "${id}"`);
+      }
+      for (const side of ["left", "right"] as const) {
+        if (edit[side] === undefined) continue;
+        patch[side] = edit[side];
+        changes.push(`re-pinned the ${side}-hand target of the assertion "${id}"`);
+      }
+      assertions.push(patch);
+    }
+
     if (input.order !== undefined) changes.push("reordered the steps");
     if (input.defaults !== undefined) {
       changes.push(input.defaults.length ? "set the test-level default waits" : "cleared the test-level default waits");
@@ -1558,13 +1643,18 @@ export class AuthoringSessionService implements OnApplicationShutdown {
       ...(steps.length ? { steps } : {}),
       ...(inserts.length ? { inserts } : {}),
       ...(input.order !== undefined ? { order: input.order } : {}),
+      ...(assertions.length ? { assertions } : {}),
     };
     const touchesDefinition =
-      patch.defaults !== undefined || patch.steps !== undefined || patch.inserts !== undefined || patch.order !== undefined;
+      patch.defaults !== undefined ||
+      patch.steps !== undefined ||
+      patch.inserts !== undefined ||
+      patch.order !== undefined ||
+      patch.assertions !== undefined;
     if (!touchesDefinition) {
       if (!renamesTest && input.notes === undefined) {
         throw new BadRequestException(
-          "edit_test was given nothing to change. Pass `steps`, `inserts`, `order`, `defaults`, `name` or `notes` — call read_test first to see what is there.",
+          "edit_test was given nothing to change. Pass `steps`, `inserts`, `order`, `defaults`, `assertions`, `name` or `notes` — call read_test first to see what is there.",
         );
       }
       // A name/notes-only edit is a row update; there is no new version to report.

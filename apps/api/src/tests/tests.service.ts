@@ -1101,9 +1101,9 @@ export class TestsService {
       }
     }
 
-    // Assertion edits, keyed by the assertion's STABLE id (slice 09). Only `check` is editable
-    // and only deletion removes: the id is the identity an assertion's history hangs off, so it is
-    // deliberately not patchable — "rename the id" is a delete plus a declare, and has to read as
+    // Assertion edits, keyed by the assertion's STABLE id (slice 09). `check`, the two sides'
+    // extraction TARGETS (slice 10) and deletion — never the id, which is the identity an
+    // assertion's history hangs off: "rename the id" is a delete plus a declare, and has to read as
     // one rather than silently orphaning every past verdict.
     let nextAssertions = def.assertions;
     if (patch.assertions?.length) {
@@ -1121,15 +1121,48 @@ export class TestsService {
         .filter((a) => !removed.has(a.id))
         .map((a) => {
           const p = edits.get(a.id);
-          if (!p || p.check === undefined) return a;
-          const check = p.check.trim();
-          if (!check) {
-            throw new BadRequestException(
-              `Assertion "${a.id}" needs some plain-language check text — it is what a reviewer reads.`,
-            );
+          if (!p) return a;
+          // The id (and therefore the history) travels through every rewrite below untouched.
+          let next = a;
+          if (p.check !== undefined) {
+            const check = p.check.trim();
+            if (!check) {
+              throw new BadRequestException(
+                `Assertion "${a.id}" needs some plain-language check text — it is what a reviewer reads.`,
+              );
+            }
+            next = { ...next, check };
           }
-          // The id (and therefore the history) travels through the rewrite untouched.
-          return { ...a, check };
+          // Re-pin a side's extraction target (Slice 19, slice 10) — the repair for an assertion
+          // whose target no longer resolves. The same merge a step locator edit uses, so every
+          // other captured signal survives and a repair can never collapse the bundle to one
+          // selector.
+          for (const which of ["left", "right"] as const) {
+            const sidePatch = p[which];
+            if (sidePatch === undefined) continue;
+            if (!next.pinned) {
+              throw new BadRequestException(
+                `Assertion "${a.id}" has no pinned form, so it has no ${which}-hand target to re-pin. An unpinned assertion is documentation and is never evaluated.`,
+              );
+            }
+            const side = next.pinned[which];
+            if (!("target" in side)) {
+              throw new BadRequestException(
+                `The ${which}-hand side of assertion "${a.id}" is a literal value, not an element — there is no locator to re-pin.`,
+              );
+            }
+            const merged = applyFingerprintPatch(side.target, sidePatch);
+            if (!hasMatchableSignal(merged)) {
+              throw new BadRequestException(
+                "This locator has no signal left to match on — keep at least a role, accessible name, visible text, or test id.",
+              );
+            }
+            next = {
+              ...next,
+              pinned: { ...next.pinned, [which]: { ...side, target: merged } },
+            };
+          }
+          return next;
         });
     }
 

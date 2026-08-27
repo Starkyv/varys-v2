@@ -15,6 +15,8 @@ import {
 import {
   type AssertionResult,
   anyAssertionFailed,
+  assertionFailureVerdict,
+  pinnedSideTarget,
   summarizeAssertionFailures,
 } from "@varys/assertion-engine";
 import { diffPng } from "@varys/diff-engine";
@@ -440,6 +442,7 @@ async function persistAssertionResults(
         checkText: r.check,
         outcome: r.outcome,
         cause: r.cause,
+        side: r.side,
         leftValue: r.left === null ? null : String(r.left),
         rightValue: r.right === null ? null : String(r.right),
         detail: r.detail,
@@ -451,6 +454,7 @@ async function persistAssertionResults(
         checkText: sql`excluded.check_text`,
         outcome: sql`excluded.outcome`,
         cause: sql`excluded.cause`,
+        side: sql`excluded.side`,
         leftValue: sql`excluded.left_value`,
         rightValue: sql`excluded.right_value`,
         detail: sql`excluded.detail`,
@@ -930,6 +934,20 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
     const assertionFailure = anyAssertionFailed(assertionResults)
       ? (summarizeAssertionFailures(assertionResults) ?? "an assertion failed")
       : null;
+    // …and WHICH of the two decides what the failure earns from the queue (slice 10). An assertion
+    // whose target no longer resolves is a locator failure and is repairable; one whose relation is
+    // false is evidence about the app and never is. The verdict is the pure engine's, so the rule
+    // lives in one unit-tested place rather than in this branch.
+    const assertionVerdict = assertionFailureVerdict(assertionResults);
+    // The fingerprint a repair would re-pin, or undefined. Present only when the verdict says
+    // repair AND a target was actually recoverable: an assertion the definition no longer pins has
+    // nothing to re-pin, and a failure whose cluster key cannot be derived is not a job.
+    const assertionRepairTargetFp =
+      assertionVerdict.consequence === "repair"
+        ? assertionVerdict.repairable
+            .map((r) => pinnedSideTarget(recorded.assertions, r.assertionId, r.side))
+            .find((target): target is Fingerprint => Boolean(target))
+        : undefined;
 
     // Context is closed in `finally` (after the trace is stopped, if any).
     // An assertion failure outranks a pixel diff: a run whose arithmetic is wrong has not verified,
@@ -950,7 +968,17 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
         status,
         // `assertion` first, for the same precedence reason as the status above. Recorded rather
         // than inferred: it is what decides whether a repair may touch this failure at all.
-        failureKind: assertionFailure ? "assertion" : (failedCheckpoint?.kind ?? null),
+        //
+        // An assertion whose extraction target no longer resolves is written as `locator`, not
+        // `assertion` (slice 10) — because that is what it IS, and `failure_kind` is the one column
+        // the repair path, the manual-enqueue endpoint and the breaker census all read. Calling it
+        // `assertion` here would mean three places re-deriving the distinction from the assertion
+        // rows, which is exactly how two of them end up disagreeing.
+        failureKind: assertionFailure
+          ? assertionRepairTargetFp
+            ? "locator"
+            : "assertion"
+          : (failedCheckpoint?.kind ?? null),
         // A failed run's `error` is what the viewer shows in place of checkpoints, so an assertion
         // failure states itself there too — it is the reason the run is red.
         ...(assertionFailure ? { error: assertionFailure } : {}),
@@ -958,14 +986,26 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
       })
       .where(eq(runs.id, runId));
     if (assertionFailure) {
-      // Nothing here is repairable by an agent (slice 10 refines that for the extraction half), so
-      // it earns a read-only Triage Job like every other unrepairable class. Best-effort, exactly
-      // as the others are: losing the job must never cost us the run.
+      // The point of the slice: which job an assertion failure earns is decided by whether a value
+      // could be READ, never by how the values compared.
+      //
+      //  - the target no longer resolves → a REPAIR job, exactly like a broken step locator. The
+      //    same enqueue path, so the same policy gate, the same clustering and the same circuit
+      //    breaker apply with no second implementation of any of them.
+      //  - the relation is false (or a value was unusable) → a read-only TRIAGE job, and the run
+      //    stays red. Never a repair, under any policy: re-pinning until the numbers agree is a
+      //    machine for hiding the exact bugs assertions exist to catch.
+      //
+      // Best-effort, exactly as the others are: losing the job must never cost us the run.
       try {
-        await enqueueTriageIfAuto(db, { testId, runId, kind: "assertion" });
-      } catch (triageErr) {
+        if (assertionRepairTargetFp) {
+          await enqueueRepairIfAuto(db, { testId, runId, target: assertionRepairTargetFp });
+        } else {
+          await enqueueTriageIfAuto(db, { testId, runId, kind: "assertion" });
+        }
+      } catch (jobErr) {
         // eslint-disable-next-line no-console
-        console.error(`[runner] could not enqueue a triage job for run ${runId}:`, triageErr);
+        console.error(`[runner] could not enqueue a job for run ${runId}:`, jobErr);
       }
     } else if (failedCheckpoint) {
       // Best-effort, exactly as the repair enqueue is: losing the job must never cost us the run.

@@ -179,6 +179,27 @@ export interface ClaimedRepairJob {
     /** The run's own error message for it. */
     error: string | null;
   } | null;
+  /**
+   * The ASSERTION that failed, when that is what made the run red (Slice 19, slice 10) — null
+   * otherwise, and null for a run that has been purged.
+   *
+   * `repairable` is the whole point: an assertion whose extraction target no longer resolved is a
+   * locator failure and is re-pinned like any other, while one whose relation is FALSE says the app
+   * is wrong and is never repairable. `side` names which target to re-pin.
+   */
+  failingAssertion: {
+    id: string;
+    /** The plain-language check, as it read on the run that failed. */
+    check: string;
+    outcome: AssertionOutcome;
+    cause: ExtractionCause | null;
+    /** Which side could not be read — the target a repair re-pins. Null when no single side is at fault. */
+    side: "left" | "right" | null;
+    /** The engine's one-line account of what happened. */
+    detail: string;
+    /** Whether a repair may touch it at all. False ⇒ this is a diagnosis, not a fix. */
+    repairable: boolean;
+  } | null;
   /** Attempts INCLUDING this one, and how many remain before the job is abandoned. */
   attempts: number;
   attemptsRemaining: number;
@@ -796,6 +817,15 @@ export interface TestConfigAssertionPatch {
   id: string;
   /** Rewrite the plain-language check. The id — and therefore the history — is untouched. */
   check?: string;
+  /**
+   * RE-PIN the left side's extraction target: a locator patch merged onto the recorded
+   * fingerprint, exactly as a step's `target` patch is (Slice 19, slice 10). This is what repairs
+   * an assertion whose target no longer resolves — a locator failure like any other. Refused for an
+   * assertion with no pinned form, and for a side that is a literal.
+   */
+  left?: FingerprintPatch;
+  /** RE-PIN the right side's extraction target. See {@link TestConfigAssertionPatch.left}. */
+  right?: FingerprintPatch;
   /** Delete this assertion. When set, the other fields are ignored. */
   remove?: boolean;
 }

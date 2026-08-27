@@ -26,7 +26,8 @@ export type Variant =
   | "locatorRepairBroken"
   | "locatorRepairDeleted"
   | "totals"
-  | "totalsWrong";
+  | "totalsWrong"
+  | "totalsMissing";
 
 function html(variant: Variant): string {
   // A stable hero with one volatile sub-region (#stamp, top-left) — stampA/stampB
@@ -62,8 +63,23 @@ function html(variant: Variant): string {
   // line items and a total. `totals` adds up; `totalsWrong` renders the SAME rows with a total
   // that does not — pixel-identical in structure, and wrong. No screenshot comparison can catch
   // that, because the "wrong" page is a perfectly healthy-looking page.
-  if (variant === "totals" || variant === "totalsWrong") {
-    const total = variant === "totals" ? "$60.50" : "$70.50";
+  //
+  // `totalsMissing` is the third case, and the one slice 10 turns on: the arithmetic is correct and
+  // the ELEMENT moved. Together the last two are the whole safety argument — one is repairable, the
+  // other must never be.
+  if (variant === "totals" || variant === "totalsWrong" || variant === "totalsMissing") {
+    // Only `totalsWrong` has arithmetic that doesn't hold. `totalsMissing` adds up perfectly — the
+    // element it adds up IN is what moved.
+    const total = variant === "totalsWrong" ? "$70.50" : "$60.50";
+    // `totalsMissing` is the OTHER way an assertion goes red, and the distinction slice 10 turns
+    // into a consequence: the total is still rendered, but the element the assertion reads it from
+    // is gone — renamed and re-marked-up, as a redesign does. Nothing about the APP is wrong here;
+    // the test can no longer look. So this is a locator failure, and repairable — whereas
+    // `totalsWrong` (same markup, a total that doesn't add up) never is.
+    const totalMarkup =
+      variant === "totalsMissing"
+        ? `<strong id="invoice-total" data-testid="invoice-total">${total}</strong>`
+        : `<span id="total" data-testid="total">${total}</span>`;
     return `<!doctype html>
 <html lang="en">
 <head>
@@ -85,7 +101,7 @@ function html(variant: Variant): string {
       <tr><td>Flanges</td><td class="amount" data-testid="row-amount">$30.50</td></tr>
     </tbody>
   </table>
-  <div id="summary">Total <span id="total" data-testid="total">${total}</span></div>
+  <div id="summary">Total ${totalMarkup}</div>
 </body>
 </html>`;
   }

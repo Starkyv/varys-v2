@@ -299,6 +299,14 @@ export const runAssertions = pgTable(
     /** Why extraction failed — `unresolved` (a locator problem) | `coercion` (a definition
      *  problem). Null for every other outcome. */
     cause: text("cause"),
+    /**
+     * Which side's target failed to extract — `left` | `right`. Null for every other outcome.
+     *
+     * Persisted rather than re-derived, because it is what the repair path re-pins (slice 10): the
+     * cluster key of an assertion's locator failure comes from THAT side's fingerprint, and a side
+     * recovered by guessing would scatter one broken locator across two clusters.
+     */
+    side: text("side"),
     /** The two coerced values compared, rendered for display. Null for a side that produced none. */
     leftValue: text("left_value"),
     rightValue: text("right_value"),
@@ -792,6 +800,9 @@ CREATE TABLE IF NOT EXISTS run_assertions (
 -- One row per assertion per run, so a redelivered run upserts instead of accumulating and the
 -- per-assertion history needs no de-duplication.
 CREATE UNIQUE INDEX IF NOT EXISTS run_assertions_run_assertion_uq ON run_assertions (run_id, assertion_id);
+-- Which side's target could not be read (slice 10) — what a repair re-pins. Added after the table,
+-- so an install that already has it is unaffected.
+ALTER TABLE run_assertions ADD COLUMN IF NOT EXISTS side text;
 CREATE TABLE IF NOT EXISTS run_steps (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   run_id uuid NOT NULL REFERENCES runs(id),

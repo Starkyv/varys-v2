@@ -2,6 +2,7 @@ import type {
   AssertionOutcome,
   AssertionSideView,
   Coercion,
+  ExtractionCause,
   FingerprintSummary,
   PinnedAssertionView,
   Relation,
@@ -115,3 +116,24 @@ export const OUTCOME_META: Record<AssertionOutcome, { label: string; tone: Inten
       "A value couldn’t be read, so nothing was compared — this says the test needs attention, not that the app is wrong.",
   },
 };
+
+/**
+ * What FOLLOWS from the verdict (Slice 19, slice 10) — one sentence, so the reader learns the
+ * consequence from the run rather than by noticing which jobs turned up in the queue.
+ *
+ * The distinction is the whole slice: a target that no longer resolves is a broken locator and is
+ * repaired like any other, while a false relation is never repaired by anything, because re-pinning
+ * an assertion until its numbers agree is a machine for hiding the bugs assertions exist to catch.
+ */
+export function consequenceOf(
+  outcome: AssertionOutcome,
+  cause: ExtractionCause | null,
+): string | null {
+  if (outcome === "relation-false") {
+    return "Varys never repairs this. Fix the app, or change the check by hand if the check itself is wrong.";
+  }
+  if (outcome !== "extraction-failed") return null;
+  return cause === "unresolved"
+    ? "The target no longer resolves — a locator problem, and repairable like any other. Under an automatic Repair Policy this queues a repair job."
+    : "The value was read but couldn’t be used as this check asked. That is the assertion’s definition, not its locator, so re-pinning wouldn’t help — edit the check.";
+}
