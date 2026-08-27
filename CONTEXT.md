@@ -161,3 +161,12 @@ its safety comes from **scope** — it may claim jobs and repair within them, an
 an Authoring Session, edit tests outside a claimed job, or approve a baseline. Distinct from
 the **Bridge Helper**, which is attended and carries a human's own Claude login.
 _Avoid_: service account, API key, bot user
+
+**Signal Diff**:
+The side-by-side reading of a repair's locator, before and after, signal by signal — role,
+accessible name, text, `data-testid`, id, ancestors, neighbouring text — with the ones that
+MOVED distinguished from the ones that did not. Computed from the two stored definitions, never
+from the repairing agent's account of its own change, so the evidence can contradict the claim
+in front of the reviewer. The unchanged signals are the point as much as the changed ones: they
+are what shows a re-pinned element is still the same control.
+_Avoid_: locator diff, patch, changeset

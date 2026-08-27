@@ -64,12 +64,14 @@ import type {
   TestConfigAssertionPatch,
   TestConfigStepPatch,
 } from "@varys/review-contract";
+import type { StorageAdapter } from "@varys/storage-adapter";
 import { type Browser, type BrowserContext, chromium, type Locator, type Page } from "playwright-core";
 import { type Observable, Subject } from "rxjs";
 import { DB, type Db } from "../db/db.module";
 import { applyFingerprintPatch, hasMatchableSignal } from "../fingerprint-patch";
 import { summarizeFingerprint } from "../fingerprint-summary";
 import { RepairJobsService } from "../repair-jobs/repair-jobs.service";
+import { STORAGE } from "../storage/storage.module";
 import { TestsService } from "../tests/tests.service";
 
 /** How often the idle sweep runs, and how long a session may sit untouched before it is torn
@@ -871,6 +873,10 @@ export class AuthoringSessionService implements OnApplicationShutdown {
     // (Slice 19, slice 04 — a version awaiting review has to be traceable to the failure it
     // claims to fix.) A human principal never reaches it.
     @Inject(RepairJobsService) private readonly repairJobs: RepairJobsService,
+    // Where a repair's page capture lands (Slice 19, slice 13) — the same artifact store every
+    // run screenshot uses, so the review surface reads it through `/artifacts/:token` like any
+    // other image.
+    @Inject(STORAGE) private readonly storage: StorageAdapter,
   ) {}
 
   /**
@@ -1478,6 +1484,11 @@ export class AuthoringSessionService implements OnApplicationShutdown {
       .limit(1);
     if (written) repair.definition = written.definition as TestDefinition;
 
+    // The page this fix was made against, for whoever reviews it (slice 13). Captured AFTER the
+    // write, off the live page `try_locator` just resolved against — so the reviewer sees the
+    // screen the re-pinned control actually lives on, not a reconstruction of it.
+    await this.captureRepairPage(s, versionId);
+
     // A fix can resolve and still be built on something that will not last. Say so rather than
     // let "applied" read as "fixed for good".
     const warning = tried.recommend
@@ -1499,6 +1510,31 @@ export class AuthoringSessionService implements OnApplicationShutdown {
       warning,
       summary: `Step ${repair.stepIndex + 1} of "${repair.testName}" now matches on ${tried.matchedSignal}. Saved as v${version} (was v${latest.version}); the previous version is retained.`,
     };
+  }
+
+  /**
+   * The page a repair was written against, stored beside the version for review (Slice 19, slice
+   * 13).
+   *
+   * Failure is logged and SWALLOWED. A screenshot is context for a human, not part of the repair:
+   * a capture that fails — the page navigated, the browser died — must never turn a verified fix
+   * into an error, and the review surface already treats a missing image as "none available".
+   */
+  private async captureRepairPage(s: SessionState, versionId: string): Promise<void> {
+    if (!versionId) return;
+    try {
+      const png = await s.page.screenshot({ fullPage: true });
+      const key = `repairs/${versionId}.png`;
+      await this.storage.put(key, png);
+      await this.db
+        .update(testVersions)
+        .set({ repairScreenshotKey: key })
+        .where(eq(testVersions.id, versionId));
+    } catch (err) {
+      this.log.warn(
+        `could not capture the repair page for version ${versionId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   // ── editing the test itself (any step, any field) ──────────────────────────────────
@@ -1821,6 +1857,11 @@ export class AuthoringSessionService implements OnApplicationShutdown {
       if (written) repair.definition = written.definition as TestDefinition;
       repair.version = version;
       repair.stepIndex = Math.min(repair.stepIndex, repair.definition.steps.length - 1);
+      // Same context an `apply_fix` review gets (slice 13). Worth saying plainly: unlike
+      // `apply_fix`, a general edit is not verified against this page, so the capture is the page
+      // the session is PARKED on — which is exactly what a reviewer needs to notice that the edit
+      // was made without driving there.
+      await this.captureRepairPage(session, versionId);
     }
     this.log.log(
       `edit_test: wrote v${version} of test ${testId} (${changes.length} change(s)) for ${session?.ownerEmail ?? "mcp"}`,

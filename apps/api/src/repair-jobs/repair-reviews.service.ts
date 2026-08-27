@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException, Logger } from "@nestjs/common";
 import type {
+  RepairChangeDiff,
   RepairReviewDecision,
   RepairReviewItem,
   Resolution,
@@ -8,10 +9,13 @@ import type {
 } from "@varys/review-contract";
 import { deriveRunOutcome } from "@varys/review-contract";
 import type { Step, TestDefinition } from "@varys/step-schema";
+import type { StorageAdapter } from "@varys/storage-adapter";
 import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
 import { baselines, repairJobs, runResults, runs, tests, testVersions } from "../db/schema";
+import { STORAGE } from "../storage/storage.module";
 import { CLOCK, type Clock } from "./clock";
+import { diffRepairSignals } from "./repair-signal-diff";
 
 /**
  * The repair review queue and the human decision on it (Slice 19, slice 04).
@@ -38,6 +42,9 @@ export class RepairReviewsService {
   constructor(
     @Inject(DB) private readonly db: Db,
     @Inject(CLOCK) private readonly clock: Clock,
+    // Only to turn a repair's stored page capture into the `/artifacts/:token` URL the review
+    // surface renders (Slice 19, slice 13). The bytes are never read here.
+    @Inject(STORAGE) private readonly storage: StorageAdapter,
   ) {}
 
   /** Every repaired version awaiting a decision, newest first. */
@@ -54,12 +61,20 @@ export class RepairReviewsService {
         jobId: testVersions.repairJobId,
         justification: testVersions.justification,
         justificationReasoning: testVersions.justificationReasoning,
+        definition: testVersions.definition,
+        screenshotKey: testVersions.repairScreenshotKey,
         // The test's highest version number, so the caller can tell an unreviewed version that
         // IS the active definition from one a later edit has already landed on top of.
         latestVersion: sql<number>`(select max(version) from test_versions v where v.test_id = ${testVersions.testId})`,
         previousVersion: sql<
           number | null
         >`(select max(version) from test_versions v where v.test_id = ${testVersions.testId} and v.version < ${testVersions.version})`,
+        // The definition this repair was written ON TOP OF — the left-hand side of the review
+        // diff (slice 13). Read here rather than in a second round trip per item: a queue of
+        // thirty-eight clustered repairs would otherwise be thirty-eight extra queries to render.
+        previousDefinition: sql<
+          unknown
+        >`(select v.definition from test_versions v where v.test_id = ${testVersions.testId} and v.version < ${testVersions.version} order by v.version desc limit 1)`,
         runId: repairJobs.runId,
         report: repairJobs.report,
         /** The job's ANCHOR test — the one a clustered repair is shown under. */
@@ -119,6 +134,10 @@ export class RepairReviewsService {
       rerunOutcome: rerunByVersion.get(r.versionId)?.outcome ?? null,
       clusterSize: r.jobId ? (clusterNames.get(r.jobId)?.length ?? 1) : 1,
       clusterTestNames: r.jobId ? (clusterNames.get(r.jobId) ?? [r.testName]) : [r.testName],
+      // The diff is computed from the two DEFINITIONS, never from the agent's account of what it
+      // did (slice 13) — which is the only reason the review gate is worth anything.
+      diff: reviewDiff(r.previousDefinition, r.definition),
+      pageScreenshotUrl: r.screenshotKey ? this.storage.getUrl(r.screenshotKey) : null,
     }));
   }
 
@@ -438,4 +457,17 @@ function checkpointRenames(
   return before
     .map((name, i) => ({ from: name, to: after[i] }))
     .filter((r) => r.from !== r.to);
+}
+
+/**
+ * The review diff for one item, or null when there is nothing to compare against (Slice 19,
+ * slice 13).
+ *
+ * Null is a real answer, not a fallback: a repair is always an edit to a definition that ran, so a
+ * repaired version with no predecessor means the history was truncated — and showing an empty
+ * table for that would read as "the repair changed nothing", which is the opposite of the truth.
+ */
+function reviewDiff(previous: unknown, current: unknown): RepairChangeDiff | null {
+  if (!previous) return null;
+  return diffRepairSignals(previous as TestDefinition, current as TestDefinition);
 }

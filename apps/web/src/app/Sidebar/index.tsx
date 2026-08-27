@@ -21,7 +21,7 @@ import { activeNav, type NavKey, type Route, useRouter } from "../../context/rou
 import { useUI } from "../../context/ui";
 import { useSession } from "../../lib/auth";
 import { initials } from "../../lib/user";
-import { useDrafts, useNeedsReview } from "../../queries";
+import { useDrafts, useNeedsReview, useRepairReviews } from "../../queries";
 import styles from "./styles.module.scss";
 
 interface NavGroup {
@@ -64,9 +64,14 @@ export function Sidebar() {
   const { sidebarCollapsed } = useUI();
   const needsReview = useNeedsReview();
   const drafts = useDrafts();
+  // Repaired versions awaiting a human decision (Slice 19, slice 13). Badged for the same reason
+  // the other two are: an unattended agent's edit sits inert until someone accepts it, so the
+  // count has to be visible from wherever the user already is.
+  const repairs = useRepairReviews();
   const active = activeNav(route);
   const reviewCount = needsReview.data?.length ?? 0;
   const draftCount = drafts.data?.length ?? 0;
+  const repairCount = repairs.data?.length ?? 0;
 
   // The signed-in identity, same source as the top bar's <UserMenu>.
   const user = useSession().data?.user;
@@ -93,7 +98,14 @@ export function Sidebar() {
             {!sidebarCollapsed && <div className={styles.groupLabel}>{group.label}</div>}
             {group.items.map(({ key, name, Icon }) => {
               const isActive = active === key;
-              const count = key === "needsReview" ? reviewCount : key === "drafts" ? draftCount : 0;
+              const count =
+                key === "needsReview"
+                  ? reviewCount
+                  : key === "drafts"
+                    ? draftCount
+                    : key === "repairQueue"
+                      ? repairCount
+                      : 0;
               return (
                 <button
                   key={key}

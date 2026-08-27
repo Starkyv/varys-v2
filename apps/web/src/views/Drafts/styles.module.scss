@@ -251,3 +251,37 @@
     color: var(--color-text-strong);
   }
 }
+
+/* The pointer to the OTHER review queue (Slice 19, slice 13). Informational, not alarming — a
+   repaired version waiting is normal operation — but a full-width clickable row, because the
+   whole point is that it does not get scrolled past. */
+.repairBanner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-10);
+  width: 100%;
+  margin-bottom: var(--space-16);
+  padding: var(--space-10) var(--space-16);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-subtle);
+  text-align: left;
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+  color: var(--color-text-muted);
+
+  svg {
+    flex: none;
+    color: var(--color-primary);
+  }
+
+  strong {
+    color: var(--color-text-strong);
+  }
+
+  &:hover {
+    border-color: var(--color-border-strong);
+    background: var(--color-bg-inset);
+  }
+}

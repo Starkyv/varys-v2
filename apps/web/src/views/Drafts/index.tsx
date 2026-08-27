@@ -16,6 +16,7 @@ import {
   Search,
   SegmentedControl,
   Skeleton,
+  Sparkles,
 } from "@varys/ui";
 import { useId, useMemo, useState } from "react";
 import { LiveIndicator } from "../../components/LiveIndicator";
@@ -23,7 +24,7 @@ import { useRouter } from "../../context/router";
 import { useRunDialog } from "../../context/run-dialog";
 import { useToast } from "../../context/toast";
 import { relativeTime } from "../../lib/format";
-import { useDiscardDraft, useDrafts } from "../../queries";
+import { useDiscardDraft, useDrafts, useRepairReviews } from "../../queries";
 import { DraftInspector } from "./components/DraftInspector";
 import { PromoteDialog } from "./components/PromoteDialog";
 import styles from "./styles.module.scss";
@@ -44,6 +45,11 @@ const NEW_WINDOW_MS = 2 * 60 * 1000;
 export function Drafts() {
   const queue = useDrafts();
   const discard = useDiscardDraft();
+  // Repaired versions are a SECOND thing awaiting review, and they live on their own page (they
+  // are decided against a locator diff, not a screenshot). A reviewer who only ever opens this
+  // page would never learn they had piled up — so the count is said here and links there
+  // (Slice 19, slice 13).
+  const repairs = useRepairReviews();
   const { navigate } = useRouter();
   const { openRunDialog } = useRunDialog();
   const { toast } = useToast();
@@ -57,6 +63,7 @@ export function Drafts() {
   const discardTitleId = useId();
 
   const all = queue.data ?? [];
+  const repairCount = repairs.data?.length ?? 0;
 
   // Filter + search + sort, derived on render (the list is small and polled).
   const shown = useMemo(() => {
@@ -97,14 +104,37 @@ export function Drafts() {
     );
   }
 
+  // Shown above BOTH the empty state and the list: a project with no drafts is exactly the one
+  // whose repaired versions would otherwise sit unseen.
+  const repairBanner =
+    repairCount > 0 ? (
+      <button
+        type="button"
+        className={styles.repairBanner}
+        onClick={() => navigate({ name: "repairQueue" })}
+      >
+        <Sparkles size={16} />
+        <span>
+          <strong>
+            {repairCount} repaired version{repairCount === 1 ? "" : "s"}
+          </strong>{" "}
+          also awaiting review — a repair agent re-pinned a broken locator. Open the repair queue
+          to see what changed.
+        </span>
+      </button>
+    ) : null;
+
   if (all.length === 0) {
     return (
-      <EmptyState
-        icon={<Inbox />}
-        tone="neutral"
-        title="No drafts to review"
-        description="Point Claude at your app through the MCP server and ask it to author a test. New drafts land here the moment a recording finishes."
-      />
+      <div>
+        {repairBanner}
+        <EmptyState
+          icon={<Inbox />}
+          tone="neutral"
+          title="No drafts to review"
+          description="Point Claude at your app through the MCP server and ask it to author a test. New drafts land here the moment a recording finishes."
+        />
+      </div>
     );
   }
 
@@ -115,6 +145,7 @@ export function Drafts() {
 
   return (
     <div>
+      {repairBanner}
       <div className={styles.head}>
         <span className={styles.count}>
           <strong>{shownLabel}</strong>

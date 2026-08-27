@@ -282,10 +282,62 @@ export interface ReportedTriage {
 export type VersionReviewState = "reviewed" | "unreviewed" | "rejected";
 
 /**
- * One repaired version awaiting a human decision — the repair review queue (Slice 19, slice 04).
- * Deliberately thin: the side-by-side locator diff, the justification and the blast radius are
- * slice 13's job. What is here is enough to decide with: which test, which version, who wrote it,
- * what they said they did, and the Brief it was supposed to serve.
+ * One locator signal, on both sides of a repair (Slice 19, slice 13).
+ *
+ * `changed` is the whole point of the shape: a reviewer's question is never "what does this
+ * locator say?" but "what did the repair MOVE?", and a signal that stayed put is the evidence
+ * that it is still the same control. So both are carried, and the unchanged ones are marked as
+ * such rather than dropped — a diff that only listed changes would leave a reviewer unable to
+ * tell "role is still button" from "role was never recorded".
+ */
+export interface RepairSignalChange {
+  /** Display label, e.g. `Accessible name` — the same vocabulary the locator panel uses. */
+  label: string;
+  /** The signal before and after, rendered flat for display. Null means "none recorded", which
+   *  is itself meaningful: a DROPPED signal is as telling as a replaced one. */
+  before: string | null;
+  after: string | null;
+  changed: boolean;
+}
+
+/** One step a repair touched, with its locator signals before and after (Slice 19, slice 13). */
+export interface RepairStepDiff {
+  /** 0-based index into the definition's steps — displayed as `Step n+1`. */
+  stepIndex: number;
+  /** What the step read as on each side (`describeStep`); equal when only signals moved. */
+  beforeLabel: string;
+  afterLabel: string;
+  /** Every locator signal, changed or not. Empty when neither side has an element target — a
+   *  navigate or a full-page checkpoint has no locator to diff. */
+  signals: RepairSignalChange[];
+  /** True when the step also changed OUTSIDE its locator signals (a url, a checkpoint name, a
+   *  typed value). Flagged rather than rendered: a locator repair should not be doing this, and a
+   *  reviewer who is only shown signals would never learn that it did. */
+  nonSignalChange: boolean;
+}
+
+/**
+ * What a repair actually changed, computed from the two stored definitions (Slice 19, slice 13).
+ *
+ * Rendered from the definitions rather than from the agent's account of itself, on purpose: an
+ * agent that re-pinned "Apply filter" to "Refresh" describes its own change generously, and the
+ * review gate only works if the evidence and the claim can disagree in front of the reviewer.
+ */
+export interface RepairChangeDiff {
+  /** Only the steps that actually differ, in index order. Empty means the two definitions are
+   *  identical — worth showing plainly, because a repair that changed nothing is a bug. */
+  steps: RepairStepDiff[];
+  /** Step counts on each side. A locator repair never adds or removes steps, so a mismatch is
+   *  the first thing a reviewer should see. */
+  stepCountBefore: number;
+  stepCountAfter: number;
+}
+
+/**
+ * One repaired version awaiting a human decision — the repair review queue (Slice 19, slices 04
+ * and 13). Everything needed to decide in seconds and without navigating away: which test, which
+ * version, who wrote it, the signals it moved, the Brief and the justification it was checked
+ * against, the blast radius, and the page it was repaired against.
  */
 export interface RepairReviewItem {
   versionId: string;
@@ -325,6 +377,16 @@ export interface RepairReviewItem {
    *  is one reviewable fix. `clusterSize` is 1 for an ordinary single-test repair. */
   clusterSize: number;
   clusterTestNames: string[];
+  /** The side-by-side locator diff (Slice 19, slice 13), from this version's definition and the
+   *  one it was written on top of. Null when there is no previous version to compare against —
+   *  a first version cannot have been repaired, so this means the history was truncated. */
+  diff: RepairChangeDiff | null;
+  /** The page the repair was made against, captured live at the moment the fix was written
+   *  (Slice 19, slice 13) — an `/artifacts/:token` URL. It is the one piece of context that is
+   *  neither the agent's account nor the stored definition: a reviewer can see that the control
+   *  the repair re-pinned to is the one the Brief is talking about. Null for a version written
+   *  before the capture existed, or one written by `edit_test` with no live page behind it. */
+  pageScreenshotUrl: string | null;
 }
 
 /**

@@ -1,0 +1,171 @@
+.wrap {
+  margin-top: var(--space-10);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-subtle);
+  overflow: hidden;
+}
+
+.summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  padding: var(--space-8) var(--space-12);
+  cursor: pointer;
+  list-style: none;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text);
+
+  &::-webkit-details-marker {
+    display: none;
+  }
+}
+
+.chevron {
+  flex: none;
+  color: var(--color-text-subtle);
+  transition: transform 120ms ease;
+
+  .wrap:not([open]) & {
+    transform: rotate(-90deg);
+  }
+}
+
+.summaryCount {
+  margin-left: auto;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-subtle);
+}
+
+.step {
+  padding: var(--space-10) var(--space-12) var(--space-12);
+  border-top: 1px solid var(--color-border);
+  background: var(--color-bg-surface);
+}
+
+.stepHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  margin-bottom: var(--space-8);
+  flex-wrap: wrap;
+}
+
+.stepIndex {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+}
+
+.stepLabel {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+/* The step as it now reads — weighted over the old label, since it is the state being accepted. */
+.stepLabelAfter {
+  color: var(--color-text-strong);
+}
+
+.arrow {
+  flex: none;
+  color: var(--color-text-subtle);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+
+  thead th {
+    text-align: left;
+    padding: var(--space-4) var(--space-8);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-subtle);
+    border-bottom: 1px solid var(--color-border);
+    white-space: nowrap;
+  }
+}
+
+.thSignal {
+  width: 27%;
+}
+
+.row td,
+.row th {
+  padding: var(--space-4) var(--space-8);
+  vertical-align: top;
+  border-bottom: 1px solid var(--color-border);
+}
+
+/* The only visual weight in the table goes to the signals that MOVED: a warm band, a marked
+   row label, and the two values coloured away from each other. Everything that stayed put reads
+   as background — present as evidence, never competing with the answer. */
+.rowChanged {
+  background: var(--color-warning-soft);
+}
+
+.tdSignal {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  text-align: left;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-muted);
+
+  .rowChanged & {
+    color: var(--color-text-strong);
+    font-weight: var(--font-weight-medium);
+  }
+}
+
+.value {
+  font-size: var(--font-size-xs);
+  overflow-wrap: anywhere;
+}
+
+.valueBefore .code {
+  color: var(--color-danger-fg);
+  text-decoration: line-through;
+  text-decoration-color: var(--color-danger);
+}
+
+.valueAfter .code {
+  color: var(--color-success-fg);
+  font-weight: var(--font-weight-medium);
+}
+
+.code {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text);
+}
+
+.none {
+  font-size: var(--font-size-xs);
+  font-style: italic;
+  color: var(--color-text-subtle);
+}
+
+.nothing {
+  margin: var(--space-8) 0 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+
+/* Something a locator repair should not be doing at all — said in danger tone, inline, where the
+   reviewer is already looking rather than in a legend they would have to go and find. */
+.alarm {
+  margin: 0 0 var(--space-8);
+  padding: var(--space-6) var(--space-8);
+  border-radius: var(--radius-sm);
+  background: var(--color-danger-soft);
+  font-size: var(--font-size-xs);
+  color: var(--color-danger-fg);
+  line-height: 1.5;
+}

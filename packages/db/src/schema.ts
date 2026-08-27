@@ -166,6 +166,16 @@ export const testVersions = pgTable("test_versions", {
    */
   justification: text("justification"),
   justificationReasoning: text("justification_reasoning"),
+  /**
+   * The page the repair was made against, captured live at the instant the fix was written
+   * (Slice 19, slice 13) — an artifact key, served through `/artifacts/:token`.
+   *
+   * The only evidence in a review that is neither the agent's account of itself nor the stored
+   * definition: it shows the reviewer the screen the re-pinned control actually lives on, so
+   * "same control, renamed" can be confirmed rather than taken on trust. Null for every version
+   * written outside a repair session, and for repairs written before this was captured.
+   */
+  repairScreenshotKey: text("repair_screenshot_key"),
   /** Who accepted or rejected this version, and when. Both null while it is `unreviewed`, and
    *  for every version that never needed reviewing. */
   reviewedBy: text("reviewed_by"),
@@ -745,6 +755,8 @@ ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS repair_job_id uuid;
 -- The agent's brief-clause justification and the judge's verdict on it (Slice 19, slice 05).
 ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS justification text;
 ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS justification_reasoning text;
+-- The page a repair was made against, captured live when the fix was written (slice 13).
+ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS repair_screenshot_key text;
 ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS reviewed_by text;
 ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS reviewed_at timestamptz;
 CREATE INDEX IF NOT EXISTS test_versions_unreviewed_idx

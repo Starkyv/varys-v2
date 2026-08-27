@@ -12,6 +12,7 @@ import {
 } from "@varys/ui";
 import { useState } from "react";
 import { LiveIndicator } from "../../components/LiveIndicator";
+import { ZoomableImage } from "../../components/ZoomableImage";
 import { useConfirm } from "../../context/confirm";
 import { useRouter } from "../../context/router";
 import { useToast } from "../../context/toast";
@@ -25,6 +26,7 @@ import {
   useRepairReviews,
   useReleaseRepairBreaker,
 } from "../../queries";
+import { SignalDiff } from "./components/SignalDiff";
 import styles from "./styles.module.scss";
 
 /**
@@ -90,13 +92,18 @@ function claimRemaining(iso: string | null): string {
 type Scope = "open" | "all";
 
 /**
- * Repaired versions waiting on a human (slice 04) — the gate that stops an unattended agent's
- * edit from silently becoming the definition every run replays. Accept keeps it (it is already the
- * test's latest version); reject reverts the test to what it said before.
+ * Repaired versions waiting on a human (slices 04 and 13) — the gate that stops an unattended
+ * agent's edit from silently becoming the definition every run replays. Accept keeps it (it is
+ * already the test's latest version); reject reverts the test to what it said before.
  *
- * Deliberately terse: the side-by-side signal diff, the agent's justification against the brief,
- * and a clustered repair's blast radius are slice 13's job. What is here is enough to act on, so
- * the queue does not accumulate versions nobody can decide about.
+ * Everything needed to decide is here, in the order the decision is actually made: what moved
+ * (the side-by-side signal diff), the claim and the Brief it was checked against, the evidence
+ * that isn't the agent's own account (the re-run, and the page the repair was made against), and
+ * the blast radius before the buttons rather than after them.
+ *
+ * That ordering is the slice's whole point. The review gate rests on this being a seconds-long
+ * decision: if it takes minutes, authors bulk-accept, and bulk-accepting is functionally
+ * identical to having no gate at all.
  */
 function RepairReviews() {
   const reviews = useRepairReviews();
@@ -172,6 +179,16 @@ function RepairReviews() {
               </div>
             )}
             {item.report && <p className={styles.report}>{item.report}</p>}
+            {/* What actually changed, from the two stored definitions — not from the agent's
+                account of them. It comes FIRST because it is the only thing that can contradict
+                everything below it. */}
+            {item.diff && (
+              <SignalDiff
+                diff={item.diff}
+                version={item.version}
+                previousVersion={item.previousVersion}
+              />
+            )}
             {/* The justification and the Brief, together and in that order: the agent's claim is
                 only checkable against the thing it was checked against, so showing a verdict
                 without the Brief beside it would tell a reviewer nothing. */}
@@ -184,6 +201,19 @@ function RepairReviews() {
               </p>
             )}
             {item.brief && <p className={styles.brief}>Brief: {item.brief}</p>}
+            {/* The page the repair was made against, captured as the fix was written. The one
+                piece of context that is neither the agent's word nor the stored definition — so
+                "the same control, renamed" can be seen rather than trusted. */}
+            {item.pageScreenshotUrl && (
+              <ZoomableImage
+                src={item.pageScreenshotUrl}
+                alt={`The page “${item.testName}” was repaired against`}
+                className={styles.shot}
+                imgClassName={styles.shotImg}
+                caption="The page this repair was made against"
+                hintLabel="Open full size"
+              />
+            )}
             {item.runId && (
               <button
                 type="button"

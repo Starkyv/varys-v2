@@ -255,3 +255,16 @@
   gap: var(--space-8);
   white-space: nowrap;
 }
+
+/* The page a repair was made against — a thumbnail, not a hero: it is corroboration for the
+   diff above it, and a full-width screenshot would push the decision below the fold. */
+.shot {
+  display: block;
+  margin-top: var(--space-8);
+  max-width: 320px;
+}
+
+.shotImg {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
