@@ -116,6 +116,7 @@ const AGENT_TOOLS: readonly string[] = [
   "claim_repair_job",
   "release_repair_job",
   "report_repair",
+  "report_triage",
   "open_repair_session",
   "close_repair_session",
   "read_test",
@@ -142,7 +143,26 @@ const AGENT_ONLY_TOOLS: readonly string[] = [
   "claim_repair_job",
   "release_repair_job",
   "report_repair",
+  "report_triage",
 ];
+
+/**
+ * Tools that CHANGE a test, and therefore need a claim on a `repair` job specifically (Slice 19,
+ * slice 08).
+ *
+ * This is the enforcement half of "a triage claim grants observation only". It is structural rather
+ * than advisory: a drainer holding a triage claim reaches the page, the definition and the failure
+ * to READ them, and is refused here the moment it tries to write — no matter how convinced it is
+ * that it knows the fix.
+ *
+ * `report_repair` is on the list because it is the act that makes a repair stand; it also refuses a
+ * triage job on its own, so the two checks agree rather than one covering for the other.
+ *
+ * Baseline approval is absent for a different reason: it is not an MCP tool at all, for anyone.
+ * Per DESIGN.md §4 approving deletes the previous baseline with no rollback, so an agent that could
+ * approve one could permanently erase the evidence that a regression happened.
+ */
+const REPAIR_CLAIM_TOOLS: readonly string[] = ["apply_fix", "edit_test", "report_repair"];
 
 /**
  * For an agent principal: which arguments of a tool name the TEST it would reach, and whether one
@@ -370,6 +390,8 @@ export class McpController {
           `${user.name} no longer holds a claim on test ${sessionTestId} — the claim was released or has lapsed, so this session may no longer change it. Claim the job again, or close the session.`,
         );
       }
+      // A session opened under a TRIAGE claim may drive and observe, and may not write (slice 08).
+      if (sessionTestId) await this.assertMayMutate(name, sessionTestId, user);
     }
 
     const scope = AGENT_TEST_SCOPE[name];
@@ -395,7 +417,32 @@ export class McpController {
           `${user.name} has no claimed repair job for test ${testId}. Claim the job for this test first — an agent credential may only touch tests covered by a claim it holds.`,
         );
       }
+      await this.assertMayMutate(name, testId, user);
     }
+  }
+
+  /**
+   * Refuse a WRITE attempted under a triage claim (Slice 19, slice 08).
+   *
+   * A Triage Job's only output is a written finding on the run; it may not change the test, and
+   * that is enforced here rather than asked for in a prompt. The check is "does a REPAIR claim
+   * exist on this test?" rather than "what kind is the claim?", because a drainer can hold both —
+   * a repair claim on a broken locator and a triage claim on the same test's pixel regression — and
+   * only the first of those grants the write.
+   *
+   * The message says what to do instead, because the drainer is not misbehaving: it has correctly
+   * diagnosed something and reached for the wrong verb.
+   */
+  private async assertMayMutate(
+    name: string,
+    testId: string,
+    user: McpPrincipal,
+  ): Promise<void> {
+    if (!REPAIR_CLAIM_TOOLS.includes(name)) return;
+    if (await this.repairJobs.hasClaimOfKind(user.id, testId, "repair")) return;
+    throw new Error(
+      `${name} needs a REPAIR claim on test ${testId}, and ${user.name} holds a triage claim on it. A triage job diagnoses and never fixes: drive to the failure, look, and call report_triage with what you found. The run stays red — that is the point, not a shortcoming.`,
+    );
   }
 
   /** The MCP tool surface for this principal. A human sees all of it; a Repair Agent sees only
@@ -549,7 +596,7 @@ export class McpController {
       {
         name: "claim_repair_job",
         description:
-          "Take the next queued Repair Job for yourself. Returns the job id, the test, its Brief, the step that failed with the run's error, and `claimExpiresAt` — the instant your claim lapses. Returns `job: null` when the queue is empty, which is the normal answer, not an error: stop and try again on your next drain rather than retrying in a loop.\n\nA claim is exclusive and first-claim-wins: nobody else can see or take this job while your claim holds, and while it holds you may read and edit THAT test (open_repair_session, read_test, edit_test, try_locator, apply_fix) — and no other. It is also a deadline: if you stop reporting before `claimExpiresAt`, the job returns to the queue for someone else and the attempt is counted against it. If you cannot fix it, call release_repair_job rather than going quiet — that returns it immediately. `attemptsRemaining` tells you how many tries the job has left before Varys abandons it.\n\nRead the `brief` before you repair anything: every repair has to be justified against a clause of it when you call report_repair, and one that cannot be is refused and reverted. A test with no Brief cannot be repaired automatically at all.\n\n`clusterTests` is the FAILURE CLUSTER: every test the same app change broke, and exactly what your claim reaches. Repair the anchor (`testId`) only — Varys fans your fix out across the rest when you report, as ONE reviewable change. Do not try to repair them individually, and do not describe the job as being about one test when it covers several.",
+          "Take the next queued job for yourself — a REPAIR job or a TRIAGE job; check `kind`. Returns the job id, the test, its Brief, the step that failed with the run's error, and `claimExpiresAt` — the instant your claim lapses.\n\n`kind: \"triage\"` is a READ-ONLY job, for a failure nobody may fix automatically — a pixel regression, a failed judge, a false assertion, a crash, a timeout. Drive to the failure, look, and call report_triage with what you found. apply_fix and edit_test are refused under a triage claim, and the run stays red on purpose: the value is the explanation, not a green. `kind: \"repair\"` is the fix path — report it with report_repair. Returns `job: null` when the queue is empty, which is the normal answer, not an error: stop and try again on your next drain rather than retrying in a loop.\n\nA claim is exclusive and first-claim-wins: nobody else can see or take this job while your claim holds, and while it holds you may read and edit THAT test (open_repair_session, read_test, edit_test, try_locator, apply_fix) — and no other. It is also a deadline: if you stop reporting before `claimExpiresAt`, the job returns to the queue for someone else and the attempt is counted against it. If you cannot fix it, call release_repair_job rather than going quiet — that returns it immediately. `attemptsRemaining` tells you how many tries the job has left before Varys abandons it.\n\nRead the `brief` before you repair anything: every repair has to be justified against a clause of it when you call report_repair, and one that cannot be is refused and reverted. A test with no Brief cannot be repaired automatically at all.\n\n`clusterTests` is the FAILURE CLUSTER: every test the same app change broke, and exactly what your claim reaches. Repair the anchor (`testId`) only — Varys fans your fix out across the rest when you report, as ONE reviewable change. Do not try to repair them individually, and do not describe the job as being about one test when it covers several.",
         inputSchema: { type: "object", properties: {} },
         handler: async () => ({ job: await this.repairJobs.claimNext(user.id) }),
       },
@@ -594,6 +641,25 @@ export class McpController {
             String(args.summary ?? ""),
             String(args.justification ?? ""),
           ),
+      },
+      {
+        name: "report_triage",
+        description:
+          "Report what you found on a TRIAGE job you hold, and close it. This is the only output a triage job has, and the only write it is allowed: one paragraph, recorded on the failing run and shown to a human beside the failure.\n\nWrite the CAUSE, not the symptom. \"The chart is empty because /api/metrics returns 401 for the seeded user\" is the finding worth having; \"the chart did not render\" is what the run already said. Say what you saw, where you saw it, and what you think is responsible — and if you are not sure, say what you ruled out.\n\nWhat it does NOT do, and what you must therefore not claim: it changes NOTHING. The run is still red afterwards, no version of the test is written, and no baseline is touched. A diagnosis is not a fix. If you believe you know the repair, say so IN the finding and leave it to a human — do not attempt apply_fix or edit_test, which are refused under a triage claim.\n\nIf you could not work out why it failed, call release_repair_job instead: an empty finding is refused, because a triage job closed with nothing written is indistinguishable later from one that explained nothing.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            jobId: { type: "string", description: "The `jobId` claim_repair_job handed you." },
+            finding: {
+              type: "string",
+              description:
+                "What is actually wrong, in plain prose, for a human who has not looked at the page. Cause over symptom.",
+            },
+          },
+          required: ["jobId", "finding"],
+        },
+        handler: (args) =>
+          this.repairJobs.reportTriage(user.id, String(args.jobId ?? ""), String(args.finding ?? "")),
       },
       {
         name: "open_repair_session",

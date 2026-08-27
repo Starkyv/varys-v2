@@ -220,7 +220,7 @@ describe("Repair policy → a locator failure enqueues a visible job", () => {
     expect(await jobsFor(testId)).toHaveLength(1);
   }, 180_000);
 
-  it("a pixel regression creates no repair job — a visual change is not drift", async () => {
+  it("a pixel regression creates a TRIAGE job, not a repair job — a visual change is not drift", async () => {
     fixture.setVariant("default");
     const testId = await createTest({
       name: "pixel regression",
@@ -242,12 +242,17 @@ describe("Repair policy → a locator failure enqueues a visible job", () => {
     fixture.setVariant("changed");
     const regressed = await runToCompletion(testId);
     expect(regressed.status).toBe("needs_review");
-    expect(regressed.failureKind).toBeNull();
+    expect(regressed.failureKind).toBe("pixel");
 
-    expect(await jobsFor(testId, true)).toEqual([]);
+    // Since slice 08 the failure is not left unexplained — but the job it gets is READ-ONLY.
+    // The load-bearing half of the original assertion is unchanged: nothing repairable.
+    const jobs = await jobsFor(testId, true);
+    expect(jobs.map((j) => j.kind)).toEqual(["triage"]);
+    // ...and a human cannot force it into the REPAIR queue either.
+    await authed(app).post("/repair-jobs").send({ runId: regressed.runId }).expect(400);
   }, 180_000);
 
-  it("a failed judge creates no repair job — a judgement is not a locator", async () => {
+  it("a failed judge creates a TRIAGE job, not a repair job — a judgement is not a locator", async () => {
     fixture.setVariant("default");
     const testId = await createTest({
       name: "judge failure",
@@ -274,13 +279,15 @@ describe("Repair policy → a locator failure enqueues a visible job", () => {
 
     const run = await runToCompletion(testId);
     expect(run.status).toBe("failed");
-    expect(run.failureKind).toBeNull();
-    expect(await jobsFor(testId, true)).toEqual([]);
-    // ...and a human cannot force it into the queue either.
+    // Classified as `judge`, not `crash`: the app is fine, the judge is not configured, and a
+    // queue that says "crashed" sends whoever reads it looking in the wrong place.
+    expect(run.failureKind).toBe("judge");
+    expect((await jobsFor(testId, true)).map((j) => j.kind)).toEqual(["triage"]);
+    // ...and a human cannot force it into the REPAIR queue either.
     await authed(app).post("/repair-jobs").send({ runId: run.runId }).expect(400);
   }, 120_000);
 
-  it("a crash creates no repair job — an outage is not a broken locator", async () => {
+  it("a crash creates a TRIAGE job, not a repair job — an outage is not a broken locator", async () => {
     const testId = await createTest({
       name: "crash",
       viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
@@ -291,8 +298,9 @@ describe("Repair policy → a locator failure enqueues a visible job", () => {
 
     const run = await runToCompletion(testId);
     expect(run.status).toBe("failed");
-    expect(run.failureKind).toBeNull();
-    expect(await jobsFor(testId, true)).toEqual([]);
+    expect(run.failureKind).toBe("crash");
+    expect((await jobsFor(testId, true)).map((j) => j.kind)).toEqual(["triage"]);
+    await authed(app).post("/repair-jobs").send({ runId: run.runId }).expect(400);
   }, 120_000);
 
   describe("enqueueing by hand, from a failed run whose policy is manual", () => {

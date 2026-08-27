@@ -212,3 +212,61 @@ export function breakerVerdict(
     clusters: clusters.length,
   };
 }
+
+// ── triage (slice 08) ──────────────────────────────────────────────────────────────────────────
+
+/**
+ * The failure classes a read-only **Triage Job** diagnoses — every red class except the one
+ * repairable one.
+ *
+ * `locator` is absent on purpose: it is the only class a repair may touch, so it can never be a
+ * triage kind. Everything here is red for a reason no re-pinned locator addresses, which is exactly
+ * why the job that handles it may not write to the test.
+ */
+export const TRIAGE_FAILURE_KINDS = ["pixel", "judge", "assertion", "timeout", "crash"] as const;
+export type TriageFailureKind = (typeof TRIAGE_FAILURE_KINDS)[number];
+
+/** Whether an untrusted value (a database column, a request body) is a triage failure class. */
+export function isTriageFailureKind(value: unknown): value is TriageFailureKind {
+  return typeof value === "string" && (TRIAGE_FAILURE_KINDS as readonly string[]).includes(value);
+}
+
+/**
+ * The cluster key for a triage failure.
+ *
+ * Scoped to the TEST, unlike a repair cluster key — and that asymmetry is the point. A locator
+ * cluster key is deliberately test-blind, because that is what collapses one renamed button across
+ * thirty-eight tests into one job. A crash or a pixel regression carries no such shared identity:
+ * two tests that both threw did not necessarily throw for the same reason. Since the queued-unique
+ * index is over `cluster_key` alone (project-wide, slice 07), a test-blind key like `triage:crash`
+ * would silently merge two entirely unrelated diagnoses into one job.
+ *
+ * Per (test, class) rather than per (test, run), so a nightly suite failing the same pixel every
+ * night leaves ONE job to diagnose rather than thirty.
+ */
+export function triageClusterKey(testId: string, kind: TriageFailureKind): string {
+  return `triage:${kind}:${testId}`;
+}
+
+/**
+ * Classify a THROWN replay failure into a triage class.
+ *
+ * `locator` is decided by type upstream of this and never reaches here — it is the one repairable
+ * class, so it is never inferred. What is left is telling a step that waited for something which
+ * never arrived from one that blew up, and that distinction is what a human reads off the queue
+ * ("this is slow or gone" vs "this threw").
+ *
+ * Playwright's timeout carries `name === "TimeoutError"`, and the runner's own
+ * `JudgeUnavailableError` says a `context` checkpoint could not be judged at all. Reading each
+ * error's own type rather than matching its message is what keeps this from rotting the next time
+ * a message is reworded.
+ */
+export function classifyThrownFailure(err: unknown): TriageFailureKind {
+  const name = err instanceof Error ? err.name : "";
+  if (name === "TimeoutError") return "timeout";
+  // A `context` checkpoint that could not be judged at all. Distinguished because "crashed" would
+  // send whoever reads the queue looking in the wrong place — the app is fine, the judge is not
+  // configured.
+  if (name === "JudgeUnavailableError") return "judge";
+  return "crash";
+}

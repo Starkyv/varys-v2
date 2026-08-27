@@ -33,7 +33,7 @@ import type {
   StepRun,
   TuningInput,
 } from "@varys/review-contract";
-import { deriveRunOutcome, isRepairInReview } from "@varys/review-contract";
+import { deriveRunOutcome, isRepairInReview, type RunFailureKind } from "@varys/review-contract";
 import { describeStep, type TestDefinition } from "@varys/step-schema";
 import type { StorageAdapter } from "@varys/storage-adapter";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
@@ -124,6 +124,9 @@ export class RunsService {
         triggerSource: runs.triggerSource,
         notes: runs.notes,
         failureKind: runs.failureKind,
+        triageFinding: runs.triageFinding,
+        triageBy: runs.triageBy,
+        triageAt: runs.triageAt,
         testId: testVersions.testId,
         testName: tests.name,
         repairPolicy: tests.repairPolicy,
@@ -306,9 +309,16 @@ export class RunsService {
       traceUrl: url(row.traceArtifactKey),
       timeline,
       notes: row.notes ?? null,
-      // Only an unresolvable locator is repairable (Slice 19) — recorded by the runner, so a
-      // pixel regression or a crash reads as null here and the repair affordance stays hidden.
-      failureKind: row.failureKind === "locator" ? "locator" : null,
+      // Which class of failure this was (Slice 19), recorded by the runner rather than inferred.
+      // `locator` is still the only repairable one — the repair affordance keys on exactly that
+      // string, so widening the vocabulary (slice 08) cannot accidentally offer a repair for a
+      // crash. An unrecognised stored value degrades to null rather than through to the client.
+      failureKind: isRunFailureKind(row.failureKind) ? row.failureKind : null,
+      // The triage finding, shown beside the failure. An annotation: `outcome` above is derived
+      // without it, so a diagnosis can never read as a resolution.
+      triageFinding: row.triageFinding ?? null,
+      triageBy: row.triageBy ?? null,
+      triageAt: row.triageAt ? row.triageAt.toISOString() : null,
       repairPolicy: row.repairPolicy === "auto" ? "auto" : "manual",
       checkpoints,
     };
@@ -884,4 +894,18 @@ export class RunsService {
     if (!baseline || !actual) throw new BadRequestException("stored artifacts are missing");
     return { baseline, actual };
   }
+}
+
+/** Whether a stored `failure_kind` is one this build knows. An unrecognised value (written by a
+ *  newer deployment, or by hand) degrades to null rather than reaching the client as a class no
+ *  surface can render. */
+function isRunFailureKind(value: string | null): value is Exclude<RunFailureKind, null> {
+  return (
+    value === "locator" ||
+    value === "pixel" ||
+    value === "judge" ||
+    value === "assertion" ||
+    value === "timeout" ||
+    value === "crash"
+  );
 }

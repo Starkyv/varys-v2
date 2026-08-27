@@ -15,6 +15,8 @@ import {
   deriveClusterKey,
   type FailureRecord,
   normalizeBreakerThreshold,
+  triageClusterKey,
+  type TriageFailureKind,
 } from "@varys/repair-policy";
 import type { Fingerprint, TestDefinition } from "@varys/step-schema";
 import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
@@ -35,6 +37,22 @@ export class LocatorUnresolvedError extends Error {
     super(message);
     this.name = "LocatorUnresolvedError";
     this.target = target;
+  }
+}
+
+/**
+ * A `context` checkpoint could not be judged at all — no judge provider is configured, or the
+ * checkpoint has no prompt and there is no global default.
+ *
+ * A distinct type for the same reason `LocatorUnresolvedError` is one: the class of a failure is
+ * recorded from the code that knows what threw, never matched out of a message. Without it this
+ * lands as a generic `crash`, and a queue that says "crashed" when the truth is "you have not
+ * configured a judge" sends whoever reads it looking in the wrong place.
+ */
+export class JudgeUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "JudgeUnavailableError";
   }
 }
 
@@ -282,3 +300,71 @@ async function suppress(
     failingTests: params.verdict.failingTests,
   });
 }
+
+// ── triage (slice 08) ──────────────────────────────────────────────────────────────────────────
+
+/**
+ * Enqueue a read-only **Triage Job** for a failure Claude may not fix (Slice 19, slice 08).
+ *
+ * A pixel regression, a failed judge, a false assertion relation, a crash and a timeout are all
+ * red for reasons no re-pinned locator can address — and the corresponding right answer is not
+ * "leave the run unexplained". A Triage Job's only output is a written finding on the run: Claude
+ * drives to the failure, looks, and says why. The run stays red, which is the whole point.
+ *
+ * Gated on the SAME `auto` Repair Policy repair is, deliberately. `manual` promises the test
+ * "behaves exactly as it did before the queue existed" (slice 01), and a project that has not opted
+ * a test into unattended agents should not find jobs about it in the queue either.
+ *
+ * NOT gated on the circuit breaker. The breaker exists to stop a bad deploy rewriting the corpus,
+ * and triage writes nothing — during a mass failure an explanation is the single most useful thing
+ * Varys can produce, so suppressing it would remove the one safe output at exactly the moment it
+ * matters most.
+ *
+ * Idempotent per (test, failure class) while the job is open: a nightly suite failing the same
+ * pixel every night leaves one job to diagnose, not thirty.
+ */
+export async function enqueueTriageIfAuto(
+  db: Db,
+  params: { testId: string; runId: string; kind: TriageFailureKind },
+): Promise<EnqueueOutcome> {
+  const [test] = await db
+    .select({ repairPolicy: tests.repairPolicy })
+    .from(tests)
+    .where(eq(tests.id, params.testId))
+    .limit(1);
+  if (!test) return { status: "skipped", reason: "missing-test" };
+  if (test.repairPolicy !== "auto") return { status: "skipped", reason: "policy" };
+
+  const clusterKey = triageClusterKey(params.testId, params.kind);
+  const openForCluster = () =>
+    db
+      .select({ id: repairJobs.id })
+      .from(repairJobs)
+      .where(
+        and(eq(repairJobs.clusterKey, clusterKey), inArray(repairJobs.status, ["queued", "claimed"])),
+      )
+      .limit(1);
+
+  const [open] = await openForCluster();
+  if (open) {
+    await joinCluster(db, open.id, params);
+    return { status: "joined", jobId: open.id, clusterKey };
+  }
+
+  const [inserted] = await db
+    .insert(repairJobs)
+    .values({
+      testId: params.testId,
+      runId: params.runId,
+      kind: "triage",
+      status: "queued",
+      clusterKey,
+    })
+    .onConflictDoNothing()
+    .returning({ id: repairJobs.id });
+  const jobId = inserted?.id ?? (await openForCluster())[0]?.id;
+  if (!jobId) return { status: "skipped", reason: "missing-test" };
+  await joinCluster(db, jobId, params);
+  return { status: inserted ? "enqueued" : "joined", jobId, clusterKey };
+}
+

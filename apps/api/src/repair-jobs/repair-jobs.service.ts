@@ -21,6 +21,7 @@ import type {
   RepairJobStatus,
   RepairJobSummary,
   ReportedRepair,
+  ReportedTriage,
   SuppressedFailureItem,
 } from "@varys/review-contract";
 import { describeStep, type Fingerprint, type TestDefinition } from "@varys/step-schema";
@@ -431,6 +432,42 @@ export class RepairJobsService {
     return row?.id ?? null;
   }
 
+  /**
+   * Does this principal hold a live claim of a particular KIND over `testId` (Slice 19, slice 08)?
+   *
+   * The structural half of "a triage claim grants observation only". `hasClaimOn` answers "may this
+   * credential touch this test at all"; this answers "may it CHANGE it" — and the two are different
+   * questions the moment triage jobs exist, because a triage claim reaches the test's page and its
+   * definition to read, and neither to write.
+   *
+   * Asked per (test, kind) rather than resolved to "the kind of the claim", because one drainer can
+   * legitimately hold a repair claim on a test's broken locator AND a triage claim on the same
+   * test's pixel regression. "Which kind is it?" has no single answer then; "is there a repair
+   * claim?" always does.
+   */
+  async hasClaimOfKind(
+    principalId: string,
+    testId: string,
+    kind: RepairJobKind,
+  ): Promise<boolean> {
+    if (!principalId || !testId) return false;
+    const [row] = await this.db
+      .select({ id: repairJobs.id })
+      .from(repairJobs)
+      .innerJoin(repairJobTests, eq(repairJobTests.jobId, repairJobs.id))
+      .where(
+        and(
+          eq(repairJobTests.testId, testId),
+          eq(repairJobs.kind, kind),
+          eq(repairJobs.status, "claimed"),
+          eq(repairJobs.claimedBy, principalId),
+          gt(repairJobs.claimExpiresAt, this.clock.now()),
+        ),
+      )
+      .limit(1);
+    return row !== undefined;
+  }
+
   /** The test a run exercised, or null — so a tool given a `runId` can be scope-checked against
    *  the test behind it rather than waving the run through. */
   async testIdForRun(runId: string): Promise<string | null> {
@@ -674,6 +711,87 @@ export class RepairJobsService {
           ? `The same fix was applied across this job's Failure Cluster — ${fanned.length} other test${fanned.length === 1 ? "" : "s"} broken by the same change — as ONE reviewable fix, each with its own re-run. Accepting or rejecting decides all of them together. `
           : "") +
         "Report it as a proposed fix awaiting review, not as fixed.",
+    };
+  }
+
+  /**
+   * Report a TRIAGE finding (Slice 19, slice 08) — the drainer's half of "I looked, and here is
+   * why this is red".
+   *
+   * The mirror image of {@link reportRepair}, and deliberately shaped so the two cannot be
+   * confused. It writes exactly one thing: a paragraph onto the run. No version, no definition, no
+   * baseline, and — critically — no change to the run's status or its derived outcome. The run was
+   * red before this call and is red after it, because a diagnosis must never be mistakable for a
+   * resolution.
+   *
+   * Refused for a `repair` job: those close through `report_repair`, which has a justification gate
+   * in front of it. Refused for an empty finding: a triage job closed `done` with nothing written
+   * is indistinguishable, later, from one that explained something — that drainer wanted
+   * `release_repair_job`.
+   */
+  async reportTriage(claimant: string, jobId: string, finding: string): Promise<ReportedTriage> {
+    const note = finding.trim();
+    if (!note) {
+      throw new BadRequestException(
+        "say what you found — the finding is the ONLY output of a triage job, and a job closed without one is indistinguishable from one that explained nothing. If you could not diagnose it, release the job instead.",
+      );
+    }
+    const [job] = await this.db
+      .select({
+        id: repairJobs.id,
+        testId: repairJobs.testId,
+        runId: repairJobs.runId,
+        kind: repairJobs.kind,
+      })
+      .from(repairJobs)
+      .where(
+        and(
+          eq(repairJobs.id, jobId),
+          eq(repairJobs.status, "claimed"),
+          eq(repairJobs.claimedBy, claimant),
+          gt(repairJobs.claimExpiresAt, this.clock.now()),
+        ),
+      )
+      .limit(1);
+    // Same reasoning as `release` and `reportRepair`: a claim you do not hold is not-found.
+    if (!job) throw new NotFoundException(`No repair job ${jobId} is claimed by ${claimant}`);
+    if (job.kind !== "triage") {
+      throw new BadRequestException(
+        `job ${jobId} is a ${job.kind} job, which is reported with report_repair — it proposes a fix and is gated on a brief-clause justification. report_triage only writes a finding.`,
+      );
+    }
+    if (!job.runId) {
+      throw new BadRequestException(
+        `job ${jobId} has no run to write a finding onto (it was purged). Release the job.`,
+      );
+    }
+
+    const now = this.clock.now();
+    await this.db
+      .update(runs)
+      // status, error, failureKind and every checkpoint are untouched: this is an annotation.
+      .set({ triageFinding: note, triageBy: claimant, triageAt: now, triageJobId: job.id })
+      .where(eq(runs.id, job.runId));
+    await this.db
+      .update(repairJobs)
+      .set({ status: "done", report: note, updatedAt: now })
+      .where(eq(repairJobs.id, jobId));
+
+    // Read the outcome back AFTER the write, so the payload states what the run actually is now
+    // rather than asserting what it ought to be.
+    const view = await this.runs.getById(job.runId).catch(() => null);
+    this.log.log(`triage job ${jobId}: finding written onto run ${job.runId} by ${claimant}`);
+    return {
+      ok: true,
+      jobId,
+      status: "done",
+      testId: job.testId,
+      runId: job.runId,
+      runStatus: view?.status ?? null,
+      runOutcome: view?.outcome ?? null,
+      finding: note,
+      versionsWritten: 0,
+      note: `The finding is recorded on run ${job.runId} and shown beside the failure. The run is still ${view?.outcome ?? "red"} and NOTHING about the test changed — a triage job cannot write a version, and this one did not. Report this as a diagnosis, never as a fix.`,
     };
   }
 

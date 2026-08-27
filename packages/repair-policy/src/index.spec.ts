@@ -2,14 +2,18 @@ import type { Fingerprint } from "@varys/step-schema";
 import { describe, expect, it } from "vitest";
 import {
   breakerVerdict,
+  classifyThrownFailure,
   clusterFailures,
   DEFAULT_BREAKER_THRESHOLD,
   deriveClusterKey,
   type FailureRecord,
   isRepairPolicy,
+  isTriageFailureKind,
   normalizeBreakerThreshold,
   REPAIR_POLICIES,
   type RepairPolicy,
+  TRIAGE_FAILURE_KINDS,
+  triageClusterKey,
 } from "./index";
 
 /** A minimal fingerprint — `tag` is the one required signal. */
@@ -322,5 +326,77 @@ describe("breakerVerdict", () => {
 
   it("never trips on no failures", () => {
     expect(breakerVerdict([], 10)).toMatchObject({ tripped: false, failingTests: 0, clusters: 0 });
+  });
+});
+
+describe("triage failure classes", () => {
+  it("covers every red class EXCEPT the repairable one", () => {
+    expect(TRIAGE_FAILURE_KINDS).toEqual(["pixel", "judge", "assertion", "timeout", "crash"]);
+    // The load-bearing absence: `locator` is the one class a repair may touch, so it can never be
+    // a triage kind. If this ever passes, a locator failure has become un-repairable.
+    expect(TRIAGE_FAILURE_KINDS as readonly string[]).not.toContain("locator");
+  });
+
+  it("recognises the classes and rejects anything else", () => {
+    for (const k of TRIAGE_FAILURE_KINDS) expect(isTriageFailureKind(k)).toBe(true);
+    for (const bad of ["locator", "Pixel", "", "flake", null, undefined, 3]) {
+      expect(isTriageFailureKind(bad)).toBe(false);
+    }
+  });
+});
+
+describe("triageClusterKey", () => {
+  it("is stable for the same test and class — one open job to diagnose, not one per run", () => {
+    expect(triageClusterKey("t1", "pixel")).toBe(triageClusterKey("t1", "pixel"));
+  });
+
+  it("separates classes within one test — a crash and a pixel diff are different diagnoses", () => {
+    expect(triageClusterKey("t1", "crash")).not.toBe(triageClusterKey("t1", "pixel"));
+  });
+
+  it("is scoped to the TEST, unlike a repair cluster key", () => {
+    // The asymmetry that matters: a locator key is test-blind so one renamed button collapses
+    // across every test that used it. Two tests that both CRASHED did not necessarily crash for
+    // the same reason, and the queued-unique index is over the cluster key alone — a test-blind
+    // `triage:crash` would silently merge two unrelated diagnoses into one job.
+    expect(triageClusterKey("t1", "crash")).not.toBe(triageClusterKey("t2", "crash"));
+  });
+
+  it("never collides with a repair cluster key", () => {
+    const repairKeys = new Set([
+      deriveClusterKey(fp({ testId: "save-btn" })),
+      deriveClusterKey(fp({ attributes: { id: "save" } })),
+      deriveClusterKey(fp({ role: "button", accessibleName: "Save" })),
+      deriveClusterKey(fp({ accessibleName: "Save" })),
+      deriveClusterKey(fp({ stableClasses: ["btn"] })),
+      deriveClusterKey(fp({ text: "x" })),
+    ]);
+    for (const kind of TRIAGE_FAILURE_KINDS) {
+      expect(repairKeys.has(triageClusterKey("t1", kind))).toBe(false);
+    }
+  });
+});
+
+describe("classifyThrownFailure", () => {
+  it("reads Playwright's timeout off the error's TYPE, not its message", () => {
+    const timeout = new Error("locator.click: Timeout 30000ms exceeded");
+    timeout.name = "TimeoutError";
+    expect(classifyThrownFailure(timeout)).toBe("timeout");
+  });
+
+  it("distinguishes a judge that could not run from a crash", () => {
+    const judge = new Error("no judge provider is configured");
+    judge.name = "JudgeUnavailableError";
+    // "Crashed" would send whoever reads the queue looking at the app; the app is fine.
+    expect(classifyThrownFailure(judge)).toBe("judge");
+  });
+
+  it("calls everything else a crash", () => {
+    expect(classifyThrownFailure(new Error("net::ERR_CONNECTION_REFUSED"))).toBe("crash");
+    expect(classifyThrownFailure(new TypeError("undefined is not a function"))).toBe("crash");
+    // A message that merely SAYS timeout is not one — that is the point of reading the type.
+    expect(classifyThrownFailure(new Error("the request timed out upstream"))).toBe("crash");
+    expect(classifyThrownFailure("a bare string")).toBe("crash");
+    expect(classifyThrownFailure(undefined)).toBe("crash");
   });
 });

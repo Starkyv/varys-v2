@@ -43,7 +43,13 @@ import {
   type Locator,
   type Page,
 } from "playwright";
-import { enqueueRepairIfAuto, LocatorUnresolvedError } from "./repair-jobs";
+import { classifyThrownFailure } from "@varys/repair-policy";
+import {
+  enqueueRepairIfAuto,
+  enqueueTriageIfAuto,
+  JudgeUnavailableError,
+  LocatorUnresolvedError,
+} from "./repair-jobs";
 
 // The repair-queue seam: the typed locator failure the runner throws, and the policy-gated
 // enqueue it triggers. Re-exported so the API and its tests can use both without reaching
@@ -53,8 +59,10 @@ export {
   BREAKER_WINDOW_MS,
   breakerThreshold,
   enqueueRepairIfAuto,
+  enqueueTriageIfAuto,
   type EnqueueOutcome,
   joinCluster,
+  JudgeUnavailableError,
   LocatorUnresolvedError,
   recentLocatorFailures,
 } from "./repair-jobs";
@@ -527,6 +535,11 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
   }
 
   const reviewStates: string[] = [];
+  /** Red checkpoints, with WHICH class of failure made each one red (slice 08). A `context`
+   *  checkpoint the judge failed is a `judge` failure; a pixel diff is a `pixel` one. Collected as
+   *  they happen, by the code that knows which comparison ran, rather than re-derived afterwards
+   *  from the stored rows. */
+  const failingCheckpoints: Array<{ name: string; kind: "pixel" | "judge" }> = [];
   // Which step is currently executing — read by the catch so the failure names it.
   // Null before the loop / after it completes (so pre- and post-loop errors aren't
   // misattributed to a step).
@@ -748,14 +761,14 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
         const baselineBytes = await storage.get(baseline.artifactKey);
         if (!baselineBytes) throw new Error("baseline artifact missing");
         if (!judge) {
-          throw new Error(
+          throw new JudgeUnavailableError(
             `checkpoint "${step.name}" uses context compare but no judge provider is configured (set it on the Configurations page or via VARYS_JUDGE_*)`,
           );
         }
         // Per-checkpoint prompt wins; otherwise inherit the global default from Configurations.
         const effectivePrompt = step.prompt?.trim() || judgeDefaultPrompt.trim();
         if (!effectivePrompt) {
-          throw new Error(
+          throw new JudgeUnavailableError(
             `context checkpoint "${step.name}" has no prompt and no default judge prompt is set on the Configurations page`,
           );
         }
@@ -791,6 +804,9 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
           })
           .onConflictDoUpdate(RESULT_CONFLICT);
         reviewStates.push(reviewState);
+        // A `fail` verdict OR a judge that errored (which fails safe to `fail` above) — either
+        // way the checkpoint is red for a reason no locator repair can touch.
+        if (reviewState === "diff") failingCheckpoints.push({ name: step.name, kind: "judge" });
       } else {
         const baselineBytes = await storage.get(baseline.artifactKey);
         if (!baselineBytes) throw new Error("baseline artifact missing");
@@ -835,6 +851,7 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
             })
             .onConflictDoUpdate(RESULT_CONFLICT);
           reviewStates.push("diff");
+          failingCheckpoints.push({ name: step.name, kind: "pixel" });
         }
       }
       // Checkpoint captured + judged — record the (screenshot) step.
@@ -848,10 +865,28 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
     const status = reviewStates.some((s) => s !== "passed")
       ? "needs_review"
       : "passed";
+    // A red run that never THREW: a baseline existed and the capture differs. Nothing a re-pinned
+    // locator could address, so it is classified and handed to a read-only Triage Job (slice 08)
+    // rather than left unexplained. `pending-baseline` is deliberately not red — a first capture
+    // awaiting approval is not a failure — so only a `diff` counts.
+    const failedCheckpoint = failingCheckpoints[0] ?? null;
     await db
       .update(runs)
-      .set({ status, updatedAt: new Date() })
+      .set({
+        status,
+        failureKind: failedCheckpoint?.kind ?? null,
+        updatedAt: new Date(),
+      })
       .where(eq(runs.id, runId));
+    if (failedCheckpoint) {
+      // Best-effort, exactly as the repair enqueue is: losing the job must never cost us the run.
+      try {
+        await enqueueTriageIfAuto(db, { testId, runId, kind: failedCheckpoint.kind });
+      } catch (triageErr) {
+        // eslint-disable-next-line no-console
+        console.error(`[runner] could not enqueue a triage job for run ${runId}:`, triageErr);
+      }
+    }
   } catch (err) {
     // Cancelled (or its test deleted) mid-run: not a failure. Best-effort mark it `cancelled`
     // if the row still exists (a delete already removed it → the update no-ops), and stop —
@@ -890,13 +925,17 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
     // re-derived from the message later, so "may a repair touch this?" is answered once, here,
     // by the code that knows what threw.
     const locatorFailure = err instanceof LocatorUnresolvedError ? err : null;
+    // Everything that is NOT a locator failure is still classified (slice 08) — a crash and a
+    // timeout are different things to a human reading the queue, and each earns an explanation
+    // even though neither may be repaired. `locator` stays decided by TYPE, never inferred.
+    const triageKind = locatorFailure ? null : classifyThrownFailure(err);
     try {
       await db
         .update(runs)
         .set({
           status: "failed",
           error: message,
-          failureKind: locatorFailure ? "locator" : null,
+          failureKind: locatorFailure ? "locator" : triageKind,
           failedStepIndex,
           updatedAt: new Date(),
         })
@@ -916,6 +955,14 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
       } catch (enqueueErr) {
         // eslint-disable-next-line no-console
         console.error(`[runner] could not enqueue a repair job for run ${runId}:`, enqueueErr);
+      }
+    } else if (triageKind) {
+      // A crash or a timeout: nothing to repair, but every red run gains an explanation (slice 08).
+      try {
+        await enqueueTriageIfAuto(db, { testId, runId, kind: triageKind });
+      } catch (triageErr) {
+        // eslint-disable-next-line no-console
+        console.error(`[runner] could not enqueue a triage job for run ${runId}:`, triageErr);
       }
     }
   } finally {

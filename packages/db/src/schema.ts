@@ -197,12 +197,24 @@ export const runs = pgTable("runs", {
   status: text("status").notNull().default("queued"),
   /** Why a `failed` run failed (the replay error) — null otherwise. */
   error: text("error"),
-  /** What CLASS of failure ended the run, when it is classified (Slice 19): `locator` = a
-   *  fingerprint the matcher could not resolve, which is the only class auto-repair may touch.
-   *  Null for every other failure (a pixel regression, a failed judge, a crash, a timeout) and
-   *  for runs that finished before this column existed. Recorded rather than inferred from the
-   *  error text, because "is this repairable?" is a safety decision. */
+  /** What CLASS of failure ended the run, when it is classified (Slice 19):
+   *  `locator` | `pixel` | `judge` | `assertion` | `timeout` | `crash`. `locator` — a fingerprint
+   *  the matcher could not resolve — is the only class auto-repair may touch; every other class
+   *  gets a read-only Triage Job instead (slice 08). Null for runs that are not red and for runs
+   *  that finished before this column existed. Recorded rather than inferred from the error text,
+   *  because "is this repairable?" is a safety decision. */
   failureKind: text("failure_kind"),
+  /** A Triage Job's written finding on this run (Slice 19, slice 08) — the explanation of a
+   *  failure Claude was NOT allowed to fix. An annotation and nothing more: the run's status and
+   *  its derived outcome are untouched by it, because a diagnosis must never be mistakable for a
+   *  resolution. Null until one is reported. */
+  triageFinding: text("triage_finding"),
+  /** Who wrote it (a `Repair Agent "…"` label) and when — the audit pair for the finding. */
+  triageBy: text("triage_by"),
+  triageAt: timestamp("triage_at", { withTimezone: true }),
+  /** The Triage Job the finding was reported under, so a finding traces to the claim that made
+   *  it. SET NULL is not needed — a job dies with its test, and so does the run. */
+  triageJobId: uuid("triage_job_id"),
   /** 0-based index of the step that failed (null when it failed before any step). */
   failedStepIndex: integer("failed_step_index"),
   /** Who triggered the run (email), or "ai"/sentinel for non-human triggers. A suite
@@ -690,6 +702,12 @@ ALTER TABLE runs ADD COLUMN IF NOT EXISTS notes text;
 -- fingerprint (the only repairable class), NULL for everything else. Recorded by the runner,
 -- never inferred from the error text.
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS failure_kind text;
+-- A Triage Job's written finding on a red run (slice 08). An annotation only: the run's status and
+-- derived outcome are untouched, because a diagnosis must never be mistakable for a resolution.
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS triage_finding text;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS triage_by text;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS triage_at timestamptz;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS triage_job_id uuid;
 CREATE TABLE IF NOT EXISTS run_results (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   run_id uuid NOT NULL REFERENCES runs(id),

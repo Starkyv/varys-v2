@@ -5,7 +5,7 @@ import { useConfirm } from "../../context/confirm";
 import { useRouter } from "../../context/router";
 import { useToast } from "../../context/toast";
 import { absoluteTime, formatActor } from "../../lib/format";
-import { StatusBadge } from "../../lib/status";
+import { StatusBadge, statusLabel } from "../../lib/status";
 import {
   useApproveAll,
   useDeleteRun,
@@ -191,6 +191,28 @@ export function RunDetail({ runId }: { runId: string }) {
           {inFlight ? "Cancel & delete" : "Delete"}
         </Button>
       </header>
+
+      {/* A triage finding (Slice 19, slice 08): an agent's written explanation of a failure it was
+          NOT allowed to fix. Shown ABOVE the timeline and beside the failure, because it is the
+          thing that turns a red run into an actionable one — but toned as an observation, never as
+          a resolution: the status badge above is untouched by it and still red. */}
+      {data.triageFinding && (
+        <div className={styles.triage}>
+          <div className={styles.triageHead}>
+            <Sparkles size={15} />
+            <span className={styles.triageTitle}>What a repair agent found</span>
+            <span className={styles.triageMeta}>
+              {data.triageBy ? formatActor(data.triageBy) : "a repair agent"}
+              {data.triageAt ? ` · ${absoluteTime(data.triageAt)}` : ""}
+            </span>
+          </div>
+          <p className={styles.triageBody}>{data.triageFinding}</p>
+          <p className={styles.triageFoot}>
+            A diagnosis, not a fix — nothing about this test or its baselines was changed, and the
+            run is still {statusLabel(data.outcome).toLowerCase()}.
+          </p>
+        </div>
+      )}
 
       <div className={styles.notes}>
         <NotesCard

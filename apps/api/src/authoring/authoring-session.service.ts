@@ -8,7 +8,7 @@ import {
   type OnApplicationShutdown,
 } from "@nestjs/common";
 import { captureFingerprint } from "@varys/capture";
-import { environments, runs, tests as testsTable, testVersions } from "@varys/db";
+import { environments, runResults, runs, tests as testsTable, testVersions } from "@varys/db";
 import { verify, type VerifyOutcome, type VerifyStatus } from "@varys/locator-engine";
 import {
   type EnvCookie,
@@ -900,6 +900,26 @@ export class AuthoringSessionService implements OnApplicationShutdown {
    * The output is a diagnosis for a human to act on in the locator editor — Claude proposes,
    * a person edits (ADR 0001).
    */
+  /**
+   * The step of the first RED checkpoint on a run, or -1.
+   *
+   * The join point is the checkpoint name, which is the screenshot step's name — the same key
+   * `run_results` uses. Ordered by the step's own position rather than by insertion, so "the first
+   * failure" means the first one the run reached.
+   */
+  private async firstRedCheckpointStep(runId: string, definition: TestDefinition): Promise<number> {
+    const rows = await this.db
+      .select({ name: runResults.checkpointName })
+      .from(runResults)
+      .where(and(eq(runResults.runId, runId), eq(runResults.reviewState, "diff")));
+    if (rows.length === 0) return -1;
+    const red = new Set(rows.map((r) => r.name));
+    for (const [index, step] of definition.steps.entries()) {
+      if (step.type === "screenshot" && red.has(step.name)) return index;
+    }
+    return -1;
+  }
+
   async openRepair(input: {
     owner: { id: string; email: string; kind?: SessionActorKind };
     runId?: string;
@@ -930,10 +950,17 @@ export class AuthoringSessionService implements OnApplicationShutdown {
     const definition = row.definition as TestDefinition;
     // Which step to park on. A caller may override to inspect an earlier step (e.g. the one that
     // ACTUALLY broke when the drive stops short), but by default it is the run's own verdict.
-    const stepIndex = input.stepIndex ?? row.failedStepIndex ?? -1;
+    //
+    // A run can be red WITHOUT failing at a step: a pixel regression or a failed judge finishes
+    // every step and comes back `needs_review` with a red checkpoint. Those are exactly the
+    // failures a Triage Job diagnoses (Slice 19, slice 08), and "drive to the failure and look" has
+    // to mean something for them too — so fall back to the first red CHECKPOINT's screenshot step
+    // rather than making a drainer guess an index for a failure Varys already located.
+    const stepIndex =
+      input.stepIndex ?? row.failedStepIndex ?? (await this.firstRedCheckpointStep(runId, definition));
     if (stepIndex < 0) {
       throw new BadRequestException(
-        `Run ${runId} did not fail at a step (error: ${row.error ?? "none"}), so there is no locator to diagnose. Pass an explicit stepIndex to park on a specific step anyway.`,
+        `Run ${runId} did not fail at a step and has no red checkpoint (error: ${row.error ?? "none"}), so there is nothing to park on. Pass an explicit stepIndex to inspect a specific step anyway.`,
       );
     }
     if (stepIndex >= definition.steps.length) {

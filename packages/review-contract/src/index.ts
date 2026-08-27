@@ -78,12 +78,34 @@ export type TestStatus = "draft" | "active";
 export type RepairPolicy = "manual" | "auto";
 
 /**
- * The class of failure that ended a failed run, when it is classified. `locator` — an
- * unresolvable fingerprint — is the ONLY repairable class; a pixel regression, a failed judge,
- * a false relation and a crash are all `null`, which is what makes them un-enqueueable rather
- * than merely un-enqueued.
+ * The class of failure that ended a red run, when it is classified.
+ *
+ * `locator` — an unresolvable fingerprint — is the ONLY repairable class. Everything else enqueues
+ * a read-only **Triage Job** instead (Slice 19, slice 08): Claude drives to the failure, looks, and
+ * writes a finding onto the run, and the run stays red. Recording the class rather than inferring it
+ * from the error text is what makes "may a repair touch this?" a fact instead of a regex.
+ *
+ *  - `pixel`     — a baseline existed and the capture differs. A visual change is not drift.
+ *  - `judge`     — a `context` checkpoint the LLM judge failed, or could not be judged at all.
+ *  - `assertion` — an assertion's relation came back false (Slice 19, slice 09/10). A false
+ *                  relation is NEVER repairable: the test is right and the app is wrong.
+ *  - `timeout`   — a step waited for something that never arrived.
+ *  - `crash`     — the replay threw. An outage is not a broken locator.
+ *
+ * `null` for runs that finished before the column existed, and for runs that are not red.
  */
-export type RunFailureKind = "locator" | null;
+export type RunFailureKind =
+  | "locator"
+  | "pixel"
+  | "judge"
+  | "assertion"
+  | "timeout"
+  | "crash"
+  | null;
+
+/** The failure classes a Triage Job diagnoses — every red class except the repairable one. */
+export const TRIAGE_FAILURE_KINDS = ["pixel", "judge", "assertion", "timeout", "crash"] as const;
+export type TriageFailureKind = (typeof TRIAGE_FAILURE_KINDS)[number];
 
 /** A Repair Job's kind: `repair` may change the test; `triage` only diagnoses it (slice 08). */
 export type RepairJobKind = "repair" | "triage";
@@ -202,6 +224,31 @@ export interface ReportedRepair {
    *  (Slice 19, slice 05). A repair only reaches this payload by passing that gate. */
   justification: string;
   justificationReasoning: string;
+  note: string;
+}
+
+/**
+ * What a drainer gets back when it reports a TRIAGE finding (Slice 19, slice 08).
+ *
+ * Every field here exists to stop a diagnosis reading as a resolution. `runOutcome` is the run's
+ * outcome AFTER the finding was written — unchanged, and still red — and `versionsWritten` is
+ * always 0, because a triage claim cannot write one. A drainer that reports "diagnosed" and a
+ * drainer that reports "fixed" must not be able to make the same mistake.
+ */
+export interface ReportedTriage {
+  ok: true;
+  jobId: string;
+  /** Terminal for the drainer: the job is `done` and the claim is over. */
+  status: RepairJobStatus;
+  testId: string;
+  /** The run the finding was written onto, and its outcome now — still red. */
+  runId: string | null;
+  runStatus: string | null;
+  runOutcome: RunOutcome | null;
+  /** The finding as stored. */
+  finding: string;
+  /** Always 0. Present so the payload states it rather than leaving it to be assumed. */
+  versionsWritten: 0;
   note: string;
 }
 
@@ -1380,10 +1427,20 @@ export interface RunView {
   checkpoints: CheckpointView[];
   /** Optional free-form note on the run, or null when none. Editable from the run-detail page. */
   notes: string | null;
-  /** For a `failed` run: which CLASS of failure ended it, when it is classified (Slice 19).
-   *  `locator` is the only repairable class — the run-detail "repair this" affordance is
-   *  offered on that and nothing else. */
+  /** Which CLASS of failure ended this run, when it is classified (Slice 19). `locator` is the
+   *  only repairable class — the run-detail "repair this" affordance is offered on that and
+   *  nothing else; every other class gets a read-only Triage Job (slice 08). */
   failureKind: RunFailureKind;
+  /** The triage finding written onto this run (Slice 19, slice 08): a drainer's written
+   *  explanation of a failure it was NOT allowed to fix — "the chart is empty because
+   *  /api/metrics returns 401". Null until one is reported.
+   *
+   *  A diagnosis, never a resolution: the run's `outcome` is completely unaffected by it, which is
+   *  the whole point of the slice. Shown beside the failure so a red cell becomes actionable. */
+  triageFinding: string | null;
+  /** Who wrote the finding (a `Repair Agent "…"` label) and when, ISO. Null with the finding. */
+  triageBy: string | null;
+  triageAt: string | null;
   /** The Repair Policy of the run's test, so run detail can say whether a repair would have
    *  been enqueued automatically or needs enqueuing by hand. */
   repairPolicy: RepairPolicy;
