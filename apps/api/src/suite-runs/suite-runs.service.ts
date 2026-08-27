@@ -13,7 +13,7 @@ import type {
   SuiteRunSummary,
   SuiteRunView,
 } from "@varys/review-contract";
-import { deriveRunOutcome } from "@varys/review-contract";
+import { deriveRunOutcome, isRepairInReview, type RunOutcome } from "@varys/review-contract";
 import { asc, desc, eq, inArray } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
 import { RunsService } from "../runs/runs.service";
@@ -21,9 +21,17 @@ import { effectiveTestIds } from "../suites/suite-membership";
 
 const ENVIRONMENT = "default";
 
-/** Tally child statuses into the aggregate counts (unknown statuses only count
- *  toward total — forward-compatible with new run states). */
-function countStatuses(statuses: string[]): SuiteRunCounts {
+/**
+ * Tally child statuses into the aggregate counts (unknown statuses only count toward total —
+ * forward-compatible with new run states).
+ *
+ * `healed` is counted from the children's derived OUTCOMES, not their statuses, and deliberately
+ * does not move any other number: a healed child's coarse status is `passed`, so it stays in
+ * `passed` and the suite still reports passing (Slice 19, slice 06 — a healed run is a queue item,
+ * not an alarm, and must not fail a suite). The healed count sits alongside as "and this much of
+ * that pass is resting on repairs nobody has accepted yet".
+ */
+function countStatuses(statuses: string[], outcomes: RunOutcome[] = []): SuiteRunCounts {
   const counts: SuiteRunCounts = {
     total: statuses.length,
     queued: 0,
@@ -31,6 +39,7 @@ function countStatuses(statuses: string[]): SuiteRunCounts {
     passed: 0,
     needsReview: 0,
     failed: 0,
+    healed: outcomes.filter((o) => o === "healed").length,
   };
   for (const s of statuses) {
     if (s === "queued") counts.queued += 1;
@@ -49,6 +58,8 @@ function deriveStatus(counts: SuiteRunCounts): string {
   if (counts.queued > 0 || counts.running > 0) return "running";
   if (counts.failed > 0) return "failed";
   if (counts.needsReview > 0) return "needs_review";
+  // `counts.healed` is intentionally absent from this ladder: a healed child does not fail or
+  // hold up a suite, it just leaves something in the repair review queue.
   return "passed";
 }
 
@@ -138,11 +149,16 @@ export class SuiteRunsService {
 
     const children = await this.db
       .select({
+        runId: runs.id,
         suiteRunId: runs.suiteRunId,
         status: runs.status,
+        error: runs.error,
         environmentId: runs.environmentId,
+        versionRepairJobId: testVersions.repairJobId,
+        versionReviewState: testVersions.reviewState,
       })
       .from(runs)
+      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
       .where(
         inArray(
           runs.suiteRunId,
@@ -150,10 +166,17 @@ export class SuiteRunsService {
         ),
       );
     const envNames = await this.environmentNames(children.map((c) => c.environmentId));
+    // The history rows carry a healed count too, not just the report: a suite that reads "passed"
+    // while three of its tests are running on unaccepted repairs is exactly the thing you want to
+    // see WITHOUT opening it.
+    const checkpoints = await this.checkpointsByRun(children.map((c) => c.runId));
 
     return parents.map((p): SuiteRunSummary => {
       const own = children.filter((c) => c.suiteRunId === p.id);
-      const counts = countStatuses(own.map((c) => c.status));
+      const counts = countStatuses(
+        own.map((c) => c.status),
+        own.map((c) => this.outcomeOf(c, checkpoints)),
+      );
       const environmentNames = [
         ...new Set(own.map((c) => this.envName(c.environmentId, envNames))),
       ].sort();
@@ -188,6 +211,8 @@ export class SuiteRunsService {
         error: runs.error,
         environmentId: runs.environmentId,
         testName: tests.name,
+        versionRepairJobId: testVersions.repairJobId,
+        versionReviewState: testVersions.reviewState,
       })
       .from(runs)
       .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
@@ -197,24 +222,9 @@ export class SuiteRunsService {
     const envNames = await this.environmentNames(rows.map((r) => r.environmentId));
 
     // Each child's checkpoint verdicts, grouped per run, for the shared outcome derivation
-    // (baseline vs verified, …). The parent aggregate + counts stay on coarse `status`.
-    const childIds = rows.map((r) => r.runId);
-    const checkpointsByRun = new Map<string, { reviewState: ReviewState; resolution: Resolution | null }[]>();
-    if (childIds.length) {
-      const resultRows = await this.db
-        .select({
-          runId: runResults.runId,
-          reviewState: runResults.reviewState,
-          resolution: runResults.resolution,
-        })
-        .from(runResults)
-        .where(inArray(runResults.runId, childIds));
-      for (const rr of resultRows) {
-        const list = checkpointsByRun.get(rr.runId) ?? [];
-        list.push({ reviewState: rr.reviewState as ReviewState, resolution: rr.resolution as Resolution | null });
-        checkpointsByRun.set(rr.runId, list);
-      }
-    }
+    // (baseline vs verified, …). The parent aggregate stays on coarse `status`; of the counts,
+    // only `healed` reads the derived outcome — see countStatuses.
+    const checkpointsByRun = await this.checkpointsByRun(rows.map((r) => r.runId));
 
     const children: SuiteRunChild[] = rows
       .map((r) => ({
@@ -222,10 +232,7 @@ export class SuiteRunsService {
         testName: r.testName,
         environment: this.envName(r.environmentId, envNames),
         status: r.status,
-        outcome: deriveRunOutcome(checkpointsByRun.get(r.runId) ?? [], {
-          status: r.status,
-          error: r.error,
-        }),
+        outcome: this.outcomeOf(r, checkpointsByRun),
         error: r.error,
       }))
       .sort(
@@ -233,7 +240,10 @@ export class SuiteRunsService {
           a.testName.localeCompare(b.testName) || a.environment.localeCompare(b.environment),
       );
 
-    const counts = countStatuses(children.map((c) => c.status));
+    const counts = countStatuses(
+      children.map((c) => c.status),
+      children.map((c) => c.outcome),
+    );
     return {
       suiteRunId: parent.id,
       suiteName: parent.suiteName,
@@ -243,6 +253,51 @@ export class SuiteRunsService {
       runTimestamp: parent.createdAt.toISOString(),
       children,
     };
+  }
+
+  /** One batched read of every listed run's checkpoint verdicts, grouped per run — the input the
+   *  shared outcome derivation needs. */
+  private async checkpointsByRun(
+    runIds: string[],
+  ): Promise<Map<string, { reviewState: ReviewState; resolution: Resolution | null }[]>> {
+    const byRun = new Map<string, { reviewState: ReviewState; resolution: Resolution | null }[]>();
+    if (runIds.length === 0) return byRun;
+    const resultRows = await this.db
+      .select({
+        runId: runResults.runId,
+        reviewState: runResults.reviewState,
+        resolution: runResults.resolution,
+      })
+      .from(runResults)
+      .where(inArray(runResults.runId, runIds));
+    for (const rr of resultRows) {
+      const list = byRun.get(rr.runId) ?? [];
+      list.push({
+        reviewState: rr.reviewState as ReviewState,
+        resolution: rr.resolution as Resolution | null,
+      });
+      byRun.set(rr.runId, list);
+    }
+    return byRun;
+  }
+
+  /** A child's derived outcome, through the one shared derivation — including whether the version
+   *  it replayed carries a repair nobody has accepted (`healed`). */
+  private outcomeOf(
+    row: {
+      runId: string;
+      status: string;
+      error: string | null;
+      versionRepairJobId: string | null;
+      versionReviewState: string | null;
+    },
+    checkpoints: Map<string, { reviewState: ReviewState; resolution: Resolution | null }[]>,
+  ): RunOutcome {
+    return deriveRunOutcome(checkpoints.get(row.runId) ?? [], {
+      status: row.status,
+      error: row.error,
+      repairApplied: isRepairInReview(row.versionRepairJobId, row.versionReviewState),
+    });
   }
 
   /** Batch-resolve environment ids → names (same pattern as the runs read-model). */

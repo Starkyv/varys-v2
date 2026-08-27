@@ -32,9 +32,11 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  *
  * Two things this suite exists to pin down, and they are both about what does NOT happen:
  *
- *  - **The run stays failed.** No amber outcome, no re-run, no green. `healed` arrives in slice 06
- *    behind slice 05's justification gate, so the state where a repair turns a run green with no
- *    guard in front of it never exists — not even mid-implementation.
+ *  - **The run stays failed.** A repair proposes; it does not reach back and recolour the run that
+ *    failed. Slice 06 adds a RE-RUN and the `healed` outcome on top of this — a NEW run against the
+ *    repaired definition — and it changes nothing here: the original failure is history and stays
+ *    red. (`healed` deliberately landed behind slice 05's justification gate, so the state where a
+ *    repair turns a run green with no guard in front of it never existed, not even mid-build.)
  *  - **A claim is not a licence.** The agent's tools reach the test of the job it holds and no
  *    other, and the reach ends the moment the claim does — reported, released or lapsed — even
  *    with a repair session still parked on the page.

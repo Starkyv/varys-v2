@@ -33,7 +33,7 @@ import type {
   StepRun,
   TuningInput,
 } from "@varys/review-contract";
-import { deriveRunOutcome } from "@varys/review-contract";
+import { deriveRunOutcome, isRepairInReview } from "@varys/review-contract";
 import { describeStep, type TestDefinition } from "@varys/step-schema";
 import type { StorageAdapter } from "@varys/storage-adapter";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
@@ -81,7 +81,9 @@ export class RunsService {
       trace?: boolean;
       /** Who triggered this run (email / sentinel) and how it was triggered. */
       triggeredBy?: string;
-      triggerSource?: "manual" | "suite" | "schedule" | "api";
+      /** `repair` is slice 06's re-run: queued by Varys itself the moment a repair passed the
+       *  justification gate, so it is neither a human's "manual" nor a cron's "schedule". */
+      triggerSource?: "manual" | "suite" | "schedule" | "api" | "repair";
     } = {},
   ): Promise<CreatedRun> {
     const [version] = await this.db
@@ -126,6 +128,11 @@ export class RunsService {
         testName: tests.name,
         repairPolicy: tests.repairPolicy,
         definition: testVersions.definition,
+        // The version this run REPLAYED — an unreviewed repair in it is what makes an otherwise
+        // green run `healed` (slice 06). Read from the run's own version, never the latest, or a
+        // later repair would retroactively recolour runs that never saw it.
+        versionRepairJobId: testVersions.repairJobId,
+        versionReviewState: testVersions.reviewState,
       })
       .from(runs)
       .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
@@ -281,7 +288,11 @@ export class RunsService {
       runId,
       status: row.status,
       // Derived display refinement — baseline-creation vs verification (see deriveRunOutcome).
-      outcome: deriveRunOutcome(checkpoints, { status: row.status, error: row.error }),
+      outcome: deriveRunOutcome(checkpoints, {
+        status: row.status,
+        error: row.error,
+        repairApplied: isRepairInReview(row.versionRepairJobId, row.versionReviewState),
+      }),
       testId: row.testId,
       testName: row.testName,
       environment,
@@ -347,6 +358,8 @@ export class RunsService {
         triggerSource: runs.triggerSource,
         testId: testVersions.testId,
         testName: tests.name,
+        versionRepairJobId: testVersions.repairJobId,
+        versionReviewState: testVersions.reviewState,
       })
       .from(runs)
       .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
@@ -397,7 +410,11 @@ export class RunsService {
         testName: r.testName,
         environment: r.environmentId ? (envNames.get(r.environmentId) ?? ENVIRONMENT) : ENVIRONMENT,
         status: r.status,
-        outcome: deriveRunOutcome(checkpointsByRun.get(r.runId) ?? [], { status: r.status, error: r.error }),
+        outcome: deriveRunOutcome(checkpointsByRun.get(r.runId) ?? [], {
+          status: r.status,
+          error: r.error,
+          repairApplied: isRepairInReview(r.versionRepairJobId, r.versionReviewState),
+        }),
         runTimestamp: r.createdAt.toISOString(),
         error: r.error,
         triggeredBy: r.triggeredBy,

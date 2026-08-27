@@ -34,6 +34,10 @@ const STATUS_LEGEND: InfoTipBlock[] = [
       [<StatusBadge key="p" status="passed" />, "Baseline matched — a real verification."],
       [<StatusBadge key="b" status="baseline" />, "Set or updated the golden baseline."],
       [<StatusBadge key="pb" status="pending-baseline" />, "First run, no baseline yet — awaiting approval."],
+      [
+        <StatusBadge key="h" status="healed" />,
+        "It verified — but on a repair nobody has accepted yet. Not a failure and not a pass: the repaired version is in the repair queue.",
+      ],
       [<StatusBadge key="reg" status="regression" />, "A baseline existed and the new capture differs — a visual change."],
       [<StatusBadge key="f" status="failed" />, "The test couldn’t run — an element wasn’t found, or the replay crashed."],
     ],
@@ -53,6 +57,8 @@ const SOURCE_LABEL: Record<string, string> = {
   schedule: "Scheduled",
   suite: "Suite",
   api: "API",
+  // Varys' own re-run of a repaired test — neither a person's nor a cron's.
+  repair: "Repair",
 };
 const sourceOf = (triggerSource: string | null): string => triggerSource ?? "manual";
 

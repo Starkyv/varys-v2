@@ -12,6 +12,7 @@ import { describeStep, type TestDefinition } from "@varys/step-schema";
 import { and, asc, desc, eq, gt, inArray, lt, lte, sql } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
 import { repairJobs, runs, tests, testVersions } from "../db/schema";
+import { RunsService } from "../runs/runs.service";
 import { CLOCK, type Clock } from "./clock";
 import { JUDGE_SOURCE, type JudgeSource } from "./judge";
 import { describeRepairChange } from "./repair-diff";
@@ -60,6 +61,8 @@ export class RepairJobsService {
     // The gate abandons a refused repair through the SAME revert a human Reject uses — one
     // implementation, so the more dangerous path is not a second, untested one.
     @Inject(RepairReviewsService) private readonly reviews: RepairReviewsService,
+    // The re-run a stood-up repair triggers (slice 06) goes through the ordinary single-run path.
+    @Inject(RunsService) private readonly runs: RunsService,
   ) {}
 
   /**
@@ -313,9 +316,9 @@ export class RepairJobsService {
    * account of what it did is stored beside the version for whoever reviews it.
    *
    * **The run stays failed.** Deliberately, and stated in the response rather than left to be
-   * inferred: no amber outcome, no re-run, no green. The `healed` outcome arrives in slice 06
-   * behind slice 05's justification gate, so the unsafe state — a repair turning a run green with
-   * no guard in front of it — never exists, not even mid-implementation.
+   * inferred: a repair does not reach back and recolour the run that failed. What it does do
+   * (slice 06) is trigger a RE-RUN — a new run against the repaired definition, which reads
+   * `healed` if it verifies. Amber, and still in the review queue: green is a human's decision.
    *
    * A report with nothing to show for it is REFUSED rather than recorded as a repair: a job
    * closed `done` with no version behind it is indistinguishable, later, from one that worked.
@@ -405,11 +408,13 @@ export class RepairJobsService {
 
     const [run] = job.runId
       ? await this.db
-          .select({ status: runs.status })
+          .select({ status: runs.status, environmentId: runs.environmentId })
           .from(runs)
           .where(eq(runs.id, job.runId))
           .limit(1)
       : [];
+
+    const rerunId = await this.triggerRerun(job, claimant, run?.environmentId ?? null);
 
     return {
       ok: true,
@@ -421,10 +426,53 @@ export class RepairJobsService {
       reviewState: "unreviewed",
       runId: job.runId,
       runStatus: run?.status ?? null,
+      rerunId,
       justification: claim,
       justificationReasoning: verdict.reasoning,
-      note: `v${version.version} of this test is saved as an UNREVIEWED version and is waiting for a human to accept or reject it. Run ${job.runId ?? "(purged)"} is still ${run?.status ?? "unchanged"} — a repair does not turn a run green. Report it as a proposed fix awaiting review, not as fixed.`,
+      note:
+        `v${version.version} of this test is saved as an UNREVIEWED version and is waiting for a human to accept or reject it. ` +
+        `Run ${job.runId ?? "(purged)"} is still ${run?.status ?? "unchanged"} — a repair does not turn a run green. ` +
+        (rerunId
+          ? `A re-run against the repaired definition has been queued (run ${rerunId}); if it verifies it will read HEALED, which is a review queue item, not a pass. `
+          : "The re-run could not be queued, so nothing is retried automatically. ") +
+        "Report it as a proposed fix awaiting review, not as fixed.",
     };
+  }
+
+  /**
+   * Queue a RE-RUN of the repaired test (Slice 19, slice 06) — the thing that turns "a fix was
+   * proposed" into evidence.
+   *
+   * It is a NEW run, not a resurrection of the one that failed: the original failure is a fact of
+   * history and stays `failed` forever. The re-run replays the test's latest definition, which is
+   * the repaired (still `unreviewed`) version — so if it verifies, it reads `healed` rather than
+   * `passed`, and stays that way until a human accepts the version.
+   *
+   * Same environment as the failed run, so it re-tests the break where the break happened.
+   *
+   * Best-effort, and quietly so: the repair has already passed the gate and stands. A queue that
+   * is down is a reason not to have evidence yet, not a reason to throw the repair away — the
+   * report says plainly that no re-run was queued, and a human can run it themselves.
+   */
+  private async triggerRerun(
+    job: { id: string; testId: string },
+    claimant: string,
+    environmentId: string | null,
+  ): Promise<string | null> {
+    try {
+      const { runId } = await this.runs.create(job.testId, {
+        environmentId: environmentId ?? undefined,
+        triggeredBy: claimant,
+        triggerSource: "repair",
+      });
+      this.log.log(`repair job ${job.id}: queued re-run ${runId} of test ${job.testId}`);
+      return runId;
+    } catch (err) {
+      this.log.error(
+        `repair job ${job.id}: could not queue a re-run of test ${job.testId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
   }
 
   /**

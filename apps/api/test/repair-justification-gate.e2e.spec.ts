@@ -206,13 +206,32 @@ describe("Every repair is gated on a brief-clause justification", () => {
   }
 
   /** The queue is project-wide and first-claim-wins, so a leftover job would make "which job did
-   *  I claim" a coin toss. */
-  async function emptyQueue(): Promise<void> {
+   *  I claim" a coin toss. `keep` is the one job this case is about. */
+  async function emptyQueue(keep?: string): Promise<void> {
     for (const job of await queue()) {
-      if (job.status === "queued") {
+      if (job.status === "queued" && job.id !== keep) {
         await authed(app).post(`/repair-jobs/${job.id}/cancel`).expect(200);
       }
     }
+  }
+
+  /**
+   * Wait until no run is in flight.
+   *
+   * Since slice 06 an ACCEPTED repair queues a re-run of the test it fixed, so a passing case
+   * leaves a run executing after its assertions are done. It replays the repaired definition
+   * against whatever variant the fixture is serving by the time it gets there — and the next case
+   * flips that variant — so left alone it can fail on a locator and enqueue a repair job of its
+   * own, which the drainer below would then claim instead of the one under test. Draining to quiet
+   * before touching the variant is what keeps each case's queue its own.
+   */
+  async function quiesce(): Promise<void> {
+    for (let i = 0; i < 300; i++) {
+      const rows = (await authed(app).get("/runs").expect(200)).body as { status: string }[];
+      if (!rows.some((r) => r.status === "queued" || r.status === "running")) return;
+      await sleep(200);
+    }
+    throw new Error("runs never settled");
   }
 
   /** A real queued job on a real break: pick the variant, and whether the test has a Brief. */
@@ -221,6 +240,7 @@ describe("Every repair is gated on a brief-clause justification", () => {
     variant: "locatorRepairBroken" | "locatorRepairDeleted",
     brief: string | null = BRIEF,
   ) {
+    await quiesce();
     fixture.setVariant(variant);
     await emptyQueue();
     const created = await authed(app).post("/tests").send(definitionClickingSave(name)).expect(201);
@@ -232,6 +252,9 @@ describe("Every repair is gated on a brief-clause justification", () => {
     const runId = await runToFailure(testId);
     const [job] = (await queue(true)).filter((j) => j.testId === testId);
     expect(job?.status).toBe("queued");
+    // Anything else that reached the queue while this case was setting up goes now, so
+    // `claim_repair_job` below can only return the job this case is about.
+    await emptyQueue(job.id);
     judgeCalls = [];
     return { testId, runId, jobId: job.id };
   }
@@ -265,9 +288,12 @@ describe("Every repair is gated on a brief-clause justification", () => {
 
   /** Claim, diagnose, re-pin to `newTestId`, and write it — everything up to (not including) the
    *  report, which is what each scenario below varies. */
-  async function repairUpTo(newTestId: string): Promise<ClaimedRepairJob> {
+  async function repairUpTo(newTestId: string, expectedJobId?: string): Promise<ClaimedRepairJob> {
     const claimed = (await ok("claim_repair_job")).job as ClaimedRepairJob | null;
     if (!claimed) throw new Error("expected a claimable job");
+    // Claiming somebody else's job would make every assertion below meaningless in a way that is
+    // very hard to read from the eventual failure — so say it here instead.
+    if (expectedJobId) expect(claimed.jobId).toBe(expectedJobId);
     const session = await ok("open_repair_session", { runId: claimed.runId });
     const sessionId = String(session.sessionId);
     const tried = await ok("try_locator", { sessionId, testId: newTestId });
@@ -285,7 +311,7 @@ describe("Every repair is gated on a brief-clause justification", () => {
   it("refuses a repair with no brief-clause justification, without abandoning it", async () => {
     judgeMode = "pass";
     const { testId, jobId } = await queuedJob("no justification", "locatorRepairBroken");
-    await repairUpTo("commit-btn");
+    await repairUpTo("commit-btn", jobId);
 
     const refused = await call("report_repair", { jobId, summary: "re-pinned the click" });
     expect(refused.isError).toBe(true);
@@ -309,7 +335,7 @@ describe("Every repair is gated on a brief-clause justification", () => {
   it("validates the justification against the Brief and the actual before/after signals", async () => {
     judgeMode = "pass";
     const { jobId } = await queuedJob("judged evidence", "locatorRepairBroken");
-    await repairUpTo("commit-btn");
+    await repairUpTo("commit-btn", jobId);
     await ok("report_repair", {
       jobId,
       summary: "re-pinned the click",
@@ -333,7 +359,7 @@ describe("Every repair is gated on a brief-clause justification", () => {
   it("stores an accepted justification on the version and shows it beside the brief", async () => {
     judgeMode = "pass";
     const { testId, jobId } = await queuedJob("accepted justification", "locatorRepairBroken");
-    await repairUpTo("commit-btn");
+    await repairUpTo("commit-btn", jobId);
     const reported = await ok("report_repair", {
       jobId,
       summary: "re-pinned the click to the Commit changes button",
@@ -362,7 +388,7 @@ describe("Every repair is gated on a brief-clause justification", () => {
     // plausible "Refresh" button that took its place.
     const { testId, runId, jobId } = await queuedJob("wrong control", "locatorRepairDeleted");
     const before = await versions(testId);
-    await repairUpTo("refresh-btn");
+    await repairUpTo("refresh-btn", jobId);
 
     const refused = await call("report_repair", {
       jobId,
@@ -395,7 +421,7 @@ describe("Every repair is gated on a brief-clause justification", () => {
     judgeMode = "throw";
     const { testId, runId, jobId } = await queuedJob("judge down", "locatorRepairBroken");
     const before = await versions(testId);
-    await repairUpTo("commit-btn");
+    await repairUpTo("commit-btn", jobId);
 
     const refused = await call("report_repair", {
       jobId,
@@ -424,7 +450,7 @@ describe("Every repair is gated on a brief-clause justification", () => {
     judgeMode = "pass";
     const { testId, runId, jobId } = await queuedJob("no brief", "locatorRepairBroken", null);
     const before = await versions(testId);
-    await repairUpTo("commit-btn");
+    await repairUpTo("commit-btn", jobId);
 
     const refused = await call("report_repair", {
       jobId,
@@ -446,7 +472,7 @@ describe("Every repair is gated on a brief-clause justification", () => {
     judgeMode = "absent";
     const { testId, jobId } = await queuedJob("no judge", "locatorRepairBroken");
     const before = await versions(testId);
-    await repairUpTo("commit-btn");
+    await repairUpTo("commit-btn", jobId);
 
     const refused = await call("report_repair", {
       jobId,

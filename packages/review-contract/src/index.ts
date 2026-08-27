@@ -176,6 +176,11 @@ export interface ReportedRepair {
   /** The originating run and the status it still has: untouched by the repair. */
   runId: string | null;
   runStatus: string | null;
+  /** The RE-RUN this repair triggered (Slice 19, slice 06) — a fresh run of the test against the
+   *  repaired definition, queued the moment the justification gate let the repair stand. It is a
+   *  new run, not a resurrection of `runId`: the failure that started this is history. Null when
+   *  the re-run could not be queued (the repair still stands; nothing is retried automatically). */
+  rerunId: string | null;
   /** The brief-clause justification the gate accepted, and the judge's one-line reasoning
    *  (Slice 19, slice 05). A repair only reaches this payload by passing that gate. */
   justification: string;
@@ -223,6 +228,13 @@ export interface RepairReviewItem {
   /** True while this is still the test's LATEST version — i.e. the definition runs use. A
    *  later edit having landed on top is why an accept is not automatically "this is live". */
   isActiveDefinition: boolean;
+  /** The most recent run of this exact version — the re-run the repair triggered (Slice 19,
+   *  slice 06) — and its derived outcome. `healed` is the answer a reviewer is looking for: the
+   *  repair was exercised and everything verified. `regression`/`failed` say the repair did not
+   *  actually fix it, and `queued`/`running` that the re-run is still going. Null until the
+   *  re-run exists (or for a version written before re-runs did). */
+  rerunRunId: string | null;
+  rerunOutcome: RunOutcome | null;
 }
 
 /** The outcome of accepting or rejecting a repaired version. */
@@ -1129,6 +1141,11 @@ export interface SuiteRunCounts {
   passed: number;
   needsReview: number;
   failed: number;
+  /** Children that read `healed` — they verified, but on a repair nobody has accepted yet
+   *  (Slice 19, slice 06). They are a SUBSET of `passed`, not a sibling of it: a healed run does
+   *  not fail the suite, so the aggregate still reports passing and this is the count that tells
+   *  you how much of that pass is resting on unreviewed repairs. */
+  healed: number;
 }
 
 /**
@@ -1305,6 +1322,7 @@ export type RunOutcome =
   | "passed" // had a baseline and the capture matched — a real verification pass
   | "baseline" // this run set or updated the golden baseline (first approval or "set as baseline")
   | "pending-baseline" // first run — no baseline yet, awaiting approval (NOT a failure)
+  | "healed" // it verified, but only because an UNACCEPTED repair is in the definition it replayed
   | "regression" // a baseline existed but the capture differs — a visual difference (incl. a rejected diff)
   | "failed"; // the replay crashed or an element couldn't be located — an execution failure
 
@@ -1312,6 +1330,36 @@ export type RunOutcome =
 export interface RunOutcomeCheckpoint {
   reviewState: ReviewState;
   resolution: Resolution | null;
+}
+
+/** The minimal per-run shape {@link deriveRunOutcome} reads. */
+export interface RunOutcomeRun {
+  status: string;
+  error?: string | null;
+  /** True when the DEFINITION this run replayed contains a repair no human has accepted yet —
+   *  i.e. the run's test version was written by a Repair Agent and is still `unreviewed`
+   *  (Slice 19, slice 06). It is the one input that is NOT derivable from the checkpoints: a
+   *  clean re-run after a repair looks identical to any other clean run, and the difference —
+   *  that its greenness rests on an unreviewed edit — is a property of the version, not of a
+   *  pixel comparison. Derive it with {@link isRepairInReview}. */
+  repairApplied?: boolean;
+}
+
+/**
+ * Does this test version carry a repair that is still waiting on a human? The single definition
+ * of {@link RunOutcomeRun.repairApplied}, so every surface asks it the same way.
+ *
+ * `unreviewed` is the only state that counts. An `accepted` repair has been signed off, so runs
+ * against it are ordinary passes again — `healed` is a review-queue marker, not a permanent scar
+ * on the test's history. A `rejected` one never stood at all.
+ */
+export function isRepairInReview(
+  /** `test_versions.repair_job_id` of the version the run replayed. */
+  repairJobId: string | null,
+  /** `test_versions.review_state` of that same version. */
+  reviewState: string | null,
+): boolean {
+  return repairJobId != null && reviewState === "unreviewed";
 }
 
 /**
@@ -1322,18 +1370,27 @@ export interface RunOutcomeCheckpoint {
  * Precedence, top → down:
  *  1. queued / running                  → unchanged
  *  2. execution error                   → `failed`  (a crash)
- *  3. any unaccepted `diff` (or legacy `rejected`) → `failed`  (a baseline existed and changed)
+ *  3. any unaccepted `diff` (or legacy `rejected`) → `regression`  (a baseline existed and changed)
  *  4. any unresolved first-capture seed → `pending-baseline`  (no baseline yet — awaiting approval)
- *  5. any checkpoint set as baseline    → `baseline`
- *  6. otherwise (all matched)           → `passed`
+ *  5. nothing was actually verified     → `failed`  (it captured nothing to compare)
+ *  6. an unaccepted repair is in play   → `healed`  (it verified, but on an unreviewed repair)
+ *  7. any checkpoint set as baseline    → `baseline`
+ *  8. otherwise (all matched)           → `passed`
  *
  * A diff outranks a pending seed: a real failure against an established baseline is more urgent than
  * approving a brand-new checkpoint. A `resolution="approved"` checkpoint was promoted to the
  * baseline (seed approval, accepted diff, or a re-baselined pass) — a baseline write.
+ *
+ * `healed` sits BELOW `regression` and `failed` and ABOVE `baseline`/`passed`, and both halves of
+ * that matter. Below, because a re-pinned locator must never soften a real visual break: if the
+ * pixels also moved, `regression` stays the headline and the repair is beside the point. Above,
+ * because a repair nobody has accepted is the most interesting thing about an otherwise-green run
+ * — collapsing it into `passed` is exactly the silent pass the whole slice exists to prevent.
+ * Operationally `healed` is a queue item, not an alarm: same weight class as `pending-baseline`.
  */
 export function deriveRunOutcome(
   checkpoints: readonly RunOutcomeCheckpoint[],
-  run: { status: string; error?: string | null },
+  run: RunOutcomeRun,
 ): RunOutcome {
   if (run.status === "queued" || run.status === "running") return run.status;
   if (run.status === "cancelled") return "cancelled";
@@ -1354,11 +1411,13 @@ export function deriveRunOutcome(
 
   if (failing) return "regression"; // a visual difference (changed baseline or rejected diff) outranks the rest
   if (pendingSeed) return "pending-baseline"; // first run awaiting approval (not a failure)
-  if (baselineWrite) return "baseline"; // a golden was set/updated, nothing failing
-  if (matched) return "passed";
   // No checkpoints (or all neutral) — mirror the stored status. A non-passing run here is
-  // an execution failure (it captured nothing to compare), so `failed`, not `regression`.
-  return run.status === "passed" ? "passed" : "failed";
+  // an execution failure (it captured nothing to compare), so `failed`, not `regression`. Checked
+  // BEFORE `healed`, so a repair can never dress an execution failure up as an amber queue item.
+  if (!matched && !baselineWrite && run.status !== "passed") return "failed";
+  if (run.repairApplied) return "healed"; // green, but resting on a repair nobody has accepted
+  if (baselineWrite) return "baseline"; // a golden was set/updated, nothing failing
+  return "passed";
 }
 
 /**
@@ -1401,6 +1460,7 @@ export type MatrixCellStatus =
   | "passed"
   | "baseline"
   | "pending-baseline"
+  | "healed"
   | "regression"
   | "failed"
   | "running"

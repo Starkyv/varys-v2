@@ -1,9 +1,16 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException, Logger } from "@nestjs/common";
-import type { RepairReviewDecision, RepairReviewItem } from "@varys/review-contract";
+import type {
+  RepairReviewDecision,
+  RepairReviewItem,
+  Resolution,
+  ReviewState,
+  RunOutcome,
+} from "@varys/review-contract";
+import { deriveRunOutcome } from "@varys/review-contract";
 import type { Step, TestDefinition } from "@varys/step-schema";
 import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
-import { baselines, repairJobs, tests, testVersions } from "../db/schema";
+import { baselines, repairJobs, runResults, runs, tests, testVersions } from "../db/schema";
 import { CLOCK, type Clock } from "./clock";
 
 /**
@@ -62,6 +69,10 @@ export class RepairReviewsService {
       .where(eq(testVersions.reviewState, "unreviewed"))
       .orderBy(desc(testVersions.createdAt));
 
+    // The re-run each repair triggered (slice 06). It is found by the VERSION it replayed, not by
+    // a link on the run: a run of this exact version IS a run of this repair, whoever started it.
+    const rerunByVersion = await this.rerunOutcomes(rows.map((r) => r.versionId));
+
     return rows.map((r) => ({
       versionId: r.versionId,
       testId: r.testId,
@@ -77,7 +88,69 @@ export class RepairReviewsService {
       justification: r.justification ?? null,
       justificationReasoning: r.justificationReasoning ?? null,
       isActiveDefinition: Number(r.latestVersion) === r.version,
+      rerunRunId: rerunByVersion.get(r.versionId)?.runId ?? null,
+      rerunOutcome: rerunByVersion.get(r.versionId)?.outcome ?? null,
     }));
+  }
+
+  /**
+   * The latest run of each given version, with its derived outcome — the evidence a reviewer
+   * weighs beside the justification. A repair that verified reads `healed`; one whose re-run
+   * failed or regressed says so, which is the more valuable of the two answers.
+   */
+  private async rerunOutcomes(
+    versionIds: string[],
+  ): Promise<Map<string, { runId: string; outcome: RunOutcome }>> {
+    const byVersion = new Map<string, { runId: string; outcome: RunOutcome }>();
+    if (versionIds.length === 0) return byVersion;
+    const runRows = await this.db
+      .select({
+        runId: runs.id,
+        versionId: runs.testVersionId,
+        status: runs.status,
+        error: runs.error,
+        createdAt: runs.createdAt,
+      })
+      .from(runs)
+      .where(inArray(runs.testVersionId, versionIds))
+      .orderBy(desc(runs.createdAt));
+
+    // Latest run per version — the ordering above means the first one wins.
+    const latest = new Map<string, (typeof runRows)[number]>();
+    for (const r of runRows) if (!latest.has(r.versionId)) latest.set(r.versionId, r);
+    if (latest.size === 0) return byVersion;
+
+    const checkpoints = new Map<string, { reviewState: ReviewState; resolution: Resolution | null }[]>();
+    const resultRows = await this.db
+      .select({
+        runId: runResults.runId,
+        reviewState: runResults.reviewState,
+        resolution: runResults.resolution,
+      })
+      .from(runResults)
+      .where(inArray(runResults.runId, [...latest.values()].map((r) => r.runId)));
+    for (const rr of resultRows) {
+      const list = checkpoints.get(rr.runId) ?? [];
+      list.push({
+        reviewState: rr.reviewState as ReviewState,
+        resolution: rr.resolution as Resolution | null,
+      });
+      checkpoints.set(rr.runId, list);
+    }
+
+    for (const [versionId, run] of latest) {
+      byVersion.set(versionId, {
+        runId: run.runId,
+        // These versions are all `unreviewed` repairs by definition of the query above, so the
+        // repair flag is unconditionally true here.
+        outcome: deriveRunOutcome(checkpoints.get(run.runId) ?? [], {
+          status: run.status,
+          error: run.error,
+          repairApplied: true,
+        }),
+      });
+    }
+    return byVersion;
   }
 
   /**

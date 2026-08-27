@@ -4,6 +4,8 @@ import { relativeTime } from "../../../../lib/format";
 import { StatusBadge } from "../../../../lib/status";
 import styles from "./styles.module.scss";
 
+/** `healed` is deliberately NOT a segment: healed children are already inside `passed`, so
+ *  drawing it would over-count the bar. It rides along as a caption instead. */
 const SEGMENTS: { key: keyof SuiteRunSummary["counts"]; color: string }[] = [
   { key: "passed", color: "var(--color-success)" },
   { key: "needsReview", color: "var(--color-warning)" },
@@ -41,7 +43,8 @@ export function SuiteRunRow({
       <div className={styles.meta}>
         <span className={styles.envs}>{run.environments.join(" · ")}</span>
         <span>
-          {counts.total} runs · {relativeTime(run.runTimestamp)}
+          {counts.total} runs
+          {counts.healed > 0 && ` · ${counts.healed} healed`} · {relativeTime(run.runTimestamp)}
         </span>
       </div>
     </button>

@@ -112,7 +112,7 @@ independent of the queue and can run in parallel with all of it.
 | 03 | [Claim a job under a lease](heal-03-claim-under-lease.md) | AFK | ready-for-agent | 01, 02 |
 | 04 | [Repair round trip → unreviewed version](heal-04-repair-round-trip-unreviewed.md) | AFK | in-review | 03 |
 | 05 | [Brief-justification gate](heal-05-brief-justification-gate.md) | HITL | in-review (rubric wording + 00 gate GA) | 04 |
-| 06 | [`healed` outcome + re-run + digest](heal-06-healed-outcome-rerun.md) | AFK | ready-for-agent | 05 |
+| 06 | [`healed` outcome + re-run + digest](heal-06-healed-outcome-rerun.md) | AFK | in-review | 05 |
 | 07 | [Failure clustering + circuit breaker](heal-07-clustering-circuit-breaker.md) | AFK | ready-for-agent | 01 |
 | 08 | [Triage jobs (read-only diagnosis)](heal-08-triage-jobs.md) | AFK | ready-for-agent | 03 |
 | 09 | [`@varys/assertion-engine` + replay evaluation](heal-09-assertion-engine-replay.md) | AFK | ready-for-agent | — |

@@ -16,6 +16,7 @@ import { useConfirm } from "../../context/confirm";
 import { useRouter } from "../../context/router";
 import { useToast } from "../../context/toast";
 import { relativeTime } from "../../lib/format";
+import { StatusBadge } from "../../lib/status";
 import {
   useCancelRepairJob,
   useDecideRepairReview,
@@ -104,6 +105,10 @@ function RepairReviews() {
 
   const items = reviews.data ?? [];
   if (items.length === 0) return null;
+  // How many of these have already been re-run and came back clean. It is the difference between
+  // "N repairs to read" and "N repairs, and this many have already proved themselves" — which is
+  // the whole reason the re-run exists.
+  const healed = items.filter((i) => i.rerunOutcome === "healed").length;
 
   async function onDecide(item: RepairReviewItem, action: "accept" | "reject") {
     if (action === "reject") {
@@ -129,6 +134,7 @@ function RepairReviews() {
         <h3 className={styles.title}>Repaired versions awaiting review</h3>
         <span className={styles.count}>
           {items.length} version{items.length === 1 ? "" : "s"}
+          {healed > 0 && ` · ${healed} healed`}
         </span>
       </header>
       <div className={styles.notice}>
@@ -174,6 +180,23 @@ function RepairReviews() {
               >
                 the run that broke — still failed
               </button>
+            )}
+            {/* The re-run: the only evidence here that isn't the agent's own account of itself.
+                `healed` means it was exercised and everything verified; anything else means the
+                repair did not actually fix it, which is the more useful of the two answers. */}
+            {item.rerunRunId && item.rerunOutcome && (
+              <div className={styles.rerun}>
+                <StatusBadge status={item.rerunOutcome} size="sm" />
+                <button
+                  type="button"
+                  className={styles.runLink}
+                  onClick={() => navigate({ name: "runDetail", runId: item.rerunRunId as string })}
+                >
+                  {item.rerunOutcome === "healed"
+                    ? "the re-run against this version — everything verified"
+                    : "the re-run against this version"}
+                </button>
+              </div>
             )}
           </div>
           <div className={styles.reviewActions}>

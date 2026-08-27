@@ -8,6 +8,7 @@ import {
   tests,
   testVersions,
 } from "@varys/db";
+import { deriveRunOutcome, isRepairInReview } from "@varys/review-contract";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 
 /**
@@ -193,9 +194,15 @@ export async function uploadSlackFile(
   }
 }
 
-/** Emoji + human label for a coarse run/suite status. */
+/** Emoji + human label for a coarse run/suite status — or, for a run, its derived outcome when
+ *  that outcome is `healed` (Slice 19, slice 06). */
 function statusFace(status: string): { emoji: string; label: string; tone: Tone } {
   switch (status) {
+    // A repair was applied and the re-run verified. Deliberately NOT ❌ and not ✅: it is a
+    // digest line — "here is something to review" — in the same weight class as needs-review,
+    // never a page. Whoever is on call must not be woken by a test that fixed itself.
+    case "healed":
+      return { emoji: "🩹", label: "HEALED", tone: "review" };
     case "passed":
       return { emoji: "✅", label: "PASSED", tone: "pass" };
     case "needs_review":
@@ -345,6 +352,9 @@ export async function notifyRunComplete(
       createdAt: runs.createdAt,
       updatedAt: runs.updatedAt,
       testName: tests.name,
+      // The version this run replayed — an unaccepted repair in it makes the run `healed`.
+      versionRepairJobId: testVersions.repairJobId,
+      versionReviewState: testVersions.reviewState,
     })
     .from(runs)
     .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
@@ -362,7 +372,12 @@ export async function notifyRunComplete(
 
   const environment = await environmentName(db, run.environmentId);
   const checkpoints = await db
-    .select({ name: runResults.checkpointName, reviewState: runResults.reviewState, diffScore: runResults.diffScore })
+    .select({
+      name: runResults.checkpointName,
+      reviewState: runResults.reviewState,
+      resolution: runResults.resolution,
+      diffScore: runResults.diffScore,
+    })
     .from(runResults)
     .where(eq(runResults.runId, runId));
   const passed = checkpoints.filter((c) => c.reviewState === "passed").length;
@@ -370,17 +385,36 @@ export async function notifyRunComplete(
   const scores = checkpoints.map((c) => c.diffScore).filter((s): s is number => s != null);
   const avgMismatch = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
   const durationMs = (run.updatedAt ?? run.createdAt).getTime() - run.createdAt.getTime();
-  const face = statusFace(run.status);
+
+  // The message is faced by the DERIVED outcome when that outcome is `healed`, and by the coarse
+  // status otherwise. Only `healed` is lifted, because it is the one outcome whose meaning the
+  // coarse status actively misreports: the run is stored `passed`, and posting ✅ PASSED for a
+  // test running on a repair nobody has accepted is the silent pass this whole slice exists to
+  // prevent. The rest of the outcome vocabulary refines what `passed`/`failed` already say
+  // truthfully, and is left to the app.
+  const outcome = deriveRunOutcome(
+    checkpoints.map((c) => ({
+      reviewState: c.reviewState as "pending-baseline" | "diff" | "passed",
+      resolution: c.resolution as "approved" | "rejected" | null,
+    })),
+    { status: run.status, error: run.error, repairApplied: isRepairInReview(run.versionRepairJobId, run.versionReviewState) },
+  );
+  const healed = outcome === "healed";
+  const face = statusFace(healed ? "healed" : run.status);
 
   const trigger = run.triggerSource === "schedule" ? " · scheduled" : "";
   const headline = `${face.emoji} ${esc(run.testName)} · ${esc(environment)} · ${face.label}${trigger}`;
-  const detail =
-    run.status === "failed" && run.error
+  const detail = healed
+    ? `A repair was applied and this re-run verified clean — ${passed}/${checkpoints.length} checkpoint${checkpoints.length === 1 ? "" : "s"} passed · ${humanDuration(durationMs)}.\n` +
+      "Nothing is broken and nothing is blocked: the repaired version is waiting for someone to accept or reject it."
+    : run.status === "failed" && run.error
       ? `Run failed: ${esc(run.error.slice(0, 300))}`
       : `${passed}/${checkpoints.length} checkpoint${checkpoints.length === 1 ? "" : "s"} passed` +
         (review > 0 ? ` · ${review} need review` : "") +
         ` · ${humanDuration(durationMs)}`;
-  const viewRun = link(cfg.baseUrl, `?run=${encodeURIComponent(runId)}`, "View run");
+  const viewRun = healed
+    ? `${link(cfg.baseUrl, `?run=${encodeURIComponent(runId)}`, "View run")} · ${link(cfg.baseUrl, "?view=repair-queue", "Review the repair")}`
+    : link(cfg.baseUrl, `?run=${encodeURIComponent(runId)}`, "View run");
   const message: SlackMessage = {
     text: `${face.emoji} ${run.testName} · ${environment} · ${face.label}`,
     blocks: [

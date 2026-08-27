@@ -7,6 +7,7 @@ import {
   Eye,
   Layers,
   Spinner,
+  Sparkles,
   X,
   type Intent,
 } from "@varys/ui";
@@ -14,7 +15,7 @@ import type { ReactNode } from "react";
 
 /**
  * The Varys status vocabulary → visual mapping. One source of truth for the derived run
- * outcome (`passed | baseline | pending-baseline | regression | failed`), the stored run status
+ * outcome (`passed | baseline | pending-baseline | healed | regression | failed`), the stored run status
  * (`queued | running | passed | needs_review | failed`), and the checkpoint review state
  * (`pending-baseline | diff | passed`) — so a status looks identical in the dashboard, the
  * runs table, the review queue and the diff viewer.
@@ -25,6 +26,7 @@ export type StatusKey =
   | "needs_review"
   | "diff"
   | "pending-baseline"
+  | "healed"
   | "regression"
   | "failed"
   | "queued"
@@ -44,6 +46,10 @@ const META: Record<StatusKey, StatusMeta> = {
   diff: { tone: "warning", label: "Diff" },
   // Awaiting your approval (amber) — distinct from an established `baseline` (info/blue).
   "pending-baseline": { tone: "warning", label: "Pending baseline" },
+  // It verified — but on a repair nobody has accepted yet. Amber like `pending-baseline` because
+  // it is the same kind of thing (a queue item, not an alarm), and distinct from it by glyph and
+  // label because what is queued is completely different: a repaired version, not a first capture.
+  healed: { tone: "warning", label: "Healed" },
   // Both red. `regression` = a baseline existed and the capture differs (a visual change);
   // `failed` = the replay couldn't run (element not found / crash).
   regression: { tone: "danger", label: "Regression" },
@@ -79,6 +85,10 @@ export function StatusIcon({ status, size = "1em" }: { status: string; size?: nu
       return <Eye size={size} />;
     case "pending-baseline":
       return <Layers size={size} />;
+    case "healed":
+      // The repair-agent glyph, so an amber "something fixed itself" is legible at a glance and
+      // never mistaken for an unapproved baseline.
+      return <Sparkles size={size} />;
     case "regression":
       // A visual difference (red) — distinct from a hard execution failure's ✕.
       return <AlertTriangle size={size} />;

@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@varys/db": "workspace:*",
+    "@varys/review-contract": "workspace:*",
     "drizzle-orm": "^0.39.1"
   },
   "devDependencies": {

@@ -133,6 +133,18 @@
   }
 }
 
+/* The re-run's verdict badge sits inline with its link — one line, not two stacked rows. */
+.rerun {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  margin-top: var(--space-6);
+
+  .runLink {
+    margin-top: 0;
+  }
+}
+
 .cluster {
   font-family: var(--font-mono);
   font-size: var(--font-size-xs);
