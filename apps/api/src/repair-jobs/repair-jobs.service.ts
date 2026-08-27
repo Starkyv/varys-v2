@@ -1,4 +1,5 @@
-import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { judgeRepairJustification, type JudgeProvider, type JudgeResult } from "@varys/judge-engine";
 import { deriveClusterKey } from "@varys/repair-policy";
 import type {
   ClaimedRepairJob,
@@ -12,6 +13,9 @@ import { and, asc, desc, eq, gt, inArray, lt, lte, sql } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
 import { repairJobs, runs, tests, testVersions } from "../db/schema";
 import { CLOCK, type Clock } from "./clock";
+import { JUDGE_SOURCE, type JudgeSource } from "./judge";
+import { describeRepairChange } from "./repair-diff";
+import { RepairReviewsService } from "./repair-reviews.service";
 
 /** Statuses the queue view shows by default — the work that is still outstanding. */
 const OPEN_STATUSES = ["queued", "claimed"] as const;
@@ -47,9 +51,15 @@ const ATTEMPT_CAP = 3;
  */
 @Injectable()
 export class RepairJobsService {
+  private readonly log = new Logger(RepairJobsService.name);
+
   constructor(
     @Inject(DB) private readonly db: Db,
     @Inject(CLOCK) private readonly clock: Clock,
+    @Inject(JUDGE_SOURCE) private readonly judgeSource: JudgeSource,
+    // The gate abandons a refused repair through the SAME revert a human Reject uses — one
+    // implementation, so the more dangerous path is not a second, untested one.
+    @Inject(RepairReviewsService) private readonly reviews: RepairReviewsService,
   ) {}
 
   /**
@@ -311,11 +321,25 @@ export class RepairJobsService {
    * closed `done` with no version behind it is indistinguishable, later, from one that worked.
    * That drainer wanted `release_repair_job`.
    */
-  async reportRepair(claimant: string, jobId: string, summary: string): Promise<ReportedRepair> {
+  async reportRepair(
+    claimant: string,
+    jobId: string,
+    summary: string,
+    justification: string,
+  ): Promise<ReportedRepair> {
     const note = summary.trim();
     if (!note) {
       throw new BadRequestException(
         "say what you changed — the summary is what a reviewer reads beside the version",
+      );
+    }
+    const claim = justification.trim();
+    if (!claim) {
+      // Refused BEFORE anything else, and refused WITHOUT abandoning the repair: an agent that
+      // simply forgot to make the argument can make it and report again, which is a different
+      // situation from one whose argument was heard and rejected.
+      throw new BadRequestException(
+        "a repair needs a justification: name the clause of this test's Brief that the element you re-pinned to satisfies, and say why it is the SAME control the step was always exercising. A repair you cannot justify against the Brief is not reported — release the job instead.",
       );
     }
     const [job] = await this.db
@@ -324,6 +348,7 @@ export class RepairJobsService {
         testId: repairJobs.testId,
         runId: repairJobs.runId,
         kind: repairJobs.kind,
+        attempts: repairJobs.attempts,
       })
       .from(repairJobs)
       .where(
@@ -343,19 +368,26 @@ export class RepairJobsService {
       throw new BadRequestException(`job ${jobId} is a ${job.kind} job, which changes no test`);
     }
 
-    const [version] = await this.db
-      .select({ id: testVersions.id, version: testVersions.version })
+    // EVERY version this claim wrote, oldest first. `apply_fix` and `edit_test` each append one,
+    // so a job can have more than one behind it — and abandoning the repair has to undo all of
+    // them, or "the test is unchanged" would not be true.
+    const written = await this.db
+      .select({
+        id: testVersions.id,
+        version: testVersions.version,
+        definition: testVersions.definition,
+      })
       .from(testVersions)
-      .where(
-        and(eq(testVersions.repairJobId, jobId), eq(testVersions.reviewState, "unreviewed")),
-      )
-      .orderBy(desc(testVersions.version))
-      .limit(1);
+      .where(and(eq(testVersions.repairJobId, jobId), eq(testVersions.reviewState, "unreviewed")))
+      .orderBy(asc(testVersions.version));
+    const version = written[written.length - 1];
     if (!version) {
       throw new BadRequestException(
         `Nothing was written for job ${jobId}, so there is no repair to report. Apply the fix first (apply_fix, or edit_test), or release the job if you cannot fix it.`,
       );
     }
+
+    const verdict = await this.judgeJustification(job, written, note, claim);
 
     const now = this.clock.now();
     await this.db
@@ -364,6 +396,12 @@ export class RepairJobsService {
       // The status is what ends the claim, and `hasClaimOn` reads the status.
       .set({ status: "done", report: note, updatedAt: now })
       .where(eq(repairJobs.id, jobId));
+    // Stored on the VERSION, not the job: the justification is what a reviewer weighs against the
+    // Brief, so it has to sit beside the version it justifies for as long as that version exists.
+    await this.db
+      .update(testVersions)
+      .set({ justification: claim, justificationReasoning: verdict.reasoning })
+      .where(eq(testVersions.id, version.id));
 
     const [run] = job.runId
       ? await this.db
@@ -383,8 +421,134 @@ export class RepairJobsService {
       reviewState: "unreviewed",
       runId: job.runId,
       runStatus: run?.status ?? null,
+      justification: claim,
+      justificationReasoning: verdict.reasoning,
       note: `v${version.version} of this test is saved as an UNREVIEWED version and is waiting for a human to accept or reject it. Run ${job.runId ?? "(purged)"} is still ${run?.status ?? "unchanged"} — a repair does not turn a run green. Report it as a proposed fix awaiting review, not as fixed.`,
     };
+  }
+
+  /**
+   * The brief-justification gate (Slice 19, slice 05).
+   *
+   * Runs BEFORE the repair is allowed to stand, and fails CLOSED in every direction: a refused
+   * justification, a judge that throws, and a deployment with no judge configured all abandon the
+   * repair — the test goes back to what it said before, and the run stays `failed`. The only path
+   * that leaves the repaired version in place is an explicit `pass`.
+   *
+   * The abandonment paths differ only in what becomes of the JOB, and deliberately:
+   *
+   *  - a **refused** justification is a verdict about this repair, so the job ends terminally.
+   *    Returning it to the queue would invite the next drainer to re-pin to the same
+   *    plausible-but-wrong control and be refused again — a treadmill, not a backlog.
+   *  - a judge that is **broken or absent** says nothing about the repair, so the job goes back to
+   *    the queue with one attempt spent. Burning jobs permanently because an API key expired would
+   *    quietly empty the queue during an outage.
+   */
+  private async judgeJustification(
+    job: { id: string; testId: string; runId: string | null },
+    written: Array<{ id: string; version: number; definition: unknown }>,
+    summary: string,
+    justification: string,
+  ): Promise<JudgeResult> {
+    const [test] = await this.db
+      .select({ name: tests.name, brief: tests.intent })
+      .from(tests)
+      .where(eq(tests.id, job.testId))
+      .limit(1);
+
+    const abandon = async (reason: string, jobSet: Record<string, unknown>): Promise<never> => {
+      const { previousVersion, revertedToVersion } = await this.reviews.revertRepair({
+        testId: job.testId,
+        versionIds: written.map((w) => w.id),
+        revertBefore: written[0].version,
+        actor: "justification gate",
+        because: reason,
+        jobUpdate: { id: job.id, set: jobSet },
+      });
+      this.log.warn(
+        `repair for job ${job.id} ABANDONED (${reason}): test ${job.testId} reverted to v${previousVersion}'s definition as v${revertedToVersion}`,
+      );
+      throw new BadRequestException(
+        `The repair was NOT applied: ${reason}. The test has been reverted to what v${previousVersion} said (written as v${revertedToVersion}), and the run is still failed. Do not report this as fixed.`,
+      );
+    };
+
+    if (!test?.brief?.trim()) {
+      // Nothing to justify against, so nothing can be checked — and an unchecked repair is exactly
+      // what this gate exists to prevent. Refused rather than waved through, and said plainly
+      // enough that the remedy (give the test a Brief) is obvious.
+      await abandon(
+        "this test has no Brief, so there is no clause to justify a repair against — give the test a Brief before it can be repaired automatically",
+        { status: "failed" },
+      );
+    }
+
+    const judge = await this.judgeSource.resolve();
+    if (!judge) {
+      await abandon(
+        "no judge is configured, so the justification could not be validated — and an unvalidated repair is never applied",
+        this.giveBack(this.clock.now()),
+      );
+    }
+
+    const [previousDefinition] = await this.db
+      .select({ definition: testVersions.definition })
+      .from(testVersions)
+      .where(and(eq(testVersions.testId, job.testId), lt(testVersions.version, written[0].version)))
+      .orderBy(desc(testVersions.version))
+      .limit(1);
+    const failing = await this.failingStepOf(job.runId);
+
+    let verdict: JudgeResult;
+    try {
+      verdict = await judgeRepairJustification(judge as JudgeProvider, {
+        testName: test?.name ?? "(unknown test)",
+        brief: test?.brief ?? null,
+        failingStep: failing.label,
+        runError: failing.error,
+        change: describeRepairChange(
+          previousDefinition?.definition as TestDefinition | undefined,
+          written[written.length - 1].definition as TestDefinition,
+        ),
+        summary,
+        justification,
+      });
+    } catch (err) {
+      // A transport error is NOT a pass. The provider has already retried; what reaches here is a
+      // judge that could not answer, and an unanswered gate is a closed one.
+      await abandon(
+        `the justification could not be validated (${err instanceof Error ? err.message : String(err)})`,
+        this.giveBack(this.clock.now()),
+      );
+      throw err; // unreachable — `abandon` always throws
+    }
+
+    if (verdict.verdict !== "pass") {
+      await abandon(`the justification was rejected — ${verdict.reasoning}`, { status: "failed" });
+    }
+    return verdict;
+  }
+
+  /** The step the run recorded as broken, for the gate's evidence. Read off the version that
+   *  ACTUALLY ran, like {@link claimedPayload} — a later edit must not rewrite that account. */
+  private async failingStepOf(
+    runId: string | null,
+  ): Promise<{ label: string | null; error: string | null }> {
+    if (!runId) return { label: null, error: null };
+    const [run] = await this.db
+      .select({
+        error: runs.error,
+        failedStepIndex: runs.failedStepIndex,
+        definition: testVersions.definition,
+      })
+      .from(runs)
+      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
+      .where(eq(runs.id, runId))
+      .limit(1);
+    if (!run) return { label: null, error: null };
+    const index = run.failedStepIndex ?? null;
+    const step = index === null ? undefined : (run.definition as TestDefinition).steps[index];
+    return { label: step ? describeStep(step) : null, error: run.error ?? null };
   }
 
   /**

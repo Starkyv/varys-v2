@@ -77,6 +77,12 @@ export interface UpdateTestInput {
   /** Set the Repair Policy (Slice 19) — `manual` | `auto`. Omit to leave unchanged.
    *  Operational metadata, like the schedule: never writes a new test_version. */
   repairPolicy?: RepairPolicy;
+  /** Set/replace the test's BRIEF — what it is for, in the author's words; `null`/empty clears
+   *  it. Omit to leave unchanged. It lives on the test row, not in the definition, so editing it
+   *  writes no test_version and disturbs neither the history nor the baselines — which is what
+   *  makes it safe to sharpen a Brief in response to a repair that was refused against it
+   *  (Slice 19, slice 05). */
+  brief?: string | null;
 }
 
 /**
@@ -583,6 +589,7 @@ export class TestsService {
     }
     if (input.folderId !== undefined) patch.folderId = input.folderId; // null = unfile
     if (input.notes !== undefined) patch.notes = input.notes?.trim() || null; // empty clears
+    if (input.brief !== undefined) patch.intent = input.brief?.trim() || null; // empty clears
     if (input.repairPolicy !== undefined) {
       if (!isRepairPolicy(input.repairPolicy)) {
         throw new BadRequestException(
@@ -779,7 +786,7 @@ export class TestsService {
     const def = view.definition;
     const schedule = await this.readSchedule(id);
     const [meta] = await this.db
-      .select({ notes: tests.notes, repairPolicy: tests.repairPolicy })
+      .select({ notes: tests.notes, brief: tests.intent, repairPolicy: tests.repairPolicy })
       .from(tests)
       .where(eq(tests.id, id))
       .limit(1);
@@ -808,6 +815,7 @@ export class TestsService {
       version: view.version,
       schedule,
       notes: meta?.notes ?? null,
+      brief: meta?.brief ?? null,
       repairPolicy: asRepairPolicy(meta?.repairPolicy),
       needsEnvironment: usesBaseUrl(def),
       defaults: (def.defaults?.waitBefore ?? []).map(toConfigWait),

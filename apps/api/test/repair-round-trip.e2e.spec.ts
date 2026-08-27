@@ -20,6 +20,7 @@ import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
 import { CLOCK, type Clock } from "../src/repair-jobs/clock";
+import { JUDGE_SOURCE, type JudgeSource } from "../src/repair-jobs/judge";
 import { authed, mcpToken, prepareAuth } from "./auth-harness";
 import { startTestDb, type TestDb } from "./db-harness";
 
@@ -63,6 +64,15 @@ describe("A claimed Repair Job is repaired into an unreviewed version", () => {
   let nowMs = Date.now();
   const clock: Clock = { now: () => new Date(nowMs) };
 
+  /** Every repair here is gated on its justification (slice 05), so the suite needs a judge. This
+   *  one passes everything: what the gate REFUSES is `repair-justification-gate.e2e.spec.ts`'s
+   *  subject, and pinning it in two places would mean two rubrics to keep in step. */
+  const judgeSource: JudgeSource = {
+    resolve: async () => ({
+      judge: async () => ({ verdict: "pass" as const, reasoning: "same control, renamed" }),
+    }),
+  };
+
   beforeAll(async () => {
     fixture = await startFixtureServer();
     // Every run below is recorded against `locatorRepair` and executed against the variant that
@@ -77,6 +87,8 @@ describe("A claimed Repair Job is repaired into an unreviewed version", () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(CLOCK)
       .useValue(clock)
+      .overrideProvider(JUDGE_SOURCE)
+      .useValue(judgeSource)
       .compile();
     app = moduleRef.createNestApplication();
     await app.init();
@@ -206,7 +218,15 @@ describe("A claimed Repair Job is repaired into an unreviewed version", () => {
   async function queuedJob(name: string) {
     const created = await authed(app).post("/tests").send(definitionClickingSave(name)).expect(201);
     const testId = created.body.id as string;
-    await authed(app).patch(`/tests/${testId}`).send({ repairPolicy: "auto" }).expect(200);
+    // A Brief is now a precondition of automatic repair: the gate has to have a clause to check
+    // the agent's justification against (slice 05).
+    await authed(app)
+      .patch(`/tests/${testId}`)
+      .send({
+        repairPolicy: "auto",
+        brief: "Saving the form must work: the primary save control on the form panel commits the changes.",
+      })
+      .expect(200);
     const runId = await runToFailure(testId);
     const [job] = (await queue(true)).filter((j) => j.testId === testId);
     expect(job?.status).toBe("queued");
@@ -262,6 +282,8 @@ describe("A claimed Repair Job is repaired into an unreviewed version", () => {
     const reported = await ok(token, "report_repair", {
       jobId: claimed.jobId,
       summary: 'Re-pinned the click to the "Commit changes" button (data-testid=commit-btn).',
+      justification:
+        'The Brief requires that "the primary save control on the form panel commits the changes". It is the same control, relabelled: the button in #form-panel that was data-testid=save-btn / "Save changes" is now data-testid=commit-btn / "Commit changes" — same element, same position, same action.',
     });
     return { job: claimed, sessionId, applied, reported };
   }
@@ -406,14 +428,22 @@ describe("A claimed Repair Job is repaired into an unreviewed version", () => {
 
     // Claimed, but nothing applied. A job closed `done` with no version behind it would be
     // indistinguishable later from one that actually worked.
-    const empty = await call(drainer, "report_repair", { jobId, summary: "all good now" });
+    const empty = await call(drainer, "report_repair", {
+      jobId,
+      summary: "all good now",
+      justification: "the Brief's save clause — same control, relabelled",
+    });
     expect(empty.isError).toBe(true);
     expect(empty.text).toContain("no repair to report");
     expect((await jobById(jobId)).status).toBe("claimed");
 
     // Someone else's claim is not-found, not a conflict — a claimant learns nothing about jobs
     // it does not hold.
-    const stolen = await call(otherDrainer, "report_repair", { jobId, summary: "mine now" });
+    const stolen = await call(otherDrainer, "report_repair", {
+      jobId,
+      summary: "mine now",
+      justification: "the Brief's save clause — same control, relabelled",
+    });
     expect(stolen.isError).toBe(true);
     expect((await jobById(jobId)).status).toBe("claimed");
 
@@ -448,7 +478,11 @@ describe("A claimed Repair Job is repaired into an unreviewed version", () => {
       .expect(401);
 
     // The human MCP principal, meanwhile, cannot report a repair at all: it is agent-only.
-    const human = await call(mcpToken(), "report_repair", { jobId: claimed.jobId, summary: "x" });
+    const human = await call(mcpToken(), "report_repair", {
+      jobId: claimed.jobId,
+      summary: "x",
+      justification: "x",
+    });
     expect(human.isError).toBe(true);
     expect(human.text).toContain("Unknown tool");
 

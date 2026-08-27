@@ -23,7 +23,8 @@ export type Variant =
   | "iframe"
   | "twins"
   | "locatorRepair"
-  | "locatorRepairBroken";
+  | "locatorRepairBroken"
+  | "locatorRepairDeleted";
 
 function html(variant: Variant): string {
   // A stable hero with one volatile sub-region (#stamp, top-left) — stampA/stampB
@@ -365,13 +366,31 @@ function html(variant: Variant): string {
   // is different, and the box is far enough off that size similarity can't clear the matcher's
   // identifying-signal floor either. That is what makes the queue test a real hard-fail rather
   // than a stubbed one — exactly the "element moved/renamed" drift auto-repair exists for.
-  if (variant === "locatorRepair" || variant === "locatorRepairBroken") {
+  //
+  // `locatorRepairDeleted` is the third case, and the one the justification gate exists for
+  // (Slice 19, slice 05): the control is not renamed, it is GONE — and a plausible DIFFERENT
+  // control sits where it used to be. A repair agent can re-pin to that and produce a locator
+  // that genuinely resolves, which is precisely why "it resolves" cannot be the only gate.
+  if (
+    variant === "locatorRepair" ||
+    variant === "locatorRepairBroken" ||
+    variant === "locatorRepairDeleted"
+  ) {
     const broken = variant === "locatorRepairBroken";
-    const key = broken ? "commit-btn" : "save-btn";
-    const name = broken ? "Commit changes" : "Save changes";
-    const label = broken ? "Commit" : "Save";
-    const panel = broken ? "editor-panel" : "form-panel";
-    const size = broken ? "width: 260px; height: 72px;" : "width: 140px; height: 36px;";
+    const deleted = variant === "locatorRepairDeleted";
+    const key = deleted ? "refresh-btn" : broken ? "commit-btn" : "save-btn";
+    const name = deleted ? "Refresh" : broken ? "Commit changes" : "Save changes";
+    const label = deleted ? "Refresh" : broken ? "Commit" : "Save";
+    // The deleted variant re-parents and resizes for the same reason the broken one does: the
+    // recorded fingerprint must have NO signal left to match, or the matcher resolves it fuzzily
+    // and the run never fails. Which is also the point of this pair — from the matcher's side the
+    // two breaks are indistinguishable; only the justification gate can tell them apart.
+    const panel = broken ? "editor-panel" : deleted ? "toolbar-panel" : "form-panel";
+    const size = broken
+      ? "width: 260px; height: 72px;"
+      : deleted
+        ? "width: 220px; height: 64px;"
+        : "width: 140px; height: 36px;";
     return `<!doctype html>
 <html lang="en">
 <head>

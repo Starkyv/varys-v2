@@ -549,7 +549,7 @@ export class McpController {
       {
         name: "claim_repair_job",
         description:
-          "Take the next queued Repair Job for yourself. Returns the job id, the test, its Brief, the step that failed with the run's error, and `claimExpiresAt` — the instant your claim lapses. Returns `job: null` when the queue is empty, which is the normal answer, not an error: stop and try again on your next drain rather than retrying in a loop.\n\nA claim is exclusive and first-claim-wins: nobody else can see or take this job while your claim holds, and while it holds you may read and edit THAT test (open_repair_session, read_test, edit_test, try_locator, apply_fix) — and no other. It is also a deadline: if you stop reporting before `claimExpiresAt`, the job returns to the queue for someone else and the attempt is counted against it. If you cannot fix it, call release_repair_job rather than going quiet — that returns it immediately. `attemptsRemaining` tells you how many tries the job has left before Varys abandons it.",
+          "Take the next queued Repair Job for yourself. Returns the job id, the test, its Brief, the step that failed with the run's error, and `claimExpiresAt` — the instant your claim lapses. Returns `job: null` when the queue is empty, which is the normal answer, not an error: stop and try again on your next drain rather than retrying in a loop.\n\nA claim is exclusive and first-claim-wins: nobody else can see or take this job while your claim holds, and while it holds you may read and edit THAT test (open_repair_session, read_test, edit_test, try_locator, apply_fix) — and no other. It is also a deadline: if you stop reporting before `claimExpiresAt`, the job returns to the queue for someone else and the attempt is counted against it. If you cannot fix it, call release_repair_job rather than going quiet — that returns it immediately. `attemptsRemaining` tells you how many tries the job has left before Varys abandons it.\n\nRead the `brief` before you repair anything: every repair has to be justified against a clause of it when you call report_repair, and one that cannot be is refused and reverted. A test with no Brief cannot be repaired automatically at all.",
         inputSchema: { type: "object", properties: {} },
         handler: async () => ({ job: await this.repairJobs.claimNext(user.id) }),
       },
@@ -569,7 +569,7 @@ export class McpController {
       {
         name: "report_repair",
         description:
-          "Report that you have repaired the test of a job you hold, and close the job. Call it AFTER the fix is written (apply_fix, or edit_test) — it records what you did against the version you wrote and finishes the job; it does not write anything itself, so a report with no version behind it is refused.\n\nWhat it does NOT do, and what you must therefore not claim: it does not turn the failing run green. The version you wrote is saved UNREVIEWED and waits for a human to accept or reject it, and the run that failed is still failed. Report your work as a proposed fix awaiting review — never as fixed. The response carries the version number, the run's unchanged status, and the wording to use.\n\nReporting ends your claim, so your access to that test stops here: do everything you need to do to the test first, then report. If you could NOT fix it, call release_repair_job instead.",
+          "Report that you have repaired the test of a job you hold, and close the job. Call it AFTER the fix is written (apply_fix, or edit_test) — it records what you did against the version you wrote and finishes the job; it does not write anything itself, so a report with no version behind it is refused.\n\nEVERY repair is gated on its `justification`. You must name the clause of the test's BRIEF (claim_repair_job handed it to you) that the element you re-pinned to satisfies, and show it is the SAME control the step was always exercising — renamed, re-worded or re-marked-up, not a different control that happens to look right. A judge reads that claim against the Brief and the actual before/after signals. If it does not hold, the repair is ABANDONED: your version is reverted, the test goes back to what it said before, and the run stays failed. So if the control the test used is simply GONE, do not re-pin to the nearest plausible substitute — call release_repair_job instead.\n\nWhat it does NOT do, and what you must therefore not claim: it does not turn the failing run green. The version you wrote is saved UNREVIEWED and waits for a human to accept or reject it, and the run that failed is still failed. Report your work as a proposed fix awaiting review — never as fixed. The response carries the version number, the run's unchanged status, and the wording to use.\n\nReporting ends your claim, so your access to that test stops here: do everything you need to do to the test first, then report. If you could NOT fix it, call release_repair_job instead.",
         inputSchema: {
           type: "object",
           properties: {
@@ -579,14 +579,20 @@ export class McpController {
               description:
                 "What you changed and why, in a couple of sentences — this is what the reviewer reads beside the version, so name the element you re-pinned to and the signal it now matches on.",
             },
+            justification: {
+              type: "string",
+              description:
+                "Which clause of the test's BRIEF the element you re-pinned to satisfies, and the evidence that it is the SAME control the step was exercising before — quote the clause, then say what changed about the element (its label, accessible name, test id, markup, position) and what shows it is still that control. Do NOT argue that a different element serves the same purpose: sameness of purpose is not sameness of control, and it is refused. This is judged, and a claim that does not hold abandons the repair.",
+            },
           },
-          required: ["jobId", "summary"],
+          required: ["jobId", "summary", "justification"],
         },
         handler: (args) =>
           this.repairJobs.reportRepair(
             user.id,
             String(args.jobId ?? ""),
             String(args.summary ?? ""),
+            String(args.justification ?? ""),
           ),
       },
       {

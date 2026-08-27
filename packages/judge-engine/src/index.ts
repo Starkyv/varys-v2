@@ -20,12 +20,30 @@ import { z } from "zod";
 export type JudgeVerdict = "pass" | "fail";
 
 export interface JudgeInput {
-  /** The approved reference screenshot (PNG bytes). */
-  baseline: Buffer;
-  /** This run's screenshot (PNG bytes). */
-  current: Buffer;
+  /**
+   * The approved reference screenshot (PNG bytes).
+   *
+   * Optional because the same seam also answers TEXT-ONLY questions — the repair-justification
+   * gate (Slice 19, slice 05) sends prose and no pixels. A `context` checkpoint always sends both.
+   */
+  baseline?: Buffer;
+  /** This run's screenshot (PNG bytes). Optional for the same reason as {@link baseline}. */
+  current?: Buffer;
   /** The author-written instruction/checklist the judge follows. */
   prompt: string;
+  /**
+   * Override the system prompt for THIS call. The default rubric is the visual-QA one, which is
+   * the wrong instruction for a non-visual question — a text-only caller passes its own rubric
+   * here rather than needing a second provider (see {@link REPAIR_JUSTIFICATION_SYSTEM}).
+   */
+  system?: string;
+  /**
+   * Override the forced-tool schema for THIS call. The verdict enum's DESCRIPTIONS are half the
+   * rubric — {@link JUDGE_TOOL_SCHEMA} describes pass/fail in screenshot terms, which a text-only
+   * caller must replace or it is grading against the wrong question. The shape must still satisfy
+   * {@link judgeResultSchema}.
+   */
+  toolSchema?: object;
 }
 
 export interface JudgeResult {
@@ -148,7 +166,10 @@ export const DEFAULT_JUDGE_SYSTEM =
   "sections, garbled/overlapping layout, or obviously degraded rendering. Follow the author's " +
   "checklist. Answer by calling the provided tool exactly once.";
 
-function buildUserText(prompt: string): string {
+function buildUserText(prompt: string, hasImages: boolean): string {
+  // No images: the caller's prompt IS the whole question (it carries its own evidence and its own
+  // closing instruction), so wrapping it in screenshot vocabulary would only mislead the model.
+  if (!hasImages) return prompt;
   return (
     `The first image is the BASELINE (approved reference). The second image is the CURRENT capture from this run.\n\n` +
     `Author's checklist / instruction:\n${prompt}\n\n` +
@@ -221,16 +242,16 @@ export class VisionJudgeProvider implements JudgeProvider {
   }
 
   async judge(input: JudgeInput): Promise<JudgeResult> {
+    const images: JudgeImage[] = [];
+    if (input.baseline) images.push({ label: "BASELINE (approved reference)", png: input.baseline });
+    if (input.current) images.push({ label: "CURRENT (this run)", png: input.current });
     const request = (signal: AbortSignal): VisionJudgeRequest => ({
       model: this.opts.model,
-      system: this.system,
-      userText: buildUserText(input.prompt),
-      images: [
-        { label: "BASELINE (approved reference)", png: input.baseline },
-        { label: "CURRENT (this run)", png: input.current },
-      ],
+      system: input.system ?? this.system,
+      userText: buildUserText(input.prompt, images.length > 0),
+      images,
       toolName: JUDGE_TOOL_NAME,
-      toolSchema: JUDGE_TOOL_SCHEMA,
+      toolSchema: input.toolSchema ?? JUDGE_TOOL_SCHEMA,
       signal,
     });
 
@@ -514,5 +535,125 @@ export function createJudgeFromEnv(env: NodeJS.ProcessEnv = process.env): JudgeP
     temperature: num(env.VARYS_JUDGE_TEMPERATURE),
     timeoutMs: num(env.VARYS_JUDGE_TIMEOUT_MS),
     maxRetries: num(env.VARYS_JUDGE_MAX_RETRIES),
+  });
+}
+
+/* ------------------------------------------------------------------------------------------ *
+ * The repair-justification gate (Slice 19, slice 05)
+ *
+ * The guard that stops a plausible-but-wrong repair from landing. A Repair Agent that re-pins a
+ * broken step must say WHICH CLAUSE OF THE BRIEF the element it re-pinned to satisfies, and this
+ * rubric decides whether that claim holds. It rides the same {@link JudgeProvider} seam as the
+ * `context` checkpoint — so a fake provider covers it in tests for free, and a thrown transport
+ * error is already "not a pass". Here that must mean **repair abandoned**, never repair accepted.
+ *
+ * The wording below IS the safety property. The scenario it exists for: a deploy DELETES the
+ * "Apply filter" button, the agent finds a plausible "Refresh" button beside it and re-pins to
+ * that. A rubric that waves this through is worse than no gate at all, because it looks like one.
+ * Every clause here is aimed at that case, and the tie-break is explicit: when the evidence
+ * cannot distinguish "the same control, renamed" from "a different control that reads similar",
+ * the answer is FAIL.
+ * ------------------------------------------------------------------------------------------ */
+
+/** The rubric. Read this before changing a word of it — see the block comment above. */
+export const REPAIR_JUSTIFICATION_SYSTEM =
+  "You are the safety gate on an automated UI-test repair. A test broke because one step's locator " +
+  "no longer resolves. A repair agent has re-pinned that step to an element that DOES resolve, and " +
+  "must justify it against the test's BRIEF — the author's own statement of what the test is for.\n\n" +
+  "You are NOT checking that the new locator resolves; that is already proven. You are NOT grading " +
+  "the writing. You answer exactly one question: is the element the step now points at the SAME " +
+  "control the test was always exercising, satisfying the clause of the Brief the agent names?\n\n" +
+  "PASS only on continuity of the control — the same button, field, link or region, whose label, " +
+  "wording, accessible name, test id, markup or position changed. A rename, a re-word, a re-skin, a " +
+  "moved node: those are the repairs this gate exists to let through.\n\n" +
+  "FAIL when the repair SUBSTITUTES a different control for the original, however plausible the " +
+  "substitute is. The case this gate exists for: the control the test used was DELETED by a deploy, " +
+  "and the agent re-pinned to another control that sits nearby and sounds related — 'Apply filter' " +
+  "is gone, so the agent pinned to 'Refresh'. That is not a repair; it is a silent change to what " +
+  "the test asserts. Fail it even when the justification is confident, fluent, and quotes the Brief " +
+  "correctly.\n\n" +
+  "Also FAIL when any of these hold:\n" +
+  "- the justification names no specific clause or requirement of the Brief, only the Brief in general;\n" +
+  "- the clause it names is not actually in the Brief;\n" +
+  "- the Brief is empty or absent, so there is nothing to check the claim against;\n" +
+  "- the argument is that the new element is 'equivalent', 'serves the same purpose', 'achieves the " +
+  "same outcome', or is 'the closest match' — sameness of PURPOSE is not sameness of CONTROL;\n" +
+  "- the change alters what the step does (a different action, a different target, a different page " +
+  "region) rather than how that same target is found;\n" +
+  "- the evidence given is too thin to tell a rename from a substitution.\n\n" +
+  "When you cannot tell which of the two it is, FAIL. The asymmetry is deliberate: a refused repair " +
+  "leaves a red run that a human will look at, while a wrong repair leaves a GREEN run asserting " +
+  "something nobody asked for, and nothing will ever flag it.\n\n" +
+  "Answer by calling the provided tool exactly once.";
+
+/** The forced-tool schema for the gate. The enum descriptions carry the rubric's tie-break, so
+ *  a model that only reads the tool definition still fails closed. */
+export const REPAIR_JUSTIFICATION_TOOL_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    verdict: {
+      type: "string",
+      enum: ["pass", "fail"],
+      description:
+        "pass = the justification establishes that the re-pinned element is the SAME control the test was exercising, and that it satisfies the named clause of the Brief. fail = it is a different control, or the named clause is absent/vague/not in the Brief, or you cannot tell the two apart. If in doubt, fail.",
+    },
+    reasoning: {
+      type: "string",
+      description:
+        "One concise sentence a human reviewer will read beside the Brief: what you concluded and why.",
+    },
+  },
+  required: ["verdict", "reasoning"],
+} as const;
+
+/** Everything the gate is shown. Every field is evidence the rubric explicitly weighs, so an
+ *  omitted one makes a FAIL more likely rather than less — which is the correct direction. */
+export interface RepairJustificationInput {
+  testName: string;
+  /** The Brief (`tests.intent`). Empty/null is itself a fail — there is no clause to cite. */
+  brief: string | null;
+  /** The step that broke, as the run recorded it, and the run's own error for it. */
+  failingStep: string | null;
+  runError: string | null;
+  /** What actually changed in the definition, rendered as text (the before/after locator). */
+  change: string;
+  /** The agent's own account of the repair (`report_repair`'s `summary`). */
+  summary: string;
+  /** The agent's claim: which clause of the Brief the re-pinned element satisfies. */
+  justification: string;
+}
+
+/** Assemble the gate's user turn. Kept beside the rubric so the two are read — and changed —
+ *  together; the section headings are what the rubric's clauses refer to. */
+export function buildRepairJustificationPrompt(input: RepairJustificationInput): string {
+  const section = (heading: string, body: string | null) =>
+    `${heading}:\n${body?.trim() ? body.trim() : "(none given)"}`;
+  return [
+    section("TEST", input.testName),
+    section("BRIEF — the author's statement of what this test is for", input.brief),
+    section("THE STEP THAT BROKE", input.failingStep),
+    section("THE RUN'S OWN ERROR", input.runError),
+    section("WHAT THE REPAIR CHANGED IN THE TEST", input.change),
+    section("WHAT THE REPAIR AGENT SAYS IT DID", input.summary),
+    section("THE AGENT'S JUSTIFICATION AGAINST THE BRIEF", input.justification),
+    "Decide whether this repair re-pins the SAME control (pass) or substitutes a different one " +
+      "(fail), and whether the clause of the Brief the agent names is real and actually satisfied. " +
+      'Report "pass" or "fail" with one sentence of reasoning.',
+  ].join("\n\n");
+}
+
+/**
+ * Run the gate. Returns the judge's verdict, or **throws** — a transport failure is not a pass,
+ * and the caller must treat a throw as "abandon the repair".
+ */
+export function judgeRepairJustification(
+  judge: JudgeProvider,
+  input: RepairJustificationInput,
+): Promise<JudgeResult> {
+  return judge.judge({
+    prompt: buildRepairJustificationPrompt(input),
+    system: REPAIR_JUSTIFICATION_SYSTEM,
+    toolSchema: REPAIR_JUSTIFICATION_TOOL_SCHEMA,
   });
 }

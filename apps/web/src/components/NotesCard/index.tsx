@@ -11,6 +11,9 @@ export interface NotesCardProps {
   /** Whether a save is in flight (drives the subtle "Saving…" status). */
   saving?: boolean;
   placeholder?: string;
+  /** The field's heading. Defaults to "Notes" — the test-detail Brief passes its own, since the
+   *  card is the same inline editor for a different piece of prose. */
+  label?: string;
 }
 
 /**
@@ -19,7 +22,13 @@ export interface NotesCardProps {
  * textarea matches the text metrics so there's no jump, it auto-grows, and it commits on blur
  * (⌘/Ctrl+Enter to commit, Esc to discard). Clearing the text removes the note.
  */
-export function NotesCard({ notes, onSave, saving = false, placeholder }: NotesCardProps) {
+export function NotesCard({
+  notes,
+  onSave,
+  saving = false,
+  placeholder,
+  label = "Notes",
+}: NotesCardProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(notes ?? "");
   const [justSaved, setJustSaved] = useState(false);
@@ -91,7 +100,7 @@ export function NotesCard({ notes, onSave, saving = false, placeholder }: NotesC
   return (
     <section className={cx(styles.root, editing && styles.editing)}>
       <div className={styles.head}>
-        <span className={styles.label}>Notes</span>
+        <span className={styles.label}>{label}</span>
         <span className={styles.status} aria-live="polite">
           {saving ? "Saving…" : justSaved ? "Saved" : ""}
         </span>
@@ -118,7 +127,12 @@ export function NotesCard({ notes, onSave, saving = false, placeholder }: NotesC
           onKeyDown={onKeyDown}
         />
       ) : notes ? (
-        <button type="button" className={styles.display} onClick={enterEdit} aria-label="Edit note">
+        <button
+          type="button"
+          className={styles.display}
+          onClick={enterEdit}
+          aria-label={`Edit ${label.toLowerCase()}`}
+        >
           {notes}
         </button>
       ) : (

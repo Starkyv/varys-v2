@@ -10,6 +10,10 @@ import {
   JudgeTransportError,
   JUDGE_TOOL_NAME,
   JUDGE_TOOL_SCHEMA,
+  buildRepairJustificationPrompt,
+  judgeRepairJustification,
+  REPAIR_JUSTIFICATION_SYSTEM,
+  REPAIR_JUSTIFICATION_TOOL_SCHEMA,
   type JudgeInput,
   type VisionJudgeRequest,
   type VisionJudgeTransport,
@@ -324,5 +328,95 @@ describe("createJudgeFromEnv", () => {
   it("builds an Anthropic provider when key + model are present", () => {
     const judge = createJudgeFromEnv({ VARYS_JUDGE_API_KEY: "k", VARYS_JUDGE_MODEL: "m" });
     expect(judge).toBeInstanceOf(VisionJudgeProvider);
+  });
+});
+
+/**
+ * The repair-justification gate (Slice 19, slice 05). Two things are worth pinning here: that the
+ * gate genuinely rides the SAME provider (so a scripted/fake judge and a thrown transport error
+ * behave identically for it), and that everything the rubric weighs actually reaches the model —
+ * a prompt that silently drops the Brief or the before/after signals would still return verdicts,
+ * just uninformed ones.
+ */
+describe("repair-justification gate", () => {
+  const claim = {
+    testName: "Save the report",
+    brief: "Saving must work: the primary save control commits the changes.",
+    failingStep: 'click "Save changes"',
+    runError: "locator not found",
+    change: 'data-testid: "save-btn" → "commit-btn"',
+    summary: "Re-pinned to the Commit changes button.",
+    justification: "Same control, relabelled — it still commits the form.",
+  };
+
+  it("sends NO images, its own rubric, and its own verdict descriptions", async () => {
+    const calls: VisionJudgeRequest[] = [];
+    const p = new VisionJudgeProvider({
+      model: "m",
+      transport: {
+        invoke: async (req) => {
+          calls.push(req);
+          return { verdict: "pass", reasoning: "same control" };
+        },
+      },
+    });
+
+    const result = await judgeRepairJustification(p, claim);
+
+    expect(result).toEqual({ verdict: "pass", reasoning: "same control" });
+    expect(calls[0].images).toEqual([]);
+    // The default rubric is the VISUAL one — grading prose against it would be the wrong question.
+    expect(calls[0].system).toBe(REPAIR_JUSTIFICATION_SYSTEM);
+    expect(calls[0].toolSchema).toBe(REPAIR_JUSTIFICATION_TOOL_SCHEMA);
+    // No images means no screenshot vocabulary wrapped around the prompt either.
+    expect(calls[0].userText).not.toContain("BASELINE");
+  });
+
+  it("puts every piece of evidence the rubric weighs into the prompt", async () => {
+    const text = buildRepairJustificationPrompt(claim);
+    for (const fragment of [
+      claim.brief,
+      claim.failingStep,
+      claim.runError,
+      claim.change,
+      claim.summary,
+      claim.justification,
+    ]) {
+      expect(text).toContain(fragment);
+    }
+  });
+
+  it("says so plainly when the Brief is missing, rather than omitting the section", async () => {
+    // A prompt that just leaves the heading out reads as "there was nothing to say"; the rubric
+    // fails an absent Brief, so the absence has to be visible to it.
+    const text = buildRepairJustificationPrompt({ ...claim, brief: null });
+    expect(text).toContain("BRIEF");
+    expect(text).toContain("(none given)");
+  });
+
+  it("throws rather than passing when the judge cannot answer", async () => {
+    const p = new VisionJudgeProvider({
+      model: "m",
+      maxRetries: 0,
+      transport: {
+        invoke: async () => {
+          throw new JudgeTransportError(500, "overloaded");
+        },
+      },
+    });
+    // The caller's contract: a throw is "abandon the repair", never "apply it".
+    await expect(judgeRepairJustification(p, claim)).rejects.toThrow(/attempt|overloaded/i);
+  });
+
+  it("is exercised by the fake provider like any other judgement", async () => {
+    const p = new FakeJudgeProvider({ verdict: "fail", reasoning: "different control" });
+    expect(await judgeRepairJustification(p, claim)).toEqual({
+      verdict: "fail",
+      reasoning: "different control",
+    });
+  });
+
+  it("keeps the rubric's tie-break in the tool schema, so a model reading only that still fails closed", () => {
+    expect(REPAIR_JUSTIFICATION_TOOL_SCHEMA.properties.verdict.description).toMatch(/in doubt, fail/i);
   });
 });

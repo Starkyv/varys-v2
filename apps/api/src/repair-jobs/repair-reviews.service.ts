@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException, Logger } from "@nestjs/common";
 import type { RepairReviewDecision, RepairReviewItem } from "@varys/review-contract";
 import type { Step, TestDefinition } from "@varys/step-schema";
-import { and, desc, eq, lt, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
 import { baselines, repairJobs, tests, testVersions } from "../db/schema";
 import { CLOCK, type Clock } from "./clock";
@@ -45,6 +45,8 @@ export class RepairReviewsService {
         createdBy: testVersions.createdBy,
         createdAt: testVersions.createdAt,
         jobId: testVersions.repairJobId,
+        justification: testVersions.justification,
+        justificationReasoning: testVersions.justificationReasoning,
         // The test's highest version number, so the caller can tell an unreviewed version that
         // IS the active definition from one a later edit has already landed on top of.
         latestVersion: sql<number>`(select max(version) from test_versions v where v.test_id = ${testVersions.testId})`,
@@ -72,6 +74,8 @@ export class RepairReviewsService {
       runId: r.runId ?? null,
       report: r.report ?? null,
       brief: r.brief,
+      justification: r.justification ?? null,
+      justificationReasoning: r.justificationReasoning ?? null,
       isActiveDefinition: Number(r.latestVersion) === r.version,
     }));
   }
@@ -110,11 +114,56 @@ export class RepairReviewsService {
    */
   async reject(versionId: string, reviewer: string): Promise<RepairReviewDecision> {
     const version = await this.unreviewed(versionId);
+    const { previousVersion, revertedToVersion } = await this.revertRepair({
+      testId: version.testId,
+      versionIds: [versionId],
+      revertBefore: version.version,
+      actor: reviewer,
+      because: `rejected repair v${version.version}`,
+      // Terminal, and terminally UNSUCCESSFUL: `failed` is how the queue already says "every
+      // attempt was spent and the test is still yours to fix", which is exactly true here.
+      jobUpdate: version.repairJobId ? { id: version.repairJobId, set: { status: "failed" } } : null,
+    });
+    this.log.log(
+      `rejected repaired v${version.version} of test ${version.testId}: reverted to v${previousVersion}'s definition as v${revertedToVersion} (${reviewer})`,
+    );
+    return {
+      ok: true,
+      versionId,
+      reviewState: "rejected",
+      revertedToVersion,
+      note: `The repair was rejected. The test is back on what v${previousVersion} said, written as v${revertedToVersion}; the rejected version is retained in the history.`,
+    };
+  }
 
+  /**
+   * Undo a repair: put the test back on the definition it had before, mark the repaired
+   * version(s) `rejected`, and (optionally) move the job that produced them.
+   *
+   * Shared by the two things that undo a repair — a human pressing Reject, and the
+   * justification gate refusing one (Slice 19, slice 05) — because they must undo it the SAME
+   * way. A gate that abandoned a repair differently from a reject would be a second, untested
+   * revert path guarding the more dangerous case.
+   *
+   * The revert is an APPEND, not a delete: the previous definition is written as a new version.
+   * That keeps the audit trail (the rejected attempt is still there, marked `rejected`) and keeps
+   * every run that already executed against the rejected version pointing at a row that exists.
+   *
+   * `revertBefore` is the LOWEST repaired version number — an agent that wrote two versions under
+   * one claim must have both undone, or "the test is unchanged" would be a lie.
+   */
+  async revertRepair(opts: {
+    testId: string;
+    versionIds: string[];
+    revertBefore: number;
+    actor: string;
+    because: string;
+    jobUpdate: { id: string; set: Record<string, unknown> } | null;
+  }): Promise<{ previousVersion: number; revertedToVersion: number }> {
     const [previous] = await this.db
       .select({ version: testVersions.version, definition: testVersions.definition })
       .from(testVersions)
-      .where(and(eq(testVersions.testId, version.testId), lt(testVersions.version, version.version)))
+      .where(and(eq(testVersions.testId, opts.testId), lt(testVersions.version, opts.revertBefore)))
       .orderBy(desc(testVersions.version))
       .limit(1);
     if (!previous) {
@@ -122,17 +171,17 @@ export class RepairReviewsService {
       // cannot produce this (a repair is always an edit to something that ran), so it means the
       // history was truncated, and inventing a definition to revert to would be worse.
       throw new ConflictException(
-        `v${version.version} is the test's first version — there is no previous definition to revert to.`,
+        `v${opts.revertBefore} is the test's first version — there is no previous definition to revert to.`,
       );
     }
 
     const [latest] = await this.db
       .select({ version: testVersions.version, definition: testVersions.definition })
       .from(testVersions)
-      .where(eq(testVersions.testId, version.testId))
+      .where(eq(testVersions.testId, opts.testId))
       .orderBy(desc(testVersions.version))
       .limit(1);
-    const nextVersion = (latest?.version ?? version.version) + 1;
+    const nextVersion = (latest?.version ?? opts.revertBefore) + 1;
 
     // A rejected repair may have renamed a checkpoint, and a checkpoint's name IS its baseline
     // key — so reverting the definition without moving the golden back would leave it orphaned
@@ -146,43 +195,32 @@ export class RepairReviewsService {
     const now = this.clock.now();
     await this.db.transaction(async (tx) => {
       await tx.insert(testVersions).values({
-        testId: version.testId,
+        testId: opts.testId,
         version: nextVersion,
         definition: previous.definition,
-        createdBy: `${reviewer} (rejected repair v${version.version})`,
+        createdBy: `${opts.actor} (${opts.because})`,
       });
       await tx
         .update(testVersions)
-        .set({ reviewState: "rejected", reviewedBy: reviewer, reviewedAt: now })
-        .where(eq(testVersions.id, versionId));
+        .set({ reviewState: "rejected", reviewedBy: opts.actor, reviewedAt: now })
+        .where(inArray(testVersions.id, opts.versionIds));
       for (const { from, to } of renames) {
         await tx
           .delete(baselines)
-          .where(and(eq(baselines.testId, version.testId), eq(baselines.checkpointName, to)));
+          .where(and(eq(baselines.testId, opts.testId), eq(baselines.checkpointName, to)));
         await tx
           .update(baselines)
           .set({ checkpointName: to, updatedAt: now })
-          .where(and(eq(baselines.testId, version.testId), eq(baselines.checkpointName, from)));
+          .where(and(eq(baselines.testId, opts.testId), eq(baselines.checkpointName, from)));
       }
-      if (version.repairJobId) {
-        // Terminal, and terminally UNSUCCESSFUL: `failed` is how the queue already says "every
-        // attempt was spent and the test is still yours to fix", which is exactly true here.
+      if (opts.jobUpdate) {
         await tx
           .update(repairJobs)
-          .set({ status: "failed", updatedAt: now })
-          .where(eq(repairJobs.id, version.repairJobId));
+          .set({ ...opts.jobUpdate.set, updatedAt: now })
+          .where(eq(repairJobs.id, opts.jobUpdate.id));
       }
     });
-    this.log.log(
-      `rejected repaired v${version.version} of test ${version.testId}: reverted to v${previous.version}'s definition as v${nextVersion} (${reviewer})`,
-    );
-    return {
-      ok: true,
-      versionId,
-      reviewState: "rejected",
-      revertedToVersion: nextVersion,
-      note: `The repair was rejected. The test is back on what v${previous.version} said, written as v${nextVersion}; the rejected version is retained in the history.`,
-    };
+    return { previousVersion: previous.version, revertedToVersion: nextVersion };
   }
 
   /** The version, if it is actually awaiting a decision. A version already accepted or rejected

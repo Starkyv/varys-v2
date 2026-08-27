@@ -110,8 +110,8 @@ independent of the queue and can run in parallel with all of it.
 | 01 | [Repair Policy + job enqueued + queue visible](heal-01-repair-policy-enqueue-visible.md) | AFK | in-review | — |
 | 02 | [Repair Agent credential (second issuer)](heal-02-repair-agent-credential.md) | AFK | ready-for-agent | — |
 | 03 | [Claim a job under a lease](heal-03-claim-under-lease.md) | AFK | ready-for-agent | 01, 02 |
-| 04 | [Repair round trip → unreviewed version](heal-04-repair-round-trip-unreviewed.md) | AFK | ready-for-agent | 03 |
-| 05 | [Brief-justification gate](heal-05-brief-justification-gate.md) | HITL | needs-design (00 gates GA) | 04 |
+| 04 | [Repair round trip → unreviewed version](heal-04-repair-round-trip-unreviewed.md) | AFK | in-review | 03 |
+| 05 | [Brief-justification gate](heal-05-brief-justification-gate.md) | HITL | in-review (rubric wording + 00 gate GA) | 04 |
 | 06 | [`healed` outcome + re-run + digest](heal-06-healed-outcome-rerun.md) | AFK | ready-for-agent | 05 |
 | 07 | [Failure clustering + circuit breaker](heal-07-clustering-circuit-breaker.md) | AFK | ready-for-agent | 01 |
 | 08 | [Triage jobs (read-only diagnosis)](heal-08-triage-jobs.md) | AFK | ready-for-agent | 03 |

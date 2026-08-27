@@ -176,6 +176,10 @@ export interface ReportedRepair {
   /** The originating run and the status it still has: untouched by the repair. */
   runId: string | null;
   runStatus: string | null;
+  /** The brief-clause justification the gate accepted, and the judge's one-line reasoning
+   *  (Slice 19, slice 05). A repair only reaches this payload by passing that gate. */
+  justification: string;
+  justificationReasoning: string;
   note: string;
 }
 
@@ -210,6 +214,12 @@ export interface RepairReviewItem {
   /** What the drainer said it did, and the Brief it was meant to satisfy. */
   report: string | null;
   brief: string | null;
+  /** The clause of the Brief the agent claimed this repair satisfies, and the judge's one-line
+   *  verdict on that claim (Slice 19, slice 05). Shown BESIDE the brief, because a verdict is
+   *  meaningless to a reviewer who cannot see what it was checked against. Null for a version
+   *  written before the gate existed. */
+  justification: string | null;
+  justificationReasoning: string | null;
   /** True while this is still the test's LATEST version — i.e. the definition runs use. A
    *  later edit having landed on top is why an accept is not automatically "this is live". */
   isActiveDefinition: boolean;
@@ -498,6 +508,16 @@ export interface TestConfigView {
   schedule: TestSchedule | null;
   /** Optional free-form note on the test, or null when none. Written via `PATCH /tests/:id`. */
   notes: string | null;
+  /**
+   * The test's BRIEF (`tests.intent`) — the author's statement of what this test is for, or null
+   * when it has none. Editable here, and written via the structural `PATCH /tests/:id`, so
+   * changing it writes NO new test_version: the Brief says what the test is for, not what it
+   * does, and re-stating it must not disturb the test's history or its baselines.
+   *
+   * Load-bearing since Slice 19 slice 05: an automated repair has to be justified against a
+   * clause of this, and a test with no Brief cannot be repaired automatically at all.
+   */
+  brief: string | null;
   /** True when the test uses `{{baseUrl}}` — the locator-verify control uses this to require
    *  an environment (which supplies the base URL + cookies + localStorage). */
   needsEnvironment: boolean;

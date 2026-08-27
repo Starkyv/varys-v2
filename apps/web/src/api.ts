@@ -325,6 +325,9 @@ export interface UpdateTestBody {
   notes?: string | null;
   /** The test's Repair Policy (Slice 19). Omit to leave unchanged. */
   repairPolicy?: RepairPolicy;
+  /** The test's Brief — what it is for, in the author's words; `null`/empty clears it. Omit to
+   *  leave unchanged. Writes no new test_version, so editing it never disturbs the history. */
+  brief?: string | null;
 }
 
 /** Rename / (un)file a test. Throws on a non-2xx response. */

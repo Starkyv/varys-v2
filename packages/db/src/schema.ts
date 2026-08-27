@@ -155,6 +155,17 @@ export const testVersions = pgTable("test_versions", {
    *  version awaiting review back to the failure it claims to fix. Plain uuid (no FK) because
    *  the job's table is created after this one in the bootstrap DDL. */
   repairJobId: uuid("repair_job_id"),
+  /**
+   * The clause of the Brief the repairing agent claimed this version satisfies, and the judge's
+   * one-line verdict on that claim (Slice 19, slice 05).
+   *
+   * Present only on a version an agent wrote and the gate PASSED — a rejected justification never
+   * reaches a stored version, because the repair is abandoned and reverted. Shown beside the
+   * Brief in review, which is the only way a reviewer can tell what the verdict was checked
+   * against.
+   */
+  justification: text("justification"),
+  justificationReasoning: text("justification_reasoning"),
   /** Who accepted or rejected this version, and when. Both null while it is `unreviewed`, and
    *  for every version that never needed reviewing. */
   reviewedBy: text("reviewed_by"),
@@ -584,6 +595,9 @@ ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS created_by text;
 -- Repair Agent writes 'unreviewed', which is what puts it in the repair review queue.
 ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS review_state text NOT NULL DEFAULT 'reviewed';
 ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS repair_job_id uuid;
+-- The agent's brief-clause justification and the judge's verdict on it (Slice 19, slice 05).
+ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS justification text;
+ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS justification_reasoning text;
 ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS reviewed_by text;
 ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS reviewed_at timestamptz;
 CREATE INDEX IF NOT EXISTS test_versions_unreviewed_idx

@@ -203,6 +203,27 @@
   line-height: 1.5;
 }
 
+/* The agent's claim, weighted a step above the Brief it cites — it is the thing being judged,
+   and the Brief below it is the reference. The judge's own line sits under both, quieter still. */
+.justification {
+  margin: var(--space-6) 0 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+.justificationLabel {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.verdict {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+
 .brief {
   margin: 2px 0 0;
   font-size: var(--font-size-xs);

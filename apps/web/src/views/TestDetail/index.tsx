@@ -171,6 +171,7 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
   const { toast } = useToast();
   const save = useSaveTestConfig(config.id);
   const notesUpdate = useUpdateTest();
+  const briefUpdate = useUpdateTest();
 
   const checkpointCount = config.steps.filter((s) => s.type === "screenshot").length;
 
@@ -674,6 +675,26 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
           />
 
           <RepairPolicyCard testId={config.id} policy={config.repairPolicy} />
+
+          {/* The Brief — what this test is FOR, in the author's words. Editable here, and shown
+              beside the policy on purpose: an automated repair has to be justified against a
+              clause of it (slice 05), so a vague Brief is what a refused repair sends you to fix.
+              It lives on the test row, so editing it writes no version and touches no baseline. */}
+          <NotesCard
+            label="Brief"
+            notes={config.brief}
+            saving={briefUpdate.isPending}
+            placeholder="What is this test for? An automated repair must justify itself against a clause of this."
+            onSave={(text) =>
+              briefUpdate.mutateAsync({ id: config.id, body: { brief: text } }).then(
+                () => toast("Brief saved"),
+                (e) => {
+                  toast(e instanceof Error ? e.message : "Couldn’t save the brief");
+                  throw e;
+                },
+              )
+            }
+          />
 
           <NotesCard
             notes={config.notes}

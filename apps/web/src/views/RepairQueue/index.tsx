@@ -132,8 +132,9 @@ function RepairReviews() {
         </span>
       </header>
       <div className={styles.notice}>
-        A repair agent wrote these. Nothing about them is trusted yet: the failing run is still
-        red, and accepting is what confirms the repaired version as the one your runs replay.
+        A repair agent wrote these, and each one argued its case against the test's Brief before it
+        was allowed to stand. That gate is not your review: the failing run is still red, and
+        accepting is what confirms the repaired version as the one your runs replay.
       </div>
       {items.map((item) => (
         <div key={item.versionId} className={styles.review}>
@@ -153,6 +154,17 @@ function RepairReviews() {
               {!item.isActiveDefinition && " · a later edit has landed on top"}
             </div>
             {item.report && <p className={styles.report}>{item.report}</p>}
+            {/* The justification and the Brief, together and in that order: the agent's claim is
+                only checkable against the thing it was checked against, so showing a verdict
+                without the Brief beside it would tell a reviewer nothing. */}
+            {item.justification && (
+              <p className={styles.justification}>
+                <span className={styles.justificationLabel}>Justified as</span> {item.justification}
+                {item.justificationReasoning && (
+                  <span className={styles.verdict}>Judge: {item.justificationReasoning}</span>
+                )}
+              </p>
+            )}
             {item.brief && <p className={styles.brief}>Brief: {item.brief}</p>}
             {item.runId && (
               <button
