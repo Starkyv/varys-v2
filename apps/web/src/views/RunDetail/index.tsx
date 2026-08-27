@@ -1,4 +1,4 @@
-import { ArrowLeft, Button, Check, ErrorState, ExternalLink, Flask, IconButton, Skeleton, Trash } from "@varys/ui";
+import { ArrowLeft, Button, Check, ErrorState, ExternalLink, Flask, IconButton, Skeleton, Sparkles, Trash } from "@varys/ui";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { createElement, useEffect, useMemo, useState } from "react";
 import { useConfirm } from "../../context/confirm";
@@ -6,7 +6,13 @@ import { useRouter } from "../../context/router";
 import { useToast } from "../../context/toast";
 import { absoluteTime, formatActor } from "../../lib/format";
 import { StatusBadge } from "../../lib/status";
-import { useApproveAll, useDeleteRun, useRunView, useUpdateRunNotes } from "../../queries";
+import {
+  useApproveAll,
+  useDeleteRun,
+  useEnqueueRepairJob,
+  useRunView,
+  useUpdateRunNotes,
+} from "../../queries";
 import { NotesCard } from "../../components/NotesCard";
 import { ApproveDialog } from "./components/ApproveDialog";
 import { CheckpointViewer } from "./components/CheckpointViewer";
@@ -36,6 +42,7 @@ export function RunDetail({ runId }: { runId: string }) {
   const { toast } = useToast();
   const approveAll = useApproveAll(runId);
   const del = useDeleteRun();
+  const enqueueRepair = useEnqueueRepairJob();
   const notesMutation = useUpdateRunNotes(runId);
   const confirm = useConfirm();
   const reduce = useReducedMotion();
@@ -142,6 +149,31 @@ export function RunDetail({ runId }: { runId: string }) {
         {data.traceUrl && (
           <Button variant="secondary" iconLeft={<ExternalLink size={15} />} onClick={openTrace}>
             Open Playwright trace
+          </Button>
+        )}
+        {/* A locator failure is the ONE class of failure a repair may touch (Slice 19). Under
+            `auto` the worker already queued a job; under `manual` this is how a human hands one
+            to the drainer without opting the test in permanently. Never shown for a pixel
+            regression, a failed judge or a crash — those are not repairable. */}
+        {data.failureKind === "locator" && (
+          <Button
+            variant="secondary"
+            iconLeft={<Sparkles size={15} />}
+            disabled={enqueueRepair.isPending}
+            loading={enqueueRepair.isPending}
+            title={
+              data.repairPolicy === "auto"
+                ? "This test repairs automatically — queue it again if the job was cancelled"
+                : "Queue this broken locator for a repair agent"
+            }
+            onClick={() =>
+              enqueueRepair.mutate(data.runId, {
+                onSuccess: () => toast("Queued for repair"),
+                onError: (e) => toast(e instanceof Error ? e.message : "Couldn’t queue the repair"),
+              })
+            }
+          >
+            Queue repair
           </Button>
         )}
         {hasTimeline && pendingCount > 0 && (

@@ -168,3 +168,50 @@
   padding-right: var(--space-16) !important;
   white-space: nowrap;
 }
+
+/* The view is two stacked cards: the versions awaiting a decision, then the queue itself. */
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+}
+
+/* One repaired version awaiting review: what changed on the left, the decision on the right. */
+.review {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-16);
+  padding: var(--space-12) var(--space-20);
+  border-top: 1px solid var(--color-border);
+}
+
+.reviewMain {
+  flex: 1;
+  min-width: 0;
+}
+
+.reviewMeta {
+  margin-top: 2px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+
+.report {
+  margin: var(--space-6) 0 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+.brief {
+  margin: 2px 0 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+  line-height: 1.5;
+}
+
+.reviewActions {
+  display: flex;
+  gap: var(--space-8);
+  white-space: nowrap;
+}

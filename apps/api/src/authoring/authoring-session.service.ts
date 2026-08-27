@@ -43,14 +43,20 @@ import type {
   AuthoringFrame,
   AuthoringMode,
   AuthoringSessionSummary,
+  EditableWait,
   FingerprintPatch,
   FingerprintSummary,
+  NewStepInput,
+  TestConfigPatch,
+  TestConfigStep,
+  TestConfigStepPatch,
 } from "@varys/review-contract";
 import { type Browser, type BrowserContext, chromium, type Locator, type Page } from "playwright-core";
 import { type Observable, Subject } from "rxjs";
 import { DB, type Db } from "../db/db.module";
 import { applyFingerprintPatch, hasMatchableSignal } from "../fingerprint-patch";
 import { summarizeFingerprint } from "../fingerprint-summary";
+import { RepairJobsService } from "../repair-jobs/repair-jobs.service";
 import { TestsService } from "../tests/tests.service";
 
 /** How often the idle sweep runs, and how long a session may sit untouched before it is torn
@@ -310,6 +316,9 @@ export interface RepairContext {
   brokeAt: { index: number; label: string } | null;
   /** The original run's error, for comparison against what we just reproduced. */
   runError: string | null;
+  /** The step the RUN died on — distinct from `stepIndex`, which is wherever the session is
+   *  currently parked (a repair moves around the test; the run's verdict does not). */
+  runFailedStepIndex: number | null;
 }
 
 /** What `open_repair_session` hands back: why the run failed, what the step was looking for, what
@@ -355,6 +364,8 @@ export interface ApplyFixResult {
   ok: true;
   testId: string;
   stepIndex: number;
+  /** The new test_version's id — what the review surface addresses it by. */
+  versionId: string;
   /** The new test_version the fix was written as. The version it replaced is retained, so the
    *  edit is auditable and recoverable rather than destructive. */
   version: number;
@@ -368,6 +379,95 @@ export interface ApplyFixResult {
    *  caveat instead of declaring the test fixed. */
   warning: string | null;
   summary: string;
+}
+
+/** One step's worth of edit in {@link AuthoringSessionService.editTest}. Every field is optional
+ *  and addresses one thing on the step at `index`; omitted fields are left exactly as they are. */
+export interface TestEditStep {
+  /** 0-based index of the step to edit, as reported by `read_test`. */
+  index: number;
+  /** Delete this step. The entry navigation (index 0) can't be removed. */
+  remove?: boolean;
+  /** Screenshot-only: rename the checkpoint (the baselines follow the name). */
+  name?: string;
+  captureMode?: "element" | "fullpage" | "region";
+  rect?: Rect;
+  compareMode?: "pixel" | "context";
+  prompt?: string;
+  threshold?: number;
+  masks?: Rect[];
+  /** Navigate-only: the URL to go to. */
+  url?: string;
+  /** Type-only: the literal value typed into the field. */
+  value?: string;
+  /** Replace this step's authorable waits (recorded selector waits are preserved). */
+  waitBefore?: EditableWait[];
+  /** Drop recorded selector waits by their position among this step's selector waits. */
+  dropRecordedWaits?: number[];
+  /** Re-capture this step's locator from the element `ref` on the session's live page. */
+  ref?: string;
+  /** Patch the step's locator signals (merged onto the recorded fingerprint). */
+  locator?: FingerprintPatch;
+}
+
+/** A step to add, addressed either by a live page `ref` (a full captured fingerprint) or by a
+ *  raw `selector` (used as-is, no bundle behind it). */
+export interface TestEditInsertStep {
+  type: "navigate" | "click" | "hover" | "type" | "screenshot";
+  url?: string;
+  ref?: string;
+  selector?: string;
+  value?: string;
+  name?: string;
+  captureMode?: "element" | "fullpage" | "region";
+  rect?: Rect;
+  compareMode?: "pixel" | "context";
+  prompt?: string;
+  threshold?: number;
+  masks?: Rect[];
+}
+
+export interface TestEditInsert {
+  /** The existing step this insert is anchored to, by its CURRENT 0-based index. */
+  atIndex: number;
+  position: "above" | "below";
+  step: TestEditInsertStep;
+}
+
+/** An arbitrary edit to a test: any step, any field, plus structure (add / remove / reorder). */
+export interface TestEditInput {
+  /** Who is making the edit. Only consulted when there is no `sessionId` to read the owner off:
+   *  an AGENT's write lands unreviewed wherever it comes from (Slice 19, slice 04). */
+  actor?: SessionActor;
+  /** An open repair session — supplies the test being repaired, and the live page a `ref` names. */
+  sessionId?: string;
+  /** The test to edit, when not editing the one a session is repairing. */
+  testId?: string;
+  name?: string;
+  notes?: string;
+  /** Replace the test-level default waits applied before every wait-supporting step. */
+  defaults?: EditableWait[];
+  steps?: TestEditStep[];
+  inserts?: TestEditInsert[];
+  /** The new order of the surviving steps, by their current 0-based index. */
+  order?: number[];
+}
+
+export interface TestEditResult {
+  ok: true;
+  testId: string;
+  /** The new test_version's id, or empty for a name/notes-only edit that wrote none. */
+  versionId: string;
+  /** The version the edit was written as (unchanged for a name/notes-only edit). */
+  version: number;
+  /** The version it was applied on top of, which is retained. */
+  baseVersion: number;
+  /** What was actually applied, in plain words, so it can be reported back verbatim. */
+  changes: string[];
+  /** The test's steps AFTER the edit — indices shift when steps are added, removed or reordered,
+   *  so a follow-up edit must be keyed off these, not off the list read before. */
+  steps: Record<string, unknown>[];
+  note: string;
 }
 
 /**
@@ -384,6 +484,18 @@ interface PendingHover {
   revealedRefs: Set<string>;
 }
 
+/** Which issuer an action came from — mirrors `McpPrincipalKind` without importing it, so the
+ *  session service keeps no dependency on the MCP transport. */
+export type SessionActorKind = "user" | "agent";
+
+/** Who is driving one call, when there is no session to read it off (an `edit_test` addressed by
+ *  `testId` alone). `kind` is what decides whether the version it writes needs review. */
+export interface SessionActor {
+  id: string;
+  email: string;
+  kind: SessionActorKind;
+}
+
 interface SessionState {
   /** The better-auth user id that opened this session (Slice 16 — per-user MCP auth).
    *  Every read and every action is gated on it, so one user's server-side browser is
@@ -391,6 +503,10 @@ interface SessionState {
   ownerId: string;
   /** The owner's email — written as the draft's `createdBy` on finish. */
   ownerEmail: string;
+  /** Which ISSUER opened it (ADR-0005): a human who completed the browser OAuth leg, or an
+   *  unattended Repair Agent. Every version an `agent` session writes lands UNREVIEWED, so the
+   *  kind has to travel with the session rather than be re-derived at write time. */
+  ownerKind: SessionActorKind;
   browser: Browser;
   context: BrowserContext;
   page: Page;
@@ -447,7 +563,13 @@ export interface OpenSessionResult {
  *  discipline (only on an explicit request) holds in BOTH modes — see authoring-instructions. */
 function modeGuidance(mode: AuthoringMode): string {
   if (mode === "repair") {
-    return "Repair mode: this session RECORDS NOTHING. The browser has been driven through the test's own steps to the point the Run failed and parked there, so the page in front of you is the page the failing step faced. Diagnose it: read `diagnosis` (the matcher's verdict on the recorded locator), compare `recordedLocator` against the `nodes` actually on the page, and use observe/hover to look around. Test candidate fixes with try_locator — it merges your patch onto the real step and re-runs the real matcher against this page, so a `resolved` + `deterministic` verdict means it would resolve at Run time. Then REPORT: what broke, and the exact edit to make. You cannot save the fix — the user applies it in the test's locator editor, so give them the step number and the precise field and value.";
+    return [
+      "Repair mode: this session records no NEW test — it opens an EXISTING one for diagnosis and editing. The browser has been driven through the test's own steps to the point the Run failed and parked there, so the page in front of you is the page the failing step faced.",
+      "Diagnose first: read `diagnosis` (the matcher's verdict on the recorded locator), compare `recordedLocator` against the `nodes` actually on the page, and use observe/hover to look around. `goto_step` re-drives to any other step when the problem is not where the Run said it was.",
+      "Then fix it. For a broken locator, try_locator → apply_fix: the candidate is re-checked against this live page and refused unless it resolves, which is the one edit that must never be a guess.",
+      "For everything else, read_test and edit_test can change ANY part of the test — a checkpoint's name, capture mode, compare mode, judge prompt, threshold or masks; a typed value; a navigate URL; waits; adding, removing or reordering steps; re-capturing a step's element off the live page. Same write path as the web editor: a new audited version, previous version retained.",
+      "Do only what the user asked for, and say afterwards exactly what you changed and the new version number. edit_test is not verified against the page the way apply_fix is, so when you edit a locator through it, check it with try_locator (and goto_step to re-drive) rather than declaring it fixed.",
+    ].join(" ");
   }
   return mode === "batch"
     ? "Batch mode: execute the whole plan to completion without pausing for confirmation between steps. Take a checkpoint ONLY where the plan explicitly asks for one (e.g. 'screenshot', 'capture', 'snapshot', 'checkpoint', 'verify this screen') — never add one on your own. When every step in the plan is done, call finish_session to save the draft."
@@ -596,7 +718,34 @@ export class AuthoringSessionService implements OnApplicationShutdown {
   constructor(
     @Inject(TestsService) private readonly tests: TestsService,
     @Inject(DB) private readonly db: Db,
+    // Only ever asked one question: which Repair Job is this agent's write being made under?
+    // (Slice 19, slice 04 — a version awaiting review has to be traceable to the failure it
+    // claims to fix.) A human principal never reaches it.
+    @Inject(RepairJobsService) private readonly repairJobs: RepairJobsService,
   ) {}
+
+  /**
+   * The test an open repair session is addressing, or null. The MCP layer needs it to re-check an
+   * AGENT's claim on every session-addressed tool call: a session was opened under a claim, but
+   * that claim can be released or lapse while the browser is still parked, and a repair tool that
+   * kept working off the session id alone would outlive the licence it was opened under.
+   */
+  sessionTestId(sessionId: string): string | null {
+    return this.sessions.get(sessionId)?.repair?.testId ?? null;
+  }
+
+  /**
+   * How a write by `actor` on `testId` should be recorded (Slice 19, slice 04): an unattended
+   * Repair Agent's version lands `unreviewed` and carries the job it was written under; a human's
+   * lands as it always has, because the person writing it has already reviewed it.
+   */
+  private async reviewFor(
+    actor: { id: string; kind: SessionActorKind } | undefined,
+    testId: string,
+  ): Promise<{ unreviewed: boolean; repairJobId: string | null } | undefined> {
+    if (actor?.kind !== "agent") return undefined;
+    return { unreviewed: true, repairJobId: await this.repairJobs.claimedJobId(actor.id, testId) };
+  }
 
   async open(input: OpenSessionInput): Promise<OpenSessionResult> {
     const startUrl = (input.startUrl ?? "").trim();
@@ -631,6 +780,9 @@ export class AuthoringSessionService implements OnApplicationShutdown {
     this.sessions.set(sessionId, {
       ownerId: input.owner.id,
       ownerEmail: input.owner.email,
+      // An AUTHORING session is always a human's: `open_session` is absent from the agent
+      // toolset (ADR-0005), because an agent that could open one could invent tests unattended.
+      ownerKind: "user",
       browser,
       context,
       page,
@@ -749,7 +901,7 @@ export class AuthoringSessionService implements OnApplicationShutdown {
    * a person edits (ADR 0001).
    */
   async openRepair(input: {
-    owner: { id: string; email: string };
+    owner: { id: string; email: string; kind?: SessionActorKind };
     runId?: string;
     /** Alternative entry point: diagnose this test's MOST RECENT failure. The test id is what a
      *  user has to hand (it is in the web app's URL); a run id usually means going to look one up. */
@@ -830,21 +982,9 @@ export class AuthoringSessionService implements OnApplicationShutdown {
       await seedLocalStorage(context, localStorage, profile);
       page = await context.newPage();
 
-      const defaultWaits = definition.defaults?.waitBefore ?? [];
-      const resolvedDefaultWaits = profile ? resolveWaits(defaultWaits, profile) : defaultWaits;
-      // Drive the prefix. A step that throws STOPS the drive — we park wherever we got to and
-      // say so, because "the path broke three steps earlier" is a different diagnosis from
-      // "this locator is wrong", and conflating them sends the reader to the wrong step.
-      for (let i = 0; i < stepIndex; i++) {
-        const raw = definition.steps[i];
-        try {
-          await performStepAction(page, profile ? resolveStep(raw, profile) : raw, resolvedDefaultWaits);
-          reachedStep = i + 1;
-        } catch {
-          brokeAt = { index: i, label: describeStep(raw) };
-          break;
-        }
-      }
+      const drive = await this.driveTo(page, definition, profile, stepIndex);
+      reachedStep = drive.reachedStep;
+      brokeAt = drive.brokeAt;
     } catch (err) {
       await browser.close().catch(() => undefined);
       throw new BadRequestException(
@@ -852,20 +992,11 @@ export class AuthoringSessionService implements OnApplicationShutdown {
       );
     }
 
-    const step = definition.steps[stepIndex];
-    const recordedTarget = "target" in step ? step.target : undefined;
-    // Resolve the recorded locator against the page as it is NOW — the actual answer to "why is
-    // this step failing". Skipped when the drive never reached the step: the page would be the
-    // wrong one, and a verdict against it would be noise dressed as a finding.
-    const diagnosis =
-      recordedTarget && !brokeAt
-        ? await this.assess(page, profile ? resolveFingerprintTokens(recordedTarget, step, profile) : recordedTarget)
-        : null;
-
     const sessionId = randomUUID();
     this.sessions.set(sessionId, {
       ownerId: input.owner.id,
       ownerEmail: input.owner.email,
+      ownerKind: input.owner.kind ?? "user",
       browser,
       context,
       page,
@@ -886,6 +1017,7 @@ export class AuthoringSessionService implements OnApplicationShutdown {
         reachedStep,
         brokeAt,
         runError: row.error,
+        runFailedStepIndex: row.failedStepIndex,
       },
       pendingWaits: [],
       lastActivityAt: Date.now(),
@@ -895,33 +1027,132 @@ export class AuthoringSessionService implements OnApplicationShutdown {
     this.log.log(
       `opened repair session ${sessionId} on run ${runId} (step ${stepIndex}, reached ${reachedStep}) for ${input.owner.email}`,
     );
+    return this.repairView(sessionId);
+  }
 
-    const reproduced = brokeAt ? brokeAt.index === row.failedStepIndex : diagnosis?.status !== "resolved";
+  /**
+   * Re-park a repair session on a DIFFERENT step: re-drive the test's steps from the top and stop
+   * there. The counterpart to `open_repair_session`'s fixed landing spot — needed because a repair
+   * is rarely confined to the one step a Run happened to die on. The path may have broken earlier;
+   * a fix may need checking one step later; the user may simply want to change step 7.
+   *
+   * It re-drives the definition the session is CURRENTLY holding, which is the one `editTest` has
+   * been writing to — so after an edit this is also how you see the edit take effect.
+   *
+   * A fresh page in the same (already seeded) context, rather than the dirty one: re-driving on top
+   * of whatever the last drive left behind would make the parked state depend on where you had been
+   * before, which is exactly the kind of thing a diagnosis must not inherit.
+   */
+  async gotoStep(sessionId: string, stepIndex: number): Promise<RepairSessionResult> {
+    const s = this.require(sessionId);
+    const repair = s.repair;
+    if (!repair) {
+      throw new BadRequestException(
+        "goto_step only works in a repair session — open one with open_repair_session on the failed run (or the test id).",
+      );
+    }
+    const steps = repair.definition.steps;
+    if (!Number.isInteger(stepIndex) || stepIndex < 0 || stepIndex >= steps.length) {
+      throw new BadRequestException(
+        `Step ${stepIndex} is out of range — this test has ${steps.length} steps, so pass a stepIndex between 0 and ${steps.length - 1}.`,
+      );
+    }
+
+    const old = s.page;
+    const page = await s.context.newPage();
+    s.page = page;
+    await old.close().catch(() => undefined);
+    const { reachedStep, brokeAt } = await this.driveTo(page, repair.definition, repair.profile, stepIndex);
+    repair.stepIndex = stepIndex;
+    repair.reachedStep = reachedStep;
+    repair.brokeAt = brokeAt;
+    this.log.log(`repair ${sessionId}: re-parked on step ${stepIndex} (reached ${reachedStep})`);
+    return this.repairView(sessionId);
+  }
+
+  /**
+   * Everything a repair session is currently looking at: the step it is parked on, why that step
+   * is failing, and what the live page offers instead. Built from session state so
+   * `open_repair_session` and `goto_step` describe the parked page the same way — a re-park must
+   * not read differently from a fresh open.
+   */
+  private async repairView(sessionId: string): Promise<RepairSessionResult> {
+    const s = this.require(sessionId);
+    const repair = s.repair;
+    if (!repair) throw new BadRequestException("Not a repair session.");
+    const { definition, stepIndex, reachedStep, brokeAt, profile } = repair;
+    const step = definition.steps[stepIndex];
+    const recordedTarget = "target" in step ? step.target : undefined;
+    // Resolve the recorded locator against the page as it is NOW — the actual answer to "why is
+    // this step failing". Skipped when the drive never reached the step: the page would be the
+    // wrong one, and a verdict against it would be noise dressed as a finding.
+    const diagnosis =
+      recordedTarget && !brokeAt
+        ? await this.assess(
+            s.page,
+            profile ? resolveFingerprintTokens(recordedTarget, step, profile) : recordedTarget,
+          )
+        : null;
+
+    const failedAt = repair.runFailedStepIndex;
+    const reproduced = brokeAt ? brokeAt.index === failedAt : diagnosis?.status !== "resolved";
     const note = brokeAt
-      ? brokeAt.index === row.failedStepIndex
+      ? brokeAt.index === failedAt
         ? `The drive failed at step ${brokeAt.index + 1} (${brokeAt.label}) — the same step the Run failed on. The page you are parked on is the state BEFORE that step.`
-        : `The drive broke EARLIER than the Run did, at step ${brokeAt.index + 1} (${brokeAt.label}), so step ${stepIndex + 1} was never reached. Diagnose step ${brokeAt.index + 1} first — re-open the session with stepIndex ${brokeAt.index}.`
+        : `The drive broke EARLIER than step ${stepIndex + 1}, at step ${brokeAt.index + 1} (${brokeAt.label}), so step ${stepIndex + 1} was never reached. Deal with step ${brokeAt.index + 1} first — call goto_step with stepIndex ${brokeAt.index}.`
       : diagnosis?.status === "resolved"
         ? `The recorded locator RESOLVES on this page, so the original failure did not reproduce. Either the page is in a different state than it was during the Run, or the failure is intermittent (a timing/late-render problem rather than a locator problem). Check the diagnosis verdict — a fragile locator that happens to resolve today is still the likely culprit.`
         : `Reproduced: the recorded locator does not resolve on this page. The diagnosis below says which way it fails.`;
 
-    const { nodes } = await page.evaluate(collectSnapshot);
+    const { nodes } = await s.page.evaluate(collectSnapshot);
     await this.emitFrame(sessionId, { type: "navigate" });
     return {
       sessionId,
       mode: "repair",
-      run: { id: runId, error: row.error, failedStepIndex: row.failedStepIndex },
-      test: { id: row.testId, name: row.testName, version: row.version, environment: environmentName },
+      run: { id: repair.runId, error: repair.runError, failedStepIndex: failedAt },
+      test: {
+        id: repair.testId,
+        name: repair.testName,
+        version: repair.version,
+        environment: repair.environmentName,
+      },
       step: { index: stepIndex, of: definition.steps.length, label: describeStep(step), type: step.type },
       replay: { reachedStep, brokeAt, reproduced, note },
       recordedLocator: summarizeFingerprint(recordedTarget),
       diagnosis,
-      url: page.url(),
-      title: await page.title().catch(() => ""),
+      url: s.page.url(),
+      title: await s.page.title().catch(() => ""),
       nodes,
-      screenshot: (await page.screenshot()).toString("base64"),
+      screenshot: (await s.page.screenshot()).toString("base64"),
       guidance: modeGuidance("repair"),
     };
+  }
+
+  /**
+   * Drive a definition's steps `[0..stepIndex)` on a page, with the same primitive a Run uses, and
+   * report how far it got. A step that throws STOPS the drive — we park wherever we got to and say
+   * so, because "the path broke three steps earlier" is a different diagnosis from "this locator is
+   * wrong", and conflating them sends the reader to the wrong step.
+   */
+  private async driveTo(
+    page: Page,
+    definition: TestDefinition,
+    profile: EnvironmentProfile | null,
+    stepIndex: number,
+  ): Promise<{ reachedStep: number; brokeAt: { index: number; label: string } | null }> {
+    const defaultWaits = definition.defaults?.waitBefore ?? [];
+    const resolvedDefaultWaits = profile ? resolveWaits(defaultWaits, profile) : defaultWaits;
+    let reachedStep = 0;
+    for (let i = 0; i < stepIndex; i++) {
+      const raw = definition.steps[i];
+      try {
+        await performStepAction(page, profile ? resolveStep(raw, profile) : raw, resolvedDefaultWaits);
+        reachedStep = i + 1;
+      } catch {
+        return { reachedStep, brokeAt: { index: i, label: describeStep(raw) } };
+      }
+    }
+    return { reachedStep, brokeAt: null };
   }
 
   /**
@@ -1029,10 +1260,11 @@ export class AuthoringSessionService implements OnApplicationShutdown {
       );
     }
 
-    const { version } = await this.tests.saveConfig(
+    const { version, versionId } = await this.tests.saveConfig(
       repair.testId,
       { baseVersion: latest.version, steps: [{ index: repair.stepIndex, target: patch }] },
       `${s.ownerEmail} (Claude repair)`,
+      await this.reviewFor({ id: s.ownerId, kind: s.ownerKind }, repair.testId),
     );
 
     // Keep the session honest about what the test now says, so a second fix in the same session
@@ -1056,6 +1288,7 @@ export class AuthoringSessionService implements OnApplicationShutdown {
       ok: true,
       testId: repair.testId,
       stepIndex: repair.stepIndex,
+      versionId,
       version,
       baseVersion: latest.version,
       patch,
@@ -1064,6 +1297,378 @@ export class AuthoringSessionService implements OnApplicationShutdown {
       warning,
       summary: `Step ${repair.stepIndex + 1} of "${repair.testName}" now matches on ${tried.matchedSignal}. Saved as v${version} (was v${latest.version}); the previous version is retained.`,
     };
+  }
+
+  // ── editing the test itself (any step, any field) ──────────────────────────────────
+  //
+  // `applyFix` above is the NARROW path: one locator, verified against the live page before it is
+  // written. It exists because that is the repair that must never be a guess. But a broken test is
+  // not always a broken locator — the checkpoint asserts the wrong region, the typed value is
+  // stale, a step is missing, a wait is needed, the checkpoint should be judged by an LLM rather
+  // than pixel-diffed, two steps are in the wrong order. Those are ordinary edits, and refusing
+  // them would send the user to the web editor mid-repair with the diagnosis in their head.
+  //
+  // So `readTest`/`editTest` expose the WHOLE editable definition, through the very same
+  // `TestsService.saveConfig` seam the web editor writes through — same validation, same optimistic
+  // lock, same audited new version, previous version retained. The difference from `applyFix` is
+  // deliberate and worth stating plainly: a general edit is NOT verified against a live page. It
+  // can write a locator that does not resolve, in the same way the web editor can.
+
+  /** What one step looks like to the model: its index, its label, and every field that can be
+   *  edited on it — so an edit can be addressed precisely instead of guessed at. */
+  private toEditableStep(step: TestConfigStep): Record<string, unknown> {
+    const screenshot = step.type === "screenshot";
+    return {
+      index: step.index,
+      type: step.type,
+      label: step.label,
+      ...(step.url !== null ? { url: step.url } : {}),
+      ...(step.value !== null ? { value: step.value } : {}),
+      ...(screenshot
+        ? {
+            checkpointName: step.checkpointName,
+            captureMode: step.captureMode,
+            compareMode: step.compareMode,
+            ...(step.prompt !== null ? { prompt: step.prompt } : {}),
+            ...(step.threshold !== null ? { threshold: step.threshold } : {}),
+            ...(step.rect ? { rect: step.rect } : {}),
+            ...(step.masks.length ? { masks: step.masks } : {}),
+            hasBaseline: step.baselineUrl !== null,
+          }
+        : {}),
+      ...(step.waitBefore.length ? { waitBefore: step.waitBefore } : {}),
+      ...(step.target ? { locator: step.target } : {}),
+    };
+  }
+
+  /**
+   * Read the test's CURRENT definition as an editable surface: every step, with its index and
+   * every field an edit can address. The prerequisite for changing anything — an edit is keyed by
+   * step index, and an index guessed from a run's error message is how you edit the wrong step.
+   *
+   * Always the LATEST version, not the one a failed run used: an edit lands on the latest, so this
+   * has to describe what the edit will actually hit.
+   */
+  async readTest(input: { sessionId?: string; testId?: string }): Promise<{
+    testId: string;
+    name: string;
+    version: number;
+    notes: string | null;
+    needsEnvironment: boolean;
+    defaults: unknown[];
+    steps: Record<string, unknown>[];
+    /** Set in a repair session: which step the browser is currently parked on. */
+    parkedOnStep?: number;
+  }> {
+    const testId = this.resolveTestId(input);
+    const config = await this.tests.getConfig(testId);
+    const parked = input.sessionId ? this.sessions.get(input.sessionId)?.repair?.stepIndex : undefined;
+    return {
+      testId: config.id,
+      name: config.name,
+      version: config.version,
+      notes: config.notes,
+      needsEnvironment: config.needsEnvironment,
+      defaults: config.defaults,
+      steps: config.steps.map((step) => this.toEditableStep(step)),
+      ...(parked !== undefined ? { parkedOnStep: parked } : {}),
+    };
+  }
+
+  /**
+   * Apply an arbitrary edit to the test and write it as a new audited version.
+   *
+   * Everything the definition holds is reachable from here: per-step field edits (checkpoint name /
+   * capture mode / compare mode / judge prompt / threshold / masks / region rect, the typed value,
+   * a navigate URL, waits, the locator), step removal, step insertion, and reordering — plus the
+   * test's name and notes, which live on the row rather than the definition and so are written
+   * separately, without bumping a version.
+   *
+   * Two things it does that the web editor cannot:
+   *  - `ref` — a step's locator can be RE-CAPTURED from the page the session is parked on, or an
+   *    inserted click/hover/type/checkpoint can be built on a real captured fingerprint rather than
+   *    a hand-written selector. That is the difference between a step that self-heals and a step
+   *    hanging off one brittle CSS path.
+   *  - `baseVersion` is resolved here rather than supplied. The model has no editor tab open to go
+   *    stale, and making it guess a version number only invents 409s.
+   */
+  async editTest(input: TestEditInput): Promise<TestEditResult> {
+    const testId = this.resolveTestId(input);
+    const session = input.sessionId ? this.require(input.sessionId) : undefined;
+    const config = await this.tests.getConfig(testId);
+    const changes: string[] = [];
+
+    // Name / notes live on the test ROW (organization metadata, like folder and tags), not in the
+    // versioned definition — so they are written through the structural update and never bump a
+    // version. Deferred until the definition patch has gone through: a rejected edit should leave
+    // NOTHING applied, and a rename that survives a refusal is the confusing half-state.
+    const rename = input.name?.trim();
+    const renamesTest = rename !== undefined && rename !== "" && rename !== config.name;
+    const applyRowEdits = async (): Promise<void> => {
+      if (renamesTest) {
+        await this.tests.update(testId, { name: rename }, session?.ownerEmail);
+        changes.push(`renamed the test to "${rename}"`);
+      }
+      if (input.notes !== undefined) {
+        await this.tests.update(testId, { notes: input.notes }, session?.ownerEmail);
+        changes.push(input.notes.trim() ? "updated the test notes" : "cleared the test notes");
+      }
+    };
+
+    const steps: TestConfigStepPatch[] = [];
+    for (const edit of input.steps ?? []) {
+      // Coerce the index: it arrives as raw JSON from an MCP client, and a string "2" would sail
+      // through every check here and then silently match no step in `saveConfig`'s numeric map —
+      // an edit that reports success and changes nothing is the worst outcome available.
+      const index = Number(edit.index);
+      const step = Number.isInteger(index) ? config.steps[index] : undefined;
+      if (!step) {
+        throw new BadRequestException(
+          `There is no step ${edit.index} — this test has ${config.steps.length} steps (0..${config.steps.length - 1}). Call read_test and address the step by the index it reports.`,
+        );
+      }
+      const label = `step ${index + 1} (${step.label})`;
+      const patch: TestConfigStepPatch = { index };
+      if (edit.remove) {
+        patch.remove = true;
+        changes.push(`removed ${label}`);
+        steps.push(patch);
+        continue;
+      }
+      if (edit.name !== undefined) {
+        this.assertStepType(step, "screenshot", "renaming a checkpoint", index);
+        patch.name = edit.name;
+        changes.push(`renamed the checkpoint on ${label} to "${edit.name}"`);
+      }
+      if (edit.captureMode !== undefined) {
+        this.assertStepType(step, "screenshot", "changing the capture mode", index);
+        patch.captureMode = edit.captureMode;
+        changes.push(`set ${label} to capture ${edit.captureMode}`);
+      }
+      if (edit.rect !== undefined) {
+        this.assertStepType(step, "screenshot", "setting a region rect", index);
+        patch.rect = edit.rect;
+        changes.push(`set the region rect on ${label}`);
+      }
+      if (edit.compareMode !== undefined) {
+        this.assertStepType(step, "screenshot", "changing the compare mode", index);
+        patch.compareMode = edit.compareMode;
+        changes.push(`set ${label} to compare by ${edit.compareMode}`);
+      }
+      if (edit.prompt !== undefined) {
+        this.assertStepType(step, "screenshot", "setting a judge prompt", index);
+        patch.prompt = edit.prompt;
+        changes.push(edit.prompt.trim() ? `set the judge prompt on ${label}` : `cleared the judge prompt on ${label}`);
+      }
+      if (edit.threshold !== undefined) {
+        this.assertStepType(step, "screenshot", "setting a threshold", index);
+        patch.threshold = edit.threshold;
+        changes.push(`set the threshold on ${label} to ${edit.threshold}`);
+      }
+      if (edit.masks !== undefined) {
+        this.assertStepType(step, "screenshot", "setting masks", index);
+        patch.masks = edit.masks;
+        changes.push(edit.masks.length ? `set ${edit.masks.length} mask(s) on ${label}` : `cleared the masks on ${label}`);
+      }
+      if (edit.url !== undefined) {
+        this.assertStepType(step, "navigate", "changing the URL", index);
+        patch.url = edit.url;
+        changes.push(`pointed ${label} at ${edit.url}`);
+      }
+      if (edit.value !== undefined) {
+        this.assertStepType(step, "type", "changing the typed value", index);
+        patch.value = edit.value;
+        changes.push(`set the typed value on ${label}`);
+      }
+      if (edit.waitBefore !== undefined) {
+        patch.waitBefore = edit.waitBefore;
+        changes.push(edit.waitBefore.length ? `set ${edit.waitBefore.length} wait(s) before ${label}` : `cleared the waits before ${label}`);
+      }
+      if (edit.dropRecordedWaits !== undefined) {
+        patch.dropLockedWaits = edit.dropRecordedWaits.map(Number);
+        changes.push(`dropped ${patch.dropLockedWaits.length} recorded wait(s) before ${label}`);
+      }
+      if (edit.ref !== undefined) {
+        if (!step.target) {
+          throw new BadRequestException(
+            `Step ${index + 1} (${step.label}) has no element locator to re-capture — only click, hover, type and element-mode checkpoints do.`,
+          );
+        }
+        patch.recapture = (await this.captureRef(session, edit.ref, step.type !== "screenshot")) as unknown as Record<string, unknown>;
+        changes.push(`re-captured the locator on ${label} from the live page`);
+      }
+      if (edit.locator !== undefined) {
+        patch.target = edit.locator;
+        changes.push(`edited the locator on ${label}`);
+      }
+      steps.push(patch);
+    }
+
+    const inserts: TestConfigPatch["inserts"] = [];
+    for (const insert of input.inserts ?? []) {
+      const atIndex = Number(insert.atIndex);
+      if (!Number.isInteger(atIndex) || !config.steps[atIndex]) {
+        throw new BadRequestException(
+          `There is no step ${insert.atIndex} to anchor an insert to — this test has ${config.steps.length} steps (0..${config.steps.length - 1}).`,
+        );
+      }
+      inserts.push({
+        atIndex,
+        position: insert.position === "above" ? "above" : "below",
+        step: await this.buildInsertedStep(insert.step, session),
+      });
+      changes.push(`inserted a ${insert.step.type} step ${insert.position} step ${atIndex + 1}`);
+    }
+
+    if (input.order !== undefined) changes.push("reordered the steps");
+    if (input.defaults !== undefined) {
+      changes.push(input.defaults.length ? "set the test-level default waits" : "cleared the test-level default waits");
+    }
+
+    const patch: TestConfigPatch = {
+      baseVersion: config.version,
+      ...(input.defaults !== undefined ? { defaults: input.defaults } : {}),
+      ...(steps.length ? { steps } : {}),
+      ...(inserts.length ? { inserts } : {}),
+      ...(input.order !== undefined ? { order: input.order } : {}),
+    };
+    const touchesDefinition =
+      patch.defaults !== undefined || patch.steps !== undefined || patch.inserts !== undefined || patch.order !== undefined;
+    if (!touchesDefinition) {
+      if (!renamesTest && input.notes === undefined) {
+        throw new BadRequestException(
+          "edit_test was given nothing to change. Pass `steps`, `inserts`, `order`, `defaults`, `name` or `notes` — call read_test first to see what is there.",
+        );
+      }
+      // A name/notes-only edit is a row update; there is no new version to report.
+      await applyRowEdits();
+      const after = await this.tests.getConfig(testId);
+      return {
+        ok: true,
+        testId,
+        versionId: "",
+        version: after.version,
+        baseVersion: after.version,
+        changes,
+        steps: after.steps.map((step) => this.toEditableStep(step)),
+        note: "Name/notes live on the test row, so no new test version was written.",
+      };
+    }
+
+    const { version, versionId } = await this.tests.saveConfig(
+      testId,
+      patch,
+      `${session?.ownerEmail ?? input.actor?.email ?? "mcp"} (Claude edit)`,
+      await this.reviewFor(session ? { id: session.ownerId, kind: session.ownerKind } : input.actor, testId),
+    );
+    await applyRowEdits();
+
+    // Keep a repair session honest about what the test now says: subsequent try_locator/apply_fix
+    // calls must patch the definition as edited, not the one the session opened with. The parked
+    // PAGE is still the old drive, though — say so rather than let a stale page read as verified.
+    const after = await this.tests.getConfig(testId);
+    const repair = session?.repair;
+    if (repair && repair.testId === testId) {
+      const [written] = await this.db
+        .select({ definition: testVersions.definition })
+        .from(testVersions)
+        .where(and(eq(testVersions.testId, testId), eq(testVersions.version, version)))
+        .limit(1);
+      if (written) repair.definition = written.definition as TestDefinition;
+      repair.version = version;
+      repair.stepIndex = Math.min(repair.stepIndex, repair.definition.steps.length - 1);
+    }
+    this.log.log(
+      `edit_test: wrote v${version} of test ${testId} (${changes.length} change(s)) for ${session?.ownerEmail ?? "mcp"}`,
+    );
+    return {
+      ok: true,
+      testId,
+      versionId,
+      version,
+      baseVersion: config.version,
+      changes,
+      steps: after.steps.map((step) => this.toEditableStep(step)),
+      note: repair
+        ? `Saved as v${version} (v${config.version} is retained). The browser is still parked on the drive from BEFORE this edit — call goto_step to re-drive the edited test if you want to see or verify the change on the live page.`
+        : `Saved as v${version}; v${config.version} is retained.`,
+    };
+  }
+
+  /** Which test an edit addresses: the one named outright, else the one the session is repairing. */
+  private resolveTestId(input: { sessionId?: string; testId?: string }): string {
+    const explicit = input.testId?.trim();
+    const repair = input.sessionId ? this.require(input.sessionId).repair : undefined;
+    if (explicit && repair && repair.testId !== explicit) {
+      throw new BadRequestException(
+        `This session is repairing test ${repair.testId}, but you passed testId ${explicit}. Drop the testId to edit the test under repair, or drop the sessionId to edit a different test.`,
+      );
+    }
+    const id = explicit || repair?.testId;
+    if (!id) {
+      throw new BadRequestException(
+        "Pass a testId (the id in the test's web-app URL), or a sessionId from an open repair session to edit the test it is repairing.",
+      );
+    }
+    return id;
+  }
+
+  /** Guard a field edit against the step type that actually carries it, before anything is
+   *  written — "prompt on a click step" is a mistaken index far more often than a mistaken field. */
+  private assertStepType(step: TestConfigStep, type: TestConfigStep["type"], what: string, index: number): void {
+    if (step.type !== type) {
+      throw new BadRequestException(
+        `Step ${index + 1} is a ${step.type} step (${step.label}), and ${what} only applies to a ${type} step. Check the index against read_test.`,
+      );
+    }
+  }
+
+  /** Capture a fingerprint off the session's live page for a snapshot `ref` — the same capture an
+   *  authoring action performs, so a step built here is indistinguishable from a recorded one. */
+  private async captureRef(
+    session: SessionState | undefined,
+    ref: string,
+    climb: boolean,
+  ): Promise<Fingerprint> {
+    if (!session) {
+      throw new BadRequestException(
+        "A `ref` names an element on a live page, so it needs an open session — pass the sessionId of the repair session you are parked in (or use `selector` instead).",
+      );
+    }
+    return this.captureFp(session.page, this.resolveRef(session.page, ref), climb);
+  }
+
+  /** Turn an inserted-step request into the contract's `NewStepInput`, capturing a live
+   *  fingerprint when the caller addressed the element by `ref`. */
+  private async buildInsertedStep(
+    step: TestEditInsertStep,
+    session: SessionState | undefined,
+  ): Promise<NewStepInput> {
+    if (step.type === "navigate") return { type: "navigate", url: step.url ?? "" };
+    if (step.type === "screenshot") {
+      const captureMode = step.captureMode ?? "fullpage";
+      return {
+        type: "screenshot",
+        name: step.name ?? "",
+        captureMode,
+        ...(step.rect ? { rect: step.rect } : {}),
+        ...(step.selector ? { selector: step.selector } : {}),
+        ...(captureMode === "element" && step.ref
+          ? { target: (await this.captureRef(session, step.ref, false)) as unknown as Record<string, unknown> }
+          : {}),
+        ...(step.compareMode ? { compareMode: step.compareMode } : {}),
+        ...(step.prompt ? { prompt: step.prompt } : {}),
+        ...(step.threshold !== undefined ? { threshold: step.threshold } : {}),
+        ...(step.masks ? { masks: step.masks } : {}),
+      };
+    }
+    const target = step.ref
+      ? ((await this.captureRef(session, step.ref, true)) as unknown as Record<string, unknown>)
+      : undefined;
+    const located = { ...(target ? { target } : {}), ...(step.selector ? { selector: step.selector } : {}) };
+    if (step.type === "type") return { type: "type", ...located, value: step.value ?? "" };
+    if (step.type === "hover") return { type: "hover", ...located };
+    return { type: "click", ...located };
   }
 
   /** Perceive the current page: a ref-annotated node list (+ optional screenshot). */
@@ -1265,7 +1870,7 @@ export class AuthoringSessionService implements OnApplicationShutdown {
     const s = this.require(sessionId);
     if (s.repair) {
       throw new BadRequestException(
-        "This is a repair session — it records nothing, so a checkpoint here would go nowhere. Diagnose the locator (try_locator) and report the edit; the user applies it to the existing test.",
+        "This is a repair session — the `checkpoint` tool records into a NEW draft, and there is no draft here. To add a checkpoint to the test under repair, use edit_test with an insert: { inserts: [{ atIndex, position, step: { type: \"screenshot\", name, captureMode } }] } — pass a `ref` from observe for an element checkpoint, and it is captured off this live page.",
       );
     }
     const name = (input.name ?? "").trim();
@@ -1337,7 +1942,7 @@ export class AuthoringSessionService implements OnApplicationShutdown {
     const s = this.require(sessionId);
     if (s.repair) {
       throw new BadRequestException(
-        `This is a repair session on run ${s.repair.runId} — there is no draft to save, and saving one would fork the test you are trying to fix. Report the diagnosis and the exact edit for step ${s.repair.stepIndex + 1}, then call close_repair_session.`,
+        `This is a repair session on run ${s.repair.runId} — there is no draft to save, and saving one would fork the test you are trying to fix. Edits here are written straight onto test ${s.repair.testId} by apply_fix / edit_test (each one a new audited version), so there is nothing left to finish: report what you changed, then call close_repair_session.`,
       );
     }
     if (s.mode === "interactive" && !opts?.confirm) {

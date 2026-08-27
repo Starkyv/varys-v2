@@ -134,4 +134,36 @@ describe("captureFingerprint", () => {
     };
     expect(fp.scope).toEqual({ container: "li", text: "Apples" });
   });
+
+  it("scopes a card in a div grid by its repeated class signature", async () => {
+    // The shape modern apps actually ship: no li/tr/article anywhere, and a per-run
+    // generated testid on each card. The scope must key on the class signature (shape)
+    // and the title (text the test authored) — never on the generated id.
+    await page.setContent(
+      `<main class="grid">` +
+        `<div class="widget-card" data-testid="widget-a1b2c3"><h3>Revenue by Region</h3><button class="expand" aria-label="Expand">+</button></div>` +
+        `<div class="widget-card" data-testid="widget-d4e5f6"><h3>Orders by Month</h3><button class="expand" aria-label="Expand">+</button></div>` +
+        `</main>`,
+    );
+
+    const fp = (await captureInPage(page, ".widget-card button", { climb: true })) as {
+      scope?: { container: string; text: string };
+    };
+
+    expect(fp.scope).toEqual({ container: "div.widget-card", text: "Revenue by Region" });
+  });
+
+  it("does not scope to a wrapper whose shape does not repeat", async () => {
+    // One-of-a-kind wrapper: scoping to it buys nothing the ancestor anchor doesn't
+    // already give, and would just add a selector that can rot.
+    await page.setContent(
+      `<main class="page"><section class="toolbar"><button class="act" aria-label="Save">x</button></section></main>`,
+    );
+
+    const fp = (await captureInPage(page, ".act", { climb: true })) as {
+      scope?: { container: string; text: string };
+    };
+
+    expect(fp.scope).toBeUndefined();
+  });
 });

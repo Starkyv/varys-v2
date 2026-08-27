@@ -163,26 +163,74 @@ export function captureFingerprint(el: Element, opts?: CaptureOptions): Fingerpr
 
   // Row scope: when the target sits in a repeated container, record "the element in
   // the row that says <text>" — a distinguishing visible line verified unique among
-  // such containers. Survives reordering/insertion where :nth-of-type would not.
-  let scope: { container: string; text: string } | undefined;
+  // such containers. Survives reordering/insertion where :nth-of-type would not, and —
+  // the reason it matters most — survives per-run generated ids: the container is
+  // addressed by shape and the row by text the test itself authored, so nothing in the
+  // scope depends on a value the app minted this run.
+  //
+  // Containers are looked for two ways, nearest first:
+  //   1. the semantic row tags/roles (lists, tables);
+  //   2. any ancestor whose tag + stable-class signature REPEATS in the document — which
+  //      is what a div-based card grid is, and what modern apps actually ship. Without
+  //      this, a grid of <div class="widget-card"> yielded no scope at all, every card's
+  //      controls scored identically, and the matcher refused to guess (ambiguous) the
+  //      moment the generated testid stopped matching.
+  // `Fingerprint.scope.container` is an arbitrary CSS selector to the matcher
+  // (`querySelectorAll(container)`), so both shapes resolve through the same path.
+  const stableClassSelector = (node: Element): string | undefined => {
+    const cls = (node.getAttribute("class") ?? "")
+      .split(/\s+/)
+      .filter((c) => c && !/^\d+$/.test(c) && !looksHashed(c))
+      .slice(0, 3);
+    if (!cls.length) return undefined;
+    return node.tagName.toLowerCase() + cls.map((c) => `.${CSS.escape(c)}`).join("");
+  };
+
+  const containerCandidates: { el: Element; container: string }[] = [];
   const rowEl = el.closest('li, tr, [role="row"], [role="listitem"], article');
   if (rowEl && rowEl !== el) {
     const role = rowEl.getAttribute("role");
     const tag = rowEl.tagName.toLowerCase();
-    const container =
-      tag === "li" || tag === "tr" || tag === "article" ? tag : role ? `[role="${role}"]` : tag;
-    const rowRendered = rowEl instanceof HTMLElement ? rowEl.innerText : (rowEl.textContent ?? "");
+    containerCandidates.push({
+      el: rowEl,
+      container:
+        tag === "li" || tag === "tr" || tag === "article" ? tag : role ? `[role="${role}"]` : tag,
+    });
+  }
+  {
+    const body = el.ownerDocument.body;
+    let p = el.parentElement;
+    for (let i = 0; p && p !== body && i < 6; i++, p = p.parentElement) {
+      const container = stableClassSelector(p);
+      // Repeated shape only: a signature matching just this one element is a wrapper, not
+      // a row, and scoping to it buys nothing the ancestor anchor doesn't already give.
+      if (!container || el.ownerDocument.querySelectorAll(container).length < 2) continue;
+      if (containerCandidates.some((c) => c.container === container)) continue;
+      containerCandidates.push({ el: p, container });
+    }
+  }
+
+  // First candidate that yields a line unique to ONE of its peers wins. A too-generic
+  // signature is self-rejecting: if peers nest, or many share the line, the count is
+  // never 1 and we fall through to the next candidate (and finally to no scope).
+  let scope: { container: string; text: string } | undefined;
+  for (const cand of containerCandidates) {
+    const rowRendered =
+      cand.el instanceof HTMLElement ? cand.el.innerText : (cand.el.textContent ?? "");
     const candidates = rowRendered
       .split("\n")
       .map((x) => x.trim())
       .filter((l) => l.length >= 2 && l.length <= 60 && /[A-Za-z]/.test(l));
-    const peers = Array.from(el.ownerDocument.querySelectorAll(container));
+    const peers = Array.from(el.ownerDocument.querySelectorAll(cand.container));
     const distinguishing = candidates.find(
       (line) =>
         peers.filter((p) => (p instanceof HTMLElement ? p.innerText : (p.textContent ?? "")).includes(line))
           .length === 1,
     );
-    if (distinguishing) scope = { container, text: distinguishing };
+    if (distinguishing) {
+      scope = { container: cand.container, text: distinguishing };
+      break;
+    }
   }
 
   // A deterministic structural CSS path (classic getSelector ladder), stored as a

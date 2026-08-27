@@ -25,6 +25,8 @@ import type {
   PersistResult,
   ReEvaluation,
   RepairJobSummary,
+  RepairReviewDecision,
+  RepairReviewItem,
   RepairPolicy,
   SetRepairPolicyRequest,
   SetRepairPolicyResult,
@@ -805,6 +807,30 @@ export async function enqueueRepairJob(runId: string): Promise<RepairJobSummary>
     throw new Error(await errorMessage(res, "Failed to enqueue the repair"));
   }
   return res.json() as Promise<RepairJobSummary>;
+}
+
+/**
+ * Repaired versions awaiting a human accept/reject — the repair review queue (slice 04). Nested
+ * under `/repair-jobs` so it needs no new dev-proxy prefix.
+ */
+export async function fetchRepairReviews(): Promise<RepairReviewItem[]> {
+  const res = await fetch(`${API_BASE}/repair-jobs/reviews`);
+  if (!res.ok) throw new Error(`Failed to load the repair reviews (${res.status})`);
+  return res.json() as Promise<RepairReviewItem[]>;
+}
+
+/** Accept a repaired version (it stays the active definition) or reject it (the test reverts). */
+export async function decideRepairReview(
+  versionId: string,
+  action: "accept" | "reject",
+): Promise<RepairReviewDecision> {
+  const res = await fetch(`${API_BASE}/repair-jobs/reviews/${versionId}/${action}`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    throw new Error(await errorMessage(res, `Failed to ${action} the repair`));
+  }
+  return res.json() as Promise<RepairReviewDecision>;
 }
 
 /** Cancel a queued (unclaimed) repair job. */

@@ -169,6 +169,32 @@ test as a new version — the same operation the locator editor performs, with t
 and audit trail — and it refuses anything that does not resolve against the live page, so a fix can
 never replace one broken locator with another. The previous version is kept.
 
+### Changing anything else about the test
+
+A repair session is not limited to the locator on the step the run died on. It is the session in
+which you change whatever the user asks about that test.
+
+`goto_step` re-drives the test and parks you on any other step, so you can look at the page that
+step faces — use it when the path broke upstream, when the user asks about a different step, and
+after an edit, since the parked page is always the drive from *before* the edit.
+
+`read_test` prints the test as it stands: every step with its index and every editable field.
+Read it before you edit — an edit is keyed by step index, and an index you inferred from the error
+message is how you edit the wrong step.
+
+`edit_test` then changes any of it: a checkpoint's name (its baselines are moved onto the new
+name), capture mode, compare mode, judge prompt, threshold or masks; a typed value; a navigate
+URL; the waits before a step; and the structure itself — insert a step, remove one, reorder them.
+Inserted click/hover/type/element-checkpoint steps should be built from a `ref` off the live page
+whenever you have one: that records the full fingerprint and self-heals, where a hand-written
+`selector` is one CSS change from failing with nothing to fall back on. A step whose element
+changed wholesale is re-recorded the same way, with `ref` on the step edit.
+
+Two rules for `edit_test`. Change only what was asked — it writes a real version of a real test,
+and tidying things up on your own initiative is how a test quietly stops asserting what it was
+written to assert. And it does not verify locators the way `apply_fix` does: after editing one,
+`goto_step` back to that step and confirm with `try_locator` before you call it fixed.
+
 Always report what you changed and the new version number; the user must be able to find and undo
 it. And if the honest answer is that the control needs a `data-testid` or an `aria-label` in the
 app, say that too rather than letting a patch that will rot again pass for a fix.

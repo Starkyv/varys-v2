@@ -14,7 +14,11 @@ import type {
   EditableWait,
   NewStepInput,
   PromoteDraftBody,
+  RecordedTarget,
   Rect,
+  RepairPolicy,
+  SetRepairPolicyRequest,
+  SetRepairPolicyResult,
   TestConfigPatch,
   TestConfigStep,
   TestConfigView,
@@ -25,6 +29,7 @@ import type {
   TestStatus,
   TestSummary,
 } from "@varys/review-contract";
+import { isRepairPolicy, REPAIR_POLICIES } from "@varys/repair-policy";
 import {
   describeStep,
   type Fingerprint,
@@ -52,6 +57,7 @@ import {
 } from "../db/schema";
 import { applyFingerprintPatch, hasMatchableSignal } from "../fingerprint-patch";
 import { summarizeFingerprint } from "../fingerprint-summary";
+import { folderChildren, subtreeOf } from "../suites/suite-membership";
 import { STORAGE } from "../storage/storage.module";
 
 /** Organization metadata only — `folderId: null` unfiles; `tags` REPLACES the whole
@@ -68,6 +74,9 @@ export interface UpdateTestInput {
   /** Set/replace the test's free-form note; `null`/empty clears it. Omit to leave
    *  unchanged. Annotation only — never writes a new test_version. */
   notes?: string | null;
+  /** Set the Repair Policy (Slice 19) — `manual` | `auto`. Omit to leave unchanged.
+   *  Operational metadata, like the schedule: never writes a new test_version. */
+  repairPolicy?: RepairPolicy;
 }
 
 /**
@@ -86,6 +95,15 @@ function nextCronRun(cron: string, timezone: string, enabled: boolean): Date | n
     );
   }
   return enabled ? next : null;
+}
+
+/**
+ * Narrow a stored `repair_policy` string to the contract type. A row written before the column
+ * existed, or by a future value this build does not know, reads as `manual` — the SAFE default:
+ * an unrecognised policy must never be treated as permission to edit a test unattended.
+ */
+function asRepairPolicy(value: string | null | undefined): RepairPolicy {
+  return isRepairPolicy(value) ? value : "manual";
 }
 
 /** Trim, drop empties, dedupe — a tag attaches at most once per test. */
@@ -122,11 +140,30 @@ function screenshotSteps(definition: TestDefinition): Extract<Step, { type: "scr
   );
 }
 
-/** Build a step from a manual `add step` input (test-detail). `navigate`/`screenshot` carry only
- *  plain data; `click`/`type` are authored by a raw selector, synthesized into a minimal locator
- *  whose `selectorOverride` the matcher tries first (no recorded fingerprint to fall back on).
- *  Trims and rejects empties here; the assembled definition is re-validated by the schema before
- *  it's stored. */
+/** The element locator for a manually-added step: either a fingerprint captured live off a real
+ *  element (a repair session's page `ref` — the full self-healing bundle) or, failing that, a raw
+ *  selector synthesized into a minimal locator whose `selectorOverride` the matcher tries first
+ *  (nothing to fall back on if it goes stale). A captured target wins when both are given. */
+function newStepTarget(
+  input: { selector?: string; target?: RecordedTarget },
+  what: string,
+): Fingerprint {
+  if (input.target && Object.keys(input.target).length > 0) {
+    return input.target as unknown as Fingerprint;
+  }
+  const selector = (input.selector ?? "").trim();
+  if (!selector) {
+    throw new BadRequestException(
+      `${what} needs an element: a CSS/Playwright selector, or a captured target (a page ref, in a repair session).`,
+    );
+  }
+  return { tag: "", selectorOverride: selector };
+}
+
+/** Build a step from a manual `add step` input (test-detail, or an MCP `edit_test` insert).
+ *  `navigate` carries only plain data; `click`/`hover`/`type` and an element/region checkpoint
+ *  carry a locator (see `newStepTarget`). Trims and rejects empties here; the assembled
+ *  definition is re-validated by the schema before it's stored. */
 function buildNewStep(input: NewStepInput): Step {
   if (input.type === "navigate") {
     const url = (input.url ?? "").trim();
@@ -136,14 +173,47 @@ function buildNewStep(input: NewStepInput): Step {
   if (input.type === "screenshot") {
     const name = (input.name ?? "").trim();
     if (!name) throw new BadRequestException("A checkpoint needs a name.");
-    return { type: "screenshot", name, captureMode: "fullpage", compareMode: "pixel" };
+    const captureMode = input.captureMode ?? "fullpage";
+    const compareMode = input.compareMode ?? "pixel";
+    const prompt = input.prompt?.trim();
+    const step: Extract<Step, { type: "screenshot" }> = {
+      type: "screenshot",
+      name,
+      captureMode,
+      compareMode,
+      ...(prompt ? { prompt } : {}),
+      ...(input.threshold !== undefined ? { threshold: input.threshold } : {}),
+      ...(input.masks?.length ? { masks: input.masks } : {}),
+    };
+    if (captureMode === "element") {
+      step.target = newStepTarget(input, `An element checkpoint ("${name}")`);
+    }
+    if (captureMode === "region") {
+      if (!input.rect) {
+        throw new BadRequestException(`A region checkpoint ("${name}") needs a rect (x, y, width, height).`);
+      }
+      step.rect = input.rect;
+    }
+    return step;
   }
-  // click / type — a hand-authored locator: empty tag (unknown) + the raw selector as override.
-  const selector = (input.selector ?? "").trim();
-  if (!selector) throw new BadRequestException("This step needs a CSS or Playwright selector.");
-  const target = { tag: "", selectorOverride: selector };
-  if (input.type === "click") return { type: "click", target };
-  return { type: "type", target, value: input.value ?? "" };
+  if (input.type === "click") return { type: "click", target: newStepTarget(input, "A click step") };
+  if (input.type === "hover") return { type: "hover", target: newStepTarget(input, "A hover step") };
+  return { type: "type", target: newStepTarget(input, "A type step"), value: input.value ?? "" };
+}
+
+/** Render a schema-validation failure as something a caller can act on. Zod's own `message` is
+ *  the whole issue list re-serialized as JSON — fine in a stack trace, useless in an API error and
+ *  actively confusing to an MCP client, which shows it to the model verbatim. */
+function describeValidationError(err: unknown): string {
+  const issues = (err as { issues?: Array<{ path: Array<string | number>; message: string }> })?.issues;
+  if (!Array.isArray(issues) || issues.length === 0) {
+    return err instanceof Error ? err.message : "Invalid test configuration";
+  }
+  const lines = issues
+    .slice(0, 5)
+    .map((i) => `${i.path.length ? i.path.join(".") : "definition"}: ${i.message}`);
+  const more = issues.length > lines.length ? ` (+${issues.length - lines.length} more)` : "";
+  return `The edited test is not valid — ${lines.join("; ")}${more}`;
 }
 
 /** Deterministic storage key for a draft checkpoint's authoring-preview screenshot. */
@@ -245,6 +315,7 @@ export class TestsService {
         folderId: tests.folderId,
         folderName: folders.name,
         definition: testVersions.definition,
+        repairPolicy: tests.repairPolicy,
         scheduleCron: testSchedules.cron,
         scheduleEnabled: testSchedules.enabled,
         scheduleNextRunAt: testSchedules.nextRunAt,
@@ -292,6 +363,7 @@ export class TestsService {
               nextRunAt: r.scheduleNextRunAt ? r.scheduleNextRunAt.toISOString() : null,
             } satisfies TestScheduleSummary)
           : null,
+        repairPolicy: asRepairPolicy(r.repairPolicy),
       };
     });
   }
@@ -511,6 +583,14 @@ export class TestsService {
     }
     if (input.folderId !== undefined) patch.folderId = input.folderId; // null = unfile
     if (input.notes !== undefined) patch.notes = input.notes?.trim() || null; // empty clears
+    if (input.repairPolicy !== undefined) {
+      if (!isRepairPolicy(input.repairPolicy)) {
+        throw new BadRequestException(
+          `repairPolicy must be one of ${REPAIR_POLICIES.join(" | ")}`,
+        );
+      }
+      patch.repairPolicy = input.repairPolicy;
+    }
     const tags = input.tags !== undefined ? normalizeTags(input.tags) : undefined;
     const hasSchedule = input.schedule !== undefined;
     if (Object.keys(patch).length === 0 && tags === undefined && !hasSchedule) return { ok: true };
@@ -609,6 +689,62 @@ export class TestsService {
     return { ok: true };
   }
 
+  /**
+   * Set a Repair Policy across a scope — one test, a whole FOLDER (including its subfolders,
+   * resolved the same way a suite resolves folder membership), or a TAG. Exactly one scope must
+   * be given; an empty scope is rejected rather than silently applied to the whole corpus, which
+   * is precisely the accident that would opt every test into unattended editing.
+   *
+   * Writes only `tests.repair_policy`, so a bulk opt-in cannot perturb a definition, a baseline
+   * or any review state. Drafts are included: an un-promoted draft has no runs to fail yet, and
+   * excluding it would silently drop it out of a folder-wide opt-in.
+   */
+  async setRepairPolicy(input: SetRepairPolicyRequest): Promise<SetRepairPolicyResult> {
+    if (!isRepairPolicy(input?.policy)) {
+      throw new BadRequestException(`policy must be one of ${REPAIR_POLICIES.join(" | ")}`);
+    }
+    const scopes = [input.testIds?.length, input.folderId, input.tag].filter(Boolean).length;
+    if (scopes === 0) {
+      throw new BadRequestException("a scope is required: testIds, folderId, or tag");
+    }
+    if (scopes > 1) {
+      throw new BadRequestException("give exactly one scope: testIds, folderId, or tag");
+    }
+
+    let ids: string[];
+    if (input.testIds?.length) {
+      ids = [...new Set(input.testIds)];
+    } else if (input.folderId) {
+      const [folder] = await this.db
+        .select({ id: folders.id })
+        .from(folders)
+        .where(eq(folders.id, input.folderId))
+        .limit(1);
+      if (!folder) throw new NotFoundException(`Folder ${input.folderId} not found`);
+      const subtree = subtreeOf([input.folderId], await folderChildren(this.db));
+      const rows = await this.db
+        .select({ id: tests.id, folderId: tests.folderId })
+        .from(tests);
+      ids = rows.filter((r) => r.folderId && subtree.has(r.folderId)).map((r) => r.id);
+    } else {
+      const tag = input.tag?.trim() ?? "";
+      if (!tag) throw new BadRequestException("tag cannot be empty");
+      const rows = await this.db
+        .select({ id: testTags.testId })
+        .from(testTags)
+        .where(eq(testTags.tag, tag));
+      ids = [...new Set(rows.map((r) => r.id))];
+    }
+
+    if (ids.length === 0) return { updated: 0 };
+    const updated = await this.db
+      .update(tests)
+      .set({ repairPolicy: input.policy })
+      .where(inArray(tests.id, ids))
+      .returning({ id: tests.id });
+    return { updated: updated.length };
+  }
+
   async getById(id: string): Promise<TestView> {
     const [row] = await this.db
       .select({
@@ -643,7 +779,7 @@ export class TestsService {
     const def = view.definition;
     const schedule = await this.readSchedule(id);
     const [meta] = await this.db
-      .select({ notes: tests.notes })
+      .select({ notes: tests.notes, repairPolicy: tests.repairPolicy })
       .from(tests)
       .where(eq(tests.id, id))
       .limit(1);
@@ -672,6 +808,7 @@ export class TestsService {
       version: view.version,
       schedule,
       notes: meta?.notes ?? null,
+      repairPolicy: asRepairPolicy(meta?.repairPolicy),
       needsEnvironment: usesBaseUrl(def),
       defaults: (def.defaults?.waitBefore ?? []).map(toConfigWait),
       steps: def.steps.map((s, index): TestConfigStep => ({
@@ -680,8 +817,10 @@ export class TestsService {
         label: describeStep(s),
         supportsWaits: s.type !== "navigate",
         waitBefore: s.type === "navigate" ? [] : (s.waitBefore ?? []).map(toConfigWait),
+        url: s.type === "navigate" ? s.url : null,
         checkpointName: s.type === "screenshot" ? s.name : null,
         captureMode: s.type === "screenshot" ? (s.captureMode ?? "element") : null,
+        rect: s.type === "screenshot" ? ((s.rect ?? null) as Rect | null) : null,
         compareMode: s.type === "screenshot" ? (s.compareMode ?? "pixel") : null,
         prompt: s.type === "screenshot" ? (s.prompt ?? null) : null,
         threshold: s.type === "screenshot" ? (s.threshold ?? null) : null,
@@ -744,7 +883,14 @@ export class TestsService {
     id: string,
     patch: TestConfigPatch,
     createdBy: string,
-  ): Promise<{ version: number }> {
+    /**
+     * Slice 19, slice 04: an unattended Repair Agent's write lands `unreviewed` and carries the
+     * Repair Job it was written under, so it appears in the repair review queue instead of
+     * silently becoming the definition every run uses. Omitted everywhere else — a version a
+     * person wrote has already been reviewed by the person writing it.
+     */
+    review?: { unreviewed?: boolean; repairJobId?: string | null },
+  ): Promise<{ version: number; versionId: string }> {
     const [latest] = await this.db
       .select({ version: testVersions.version, definition: testVersions.definition })
       .from(testVersions)
@@ -775,10 +921,20 @@ export class TestsService {
       throw new BadRequestException("The entry navigation step can't be removed.");
     }
 
+    // Checkpoint renames, collected as the steps are edited: the name is the baseline key, so
+    // each one has to be migrated alongside the version write (below) or the golden is orphaned.
+    const renames: Array<{ from: string; to: string }> = [];
+
     const editedSteps = def.steps.map((s, index) => {
       const p = stepPatch.get(index);
-      // Removals are applied in the interleave below; navigate has no waits/threshold.
-      if (!p || p.remove || s.type === "navigate") return s;
+      if (!p || p.remove) return s;
+      // Navigate carries only a URL — no waits, no locator, no checkpoint knobs.
+      if (s.type === "navigate") {
+        if (p.url === undefined) return s;
+        const url = p.url.trim();
+        if (!url) throw new BadRequestException("A navigation step needs a URL.");
+        return { ...s, url };
+      }
       let out = s;
       const dropLocked =
         p.dropLockedWaits && p.dropLockedWaits.length ? new Set(p.dropLockedWaits) : undefined;
@@ -804,12 +960,34 @@ export class TestsService {
         else delete next.prompt;
         out = next;
       }
+      // Checkpoint rename. Recorded here and applied to the baseline/preview rows in the same
+      // transaction as the version write, so the golden follows the name instead of being orphaned.
+      if (p.name !== undefined && out.type === "screenshot") {
+        const name = p.name.trim();
+        if (!name) throw new BadRequestException("A checkpoint needs a name.");
+        if (name !== out.name) {
+          renames.push({ from: out.name, to: name });
+          out = { ...out, name };
+        }
+      }
+      // How the checkpoint is captured (element / fullpage / region) and the region rect.
+      if (p.captureMode !== undefined && out.type === "screenshot") {
+        out = { ...out, captureMode: p.captureMode };
+      }
+      if (p.rect !== undefined && out.type === "screenshot") {
+        out = { ...out, rect: p.rect };
+      }
       // Type-only: set the literal value typed into the field.
       if (p.value !== undefined && out.type === "type") {
         out = { ...out, value: p.value };
       }
+      // Re-record the locator wholesale from a freshly captured fingerprint (the element
+      // changed rather than one of its signals). `target` below then patches signals on top.
+      if (p.recapture !== undefined && (out.type === "click" || out.type === "hover" || out.type === "type" || out.type === "screenshot")) {
+        out = { ...out, target: p.recapture as unknown as Fingerprint };
+      }
       // Locator edit: merge the signal patch onto the step's fingerprint. Only steps
-      // that have an element target (click / type / element-mode screenshot) carry one.
+      // that have an element target (click / hover / type / element-mode screenshot) carry one.
       if (p.target !== undefined && "target" in out && out.target) {
         const merged = applyFingerprintPatch(out.target, p.target);
         if (!hasMatchableSignal(merged)) {
@@ -837,18 +1015,70 @@ export class TestsService {
       bucket.set(ins.atIndex, arr);
     }
 
-    // Walk the original steps, interleaving inserts and dropping removals — so an insert keeps
-    // its place relative to the step it was anchored to even as other steps are removed.
-    const nextSteps: Step[] = [];
-    editedSteps.forEach((s, index) => {
-      for (const ins of above.get(index) ?? []) nextSteps.push(ins);
-      if (!removed.has(index)) nextSteps.push(s);
-      for (const ins of below.get(index) ?? []) nextSteps.push(ins);
-    });
+    // Renames are applied to the baseline rows one after another, so a patch that renames A→B
+    // while something else renames B→C (or two steps rename to the SAME name) would move the wrong
+    // golden. Chains and collisions are rejected rather than resolved: do it in two saves, where
+    // each step is unambiguous.
+    if (renames.length > 1) {
+      const sources = new Set(renames.map((r) => r.from));
+      const collision = renames.find((r, i) => renames.findIndex((o) => o.to === r.to) !== i);
+      if (collision) {
+        throw new BadRequestException(
+          `Two checkpoints are being renamed to "${collision.to}" in the same edit — names must be unique.`,
+        );
+      }
+      const chained = renames.find((r) => sources.has(r.to));
+      if (chained) {
+        throw new BadRequestException(
+          `This edit renames a checkpoint to "${chained.to}", which another checkpoint in the same edit is being renamed away from. Baselines follow checkpoint names, so do these one at a time.`,
+        );
+      }
+    }
 
-    // Checkpoint names are the baseline key, so they must be unique. Only enforced when steps are
-    // added (a pre-existing definition is left untouched by waits/threshold/locator saves).
-    if (inserts.length > 0) {
+    // An insert anchored to a step this same patch removes has nowhere to sit — say so rather
+    // than guess a position for it.
+    for (const ins of inserts) {
+      if (removed.has(ins.atIndex)) {
+        throw new BadRequestException(
+          `Step ${ins.atIndex + 1} is being removed by this same edit, so a step can't be inserted ${ins.position} it — anchor the insert to a step that survives.`,
+        );
+      }
+    }
+
+    // The order the surviving steps end up in. `order` is a permutation of the ORIGINAL indices
+    // that survive; without it they keep their recorded order. Inserts stay anchored to the step
+    // they name, so a reordered step takes its inserts with it.
+    const surviving = def.steps.map((_, index) => index).filter((index) => !removed.has(index));
+    let sequence = surviving;
+    if (patch.order !== undefined) {
+      const wanted = [...patch.order];
+      const expected = [...surviving].sort((a, b) => a - b);
+      const got = [...wanted].sort((a, b) => a - b);
+      if (wanted.length !== expected.length || expected.some((v, i) => v !== got[i])) {
+        throw new BadRequestException(
+          `\`order\` must list every step that survives this edit exactly once, by its current 0-based index — expected the numbers [${expected.join(", ")}] in some order, got [${wanted.join(", ")}].`,
+        );
+      }
+      if (wanted[0] !== 0) {
+        throw new BadRequestException(
+          "The entry navigation (step 1) must stay first — replay has to begin by navigating.",
+        );
+      }
+      sequence = wanted;
+    }
+
+    // Walk the surviving steps in their (possibly new) order, interleaving inserts.
+    const nextSteps: Step[] = [];
+    for (const index of sequence) {
+      for (const ins of above.get(index) ?? []) nextSteps.push(ins);
+      nextSteps.push(editedSteps[index]);
+      for (const ins of below.get(index) ?? []) nextSteps.push(ins);
+    }
+
+    // Checkpoint names are the baseline key, so they must be unique. Only enforced when this
+    // patch adds or renames a checkpoint (a pre-existing definition is left untouched by
+    // waits/threshold/locator saves, duplicates and all).
+    if (inserts.length > 0 || renames.length > 0) {
       const names = nextSteps
         .filter((s): s is Extract<Step, { type: "screenshot" }> => s.type === "screenshot")
         .map((s) => s.name);
@@ -868,16 +1098,47 @@ export class TestsService {
     try {
       validated = parseTestDefinition(nextDefinition);
     } catch (err) {
-      throw new BadRequestException(
-        err instanceof Error ? err.message : "Invalid test configuration",
-      );
+      throw new BadRequestException(describeValidationError(err));
     }
 
     const nextVersion = latest.version + 1;
-    await this.db
-      .insert(testVersions)
-      .values({ testId: id, version: nextVersion, definition: validated, createdBy });
-    return { version: nextVersion };
+    let versionId = "";
+    await this.db.transaction(async (tx) => {
+      const [inserted] = await tx
+        .insert(testVersions)
+        .values({
+          testId: id,
+          version: nextVersion,
+          definition: validated,
+          createdBy,
+          ...(review?.unreviewed ? { reviewState: "unreviewed" } : {}),
+          ...(review?.repairJobId ? { repairJobId: review.repairJobId } : {}),
+        })
+        .returning({ id: testVersions.id });
+      versionId = inserted?.id ?? "";
+      // A checkpoint's name IS its baseline key `(test, checkpoint, env, viewport)`. Renaming the
+      // step without moving the rows would silently orphan every approved golden and send the next
+      // run back to `pending-baseline`, so the rename travels with the version write — atomically,
+      // because a half-applied rename is worse than a rejected one.
+      for (const { from, to } of renames) {
+        await tx
+          .delete(baselines)
+          .where(and(eq(baselines.testId, id), eq(baselines.checkpointName, to)));
+        await tx
+          .update(baselines)
+          .set({ checkpointName: to, updatedAt: new Date() })
+          .where(and(eq(baselines.testId, id), eq(baselines.checkpointName, from)));
+        // Draft previews are unique per (test, checkpoint) — clear the destination first.
+        await tx
+          .delete(draftPreviews)
+          .where(and(eq(draftPreviews.testId, id), eq(draftPreviews.checkpointName, to)));
+        await tx
+          .update(draftPreviews)
+          .set({ checkpointName: to })
+          .where(and(eq(draftPreviews.testId, id), eq(draftPreviews.checkpointName, from)));
+      }
+    });
+    return { version: nextVersion, versionId };
   }
 
   /**

@@ -97,6 +97,48 @@ describe("locator resolve", () => {
     expect(rowText).toContain("Apples");
   });
 
+  it("resolves past a per-run generated testid using the card scope", async () => {
+    // Each run mints fresh dashboard/widget ids, so the recorded testid matches nothing.
+    // A stale testid must cost only its points — never veto the match — and the scope
+    // (shape + authored title) must still pick the right card's button out of a grid of
+    // identical ones. Without the scope these two buttons tie and the matcher refuses.
+    await page.setContent(
+      `<main>` +
+        `<div class="widget-card" data-testid="widget-9z8y7x"><h3>Revenue by Region</h3><button aria-label="Expand">+</button></div>` +
+        `<div class="widget-card" data-testid="widget-5w4v3u"><h3>Orders by Month</h3><button aria-label="Expand">+</button></div>` +
+        `</main>`,
+    );
+    const expandBtn: Fingerprint = {
+      tag: "button",
+      testId: "widget-expand-a1b2c3", // recorded last run; nothing on the page carries it now
+      accessibleName: "Expand",
+      nameFromAttr: true,
+      scope: { container: "div.widget-card", text: "Revenue by Region" },
+      boundingBox: { x: 0, y: 0, width: 24, height: 24 },
+    };
+
+    const r = await resolve(page, expandBtn);
+
+    expect(r).not.toBeNull();
+    expect(r!.matchedSignal).toBe("scope");
+    const cardText = await r!.locator.evaluate(
+      (el) => el.closest(".widget-card")?.textContent ?? "",
+    );
+    expect(cardText).toContain("Revenue by Region");
+  });
+
+  it("addresses the winner by a selector valid on the page as it is now", async () => {
+    // The runner re-finds the winner from inside the page (to measure scroll clipping for
+    // element screenshots). Re-deriving that selector from the recorded testId silently
+    // found nothing on a fresh run; `selector` must address what actually resolved.
+    await page.setContent(`<div id="hero" data-testid="hero-card">Hero</div>`);
+    const r = await resolve(page, fp);
+    expect(r).not.toBeNull();
+    const addressed = page.locator(r!.selector);
+    expect(await addressed.count()).toBe(1);
+    expect(await addressed.textContent()).toBe("Hero");
+  });
+
   // Card-grid action buttons: many identical `item-card-delete` buttons, all sharing the same tag
   // chain AND a common grid ancestor — the ONLY thing telling them apart is the distinguishing
   // `item-card-<id>` on one candidate's chain. The ancestor score must weight that key strongly and

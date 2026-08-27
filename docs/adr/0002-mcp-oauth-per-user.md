@@ -49,3 +49,13 @@ for them. On a shared deployment that is a cross-tenant leak, not just a cosmeti
 - Drafts authored over MCP carry the user's email in `created_by` (was `"ai"`).
 - The web app grows one non-navigable route (`/oauth/authorize`) that exists only to bounce
   the post-login browser back to the authorize endpoint with its OAuth query intact.
+
+## Amendment (ADR-0005)
+
+The rejection of static tokens above holds for **interactive human clients**, which is what
+this ADR is about. It does not cover **unattended machine access**: a drainer on a cron has no
+browser and cannot complete the authorization-code + PKCE leg that this decision rests on.
+ADR-0005 adds a scoped, revocable, expiring **Repair Agent** credential as a second issuer in
+`McpAuthService.principal()` for that case. It is a second way to produce an `McpPrincipal`,
+not an exemption from producing one, so every isolation and attribution consequence listed
+above still applies.

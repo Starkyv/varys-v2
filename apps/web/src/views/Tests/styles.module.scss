@@ -284,3 +284,27 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* --- bulk repair policy (pane toolbar) --- */
+.policyBulk {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  margin-left: auto;
+  margin-right: var(--space-12);
+}
+
+.policyBulkIcon {
+  display: inline-flex;
+  color: var(--color-text-muted);
+}
+
+.policyBulkLabel {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.policyBulkSelect {
+  min-width: 104px;
+}

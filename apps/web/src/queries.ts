@@ -17,6 +17,8 @@ import {
   fetchAgentCredentials,
   revokeAgentCredential,
   cancelRepairJob,
+  decideRepairReview,
+  fetchRepairReviews,
   type CreateEnvironmentBody,
   createEnvironment,
   createFolder,
@@ -731,6 +733,34 @@ export function useRepairJobs(opts?: { all?: boolean }) {
     queryKey: repairJobsQueryKey(all),
     queryFn: () => fetchRepairJobs({ all }),
     refetchInterval: 5000,
+  });
+}
+
+/**
+ * Repaired versions awaiting review. Polled alongside the queue, because the change that matters
+ * here is also one a DRAINER makes elsewhere: a job going `done` means a version just landed for
+ * someone to decide on.
+ */
+export function useRepairReviews() {
+  return useQuery({
+    queryKey: ["repair-reviews"],
+    queryFn: fetchRepairReviews,
+    refetchInterval: 5000,
+  });
+}
+
+/** Accept or reject a repaired version. Invalidates the tests/test-config caches too: an accept
+ *  confirms the active definition and a reject rewrites it, and both show on test detail. */
+export function useDecideRepairReview() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { versionId: string; action: "accept" | "reject" }) =>
+      decideRepairReview(vars.versionId, vars.action),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["repair-reviews"] });
+      qc.invalidateQueries({ queryKey: ["repair-jobs"] });
+      qc.invalidateQueries({ queryKey: ["test-config"] });
+    },
   });
 }
 

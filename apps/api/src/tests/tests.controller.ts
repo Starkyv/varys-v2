@@ -1,5 +1,9 @@
 import { Body, Controller, Delete, Get, HttpCode, Inject, Param, Patch, Post, Put } from "@nestjs/common";
-import type { LocatorVerifyRequest, TestConfigPatch } from "@varys/review-contract";
+import type {
+  LocatorVerifyRequest,
+  SetRepairPolicyRequest,
+  TestConfigPatch,
+} from "@varys/review-contract";
 import { type AuthUser, CurrentUser } from "../auth/current-user.decorator";
 import { LocatorVerifyService } from "./locator-verify.service";
 import { TestsService, type UpdateTestInput } from "./tests.service";
@@ -20,6 +24,14 @@ export class TestsController {
   @Get()
   list() {
     return this.tests.list();
+  }
+
+  // Set a Repair Policy in bulk — one test, a whole folder (with its subfolders), or a tag.
+  // Declared before the `:id` routes so "repair-policy" is never read as a test id.
+  @Post("repair-policy")
+  @HttpCode(200) // updates existing tests; creates nothing
+  setRepairPolicy(@Body() body: SetRepairPolicyRequest) {
+    return this.tests.setRepairPolicy(body ?? ({} as SetRepairPolicyRequest));
   }
 
   @Get(":id")

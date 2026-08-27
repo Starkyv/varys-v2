@@ -1,4 +1,4 @@
-import type { RepairJobStatus, RepairJobSummary } from "@varys/review-contract";
+import type { RepairJobStatus, RepairJobSummary, RepairReviewItem } from "@varys/review-contract";
 import {
   Badge,
   Button,
@@ -16,7 +16,12 @@ import { useConfirm } from "../../context/confirm";
 import { useRouter } from "../../context/router";
 import { useToast } from "../../context/toast";
 import { relativeTime } from "../../lib/format";
-import { useCancelRepairJob, useRepairJobs } from "../../queries";
+import {
+  useCancelRepairJob,
+  useDecideRepairReview,
+  useRepairJobs,
+  useRepairReviews,
+} from "../../queries";
 import styles from "./styles.module.scss";
 
 /**
@@ -81,7 +86,117 @@ function claimRemaining(iso: string | null): string {
 
 type Scope = "open" | "all";
 
+/**
+ * Repaired versions waiting on a human (slice 04) — the gate that stops an unattended agent's
+ * edit from silently becoming the definition every run replays. Accept keeps it (it is already the
+ * test's latest version); reject reverts the test to what it said before.
+ *
+ * Deliberately terse: the side-by-side signal diff, the agent's justification against the brief,
+ * and a clustered repair's blast radius are slice 13's job. What is here is enough to act on, so
+ * the queue does not accumulate versions nobody can decide about.
+ */
+function RepairReviews() {
+  const reviews = useRepairReviews();
+  const decide = useDecideRepairReview();
+  const { navigate } = useRouter();
+  const { toast } = useToast();
+  const confirm = useConfirm();
+
+  const items = reviews.data ?? [];
+  if (items.length === 0) return null;
+
+  async function onDecide(item: RepairReviewItem, action: "accept" | "reject") {
+    if (action === "reject") {
+      const ok = await confirm({
+        title: "Reject this repair?",
+        message: `“${item.testName}” goes back to what v${item.previousVersion ?? "?"} said. The rejected version is kept in the test's history, and the test stays broken until you fix it.`,
+        confirmLabel: "Reject and revert",
+      });
+      if (!ok) return;
+    }
+    decide.mutate(
+      { versionId: item.versionId, action },
+      {
+        onSuccess: (res) => toast(res.note),
+        onError: (e) => toast(e instanceof Error ? e.message : "Couldn’t record the decision"),
+      },
+    );
+  }
+
+  return (
+    <div className={styles.card}>
+      <header className={styles.header}>
+        <h3 className={styles.title}>Repaired versions awaiting review</h3>
+        <span className={styles.count}>
+          {items.length} version{items.length === 1 ? "" : "s"}
+        </span>
+      </header>
+      <div className={styles.notice}>
+        A repair agent wrote these. Nothing about them is trusted yet: the failing run is still
+        red, and accepting is what confirms the repaired version as the one your runs replay.
+      </div>
+      {items.map((item) => (
+        <div key={item.versionId} className={styles.review}>
+          <div className={styles.reviewMain}>
+            <button
+              type="button"
+              className={styles.testLink}
+              onClick={() => navigate({ name: "testDetail", testId: item.testId })}
+            >
+              {item.testName}
+            </button>
+            <div className={styles.reviewMeta}>
+              v{item.version}
+              {item.previousVersion !== null && ` · was v${item.previousVersion}`}
+              {item.createdBy && ` · ${item.createdBy}`}
+              {` · ${relativeTime(item.createdAt)}`}
+              {!item.isActiveDefinition && " · a later edit has landed on top"}
+            </div>
+            {item.report && <p className={styles.report}>{item.report}</p>}
+            {item.brief && <p className={styles.brief}>Brief: {item.brief}</p>}
+            {item.runId && (
+              <button
+                type="button"
+                className={styles.runLink}
+                onClick={() => navigate({ name: "runDetail", runId: item.runId as string })}
+              >
+                the run that broke — still failed
+              </button>
+            )}
+          </div>
+          <div className={styles.reviewActions}>
+            <Button
+              variant="danger"
+              size="sm"
+              disabled={decide.isPending}
+              onClick={() => void onDecide(item, "reject")}
+            >
+              Reject
+            </Button>
+            <Button
+              size="sm"
+              disabled={decide.isPending}
+              onClick={() => void onDecide(item, "accept")}
+            >
+              Accept
+            </Button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function RepairQueue() {
+  return (
+    <div className={styles.stack}>
+      <RepairReviews />
+      <Queue />
+    </div>
+  );
+}
+
+function Queue() {
   const [scope, setScope] = useState<Scope>("open");
   const jobs = useRepairJobs({ all: scope === "all" });
   const cancel = useCancelRepairJob();

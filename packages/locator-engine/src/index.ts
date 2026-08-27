@@ -46,6 +46,13 @@ async function descendToFrame(
 
 export interface ResolveResult {
   locator: Locator;
+  /** A CSS selector that addresses **the element that actually won**, in the page as it
+   *  is right now — the marker attribute for a scored win, the author's own selector for
+   *  an override. Callers that must re-find the winner from inside the page (a
+   *  `page.evaluate` that measures it) use this rather than re-deriving a selector from
+   *  the recorded fingerprint, whose testId/id may name an element that no longer exists
+   *  (per-run generated ids) or a different one entirely. */
+  selector: string;
   /** The strongest signal that identified the winner: testId | id | role+name |
    *  scope | name | stableClasses | box. */
   matchedSignal: string;
@@ -93,7 +100,7 @@ export interface VerifyOutcome {
 
 /** One poll cycle's result, internal to this module. */
 type PollResult =
-  | { kind: "win"; locator: Locator; matchedSignal: string; healed: boolean }
+  | { kind: "win"; locator: Locator; selector: string; matchedSignal: string; healed: boolean }
   | { kind: "ambiguous" }
   | { kind: "none" };
 
@@ -136,7 +143,13 @@ async function poll(
       const override = root.locator(fp.selectorOverride);
       const count = await override.count().catch(() => -1);
       if (count === 1) {
-        return { kind: "win", locator: override.first(), matchedSignal: "override", healed: false };
+        return {
+          kind: "win",
+          locator: override.first(),
+          selector: fp.selectorOverride,
+          matchedSignal: "override",
+          healed: false,
+        };
       }
     }
     const outcome = await root.evaluate(runInPage, { fp, MARKER, token });
@@ -144,6 +157,7 @@ async function poll(
       return {
         kind: "win",
         locator: root.locator(`[${MARKER}="${token}"]`).first(),
+        selector: `[${MARKER}="${token}"]`,
         matchedSignal: outcome.matchedSignal,
         healed: outcome.healed,
       };
@@ -177,7 +191,7 @@ export async function resolve(
   if (!root) return null; // a named frame in the chain couldn't be reached
   const r = await poll(root, fp, opts);
   return r.kind === "win"
-    ? { locator: r.locator, matchedSignal: r.matchedSignal, healed: r.healed }
+    ? { locator: r.locator, selector: r.selector, matchedSignal: r.matchedSignal, healed: r.healed }
     : null;
 }
 

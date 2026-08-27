@@ -5,6 +5,7 @@ import type {
   RepairJobKind,
   RepairJobStatus,
   RepairJobSummary,
+  ReportedRepair,
 } from "@varys/review-contract";
 import { describeStep, type TestDefinition } from "@varys/step-schema";
 import { and, asc, desc, eq, gt, inArray, lt, lte, sql } from "drizzle-orm";
@@ -180,7 +181,15 @@ export class RepairJobsService {
    * even between sweeps, and even if the drainer never notices its claim ended.
    */
   async hasClaimOn(principalId: string, testId: string): Promise<boolean> {
-    if (!principalId || !testId) return false;
+    return (await this.claimedJobId(principalId, testId)) !== null;
+  }
+
+  /** The id of the job this principal currently holds a live claim on for `testId`, or null.
+   *  {@link hasClaimOn} asks the same question; this one is for the writes that must RECORD which
+   *  job they were made under, so a version awaiting review can be traced to the failure it
+   *  claims to fix. */
+  async claimedJobId(principalId: string, testId: string): Promise<string | null> {
+    if (!principalId || !testId) return null;
     const [row] = await this.db
       .select({ id: repairJobs.id })
       .from(repairJobs)
@@ -193,7 +202,7 @@ export class RepairJobsService {
         ),
       )
       .limit(1);
-    return !!row;
+    return row?.id ?? null;
   }
 
   /** The test a run exercised, or null — so a tool given a `runId` can be scope-checked against
@@ -282,6 +291,100 @@ export class RepairJobsService {
       .returning({ status: repairJobs.status });
     if (!released) throw new NotFoundException(`No repair job ${jobId} is claimed by ${claimant}`);
     return { ok: true, status: released.status as RepairJobStatus };
+  }
+
+  /**
+   * Report a finished repair (Slice 19, slice 04) — the drainer's half of "I fixed this".
+   *
+   * It writes nothing to the test itself: the repair was already written, version by version, by
+   * `apply_fix` / `edit_test` while the claim held, each one landing `unreviewed` and carrying
+   * this job's id. So this is the CLOSE: the job goes terminal (`done`), the claim ends — which
+   * revokes the credential's reach over that test the instant it returns — and the drainer's
+   * account of what it did is stored beside the version for whoever reviews it.
+   *
+   * **The run stays failed.** Deliberately, and stated in the response rather than left to be
+   * inferred: no amber outcome, no re-run, no green. The `healed` outcome arrives in slice 06
+   * behind slice 05's justification gate, so the unsafe state — a repair turning a run green with
+   * no guard in front of it — never exists, not even mid-implementation.
+   *
+   * A report with nothing to show for it is REFUSED rather than recorded as a repair: a job
+   * closed `done` with no version behind it is indistinguishable, later, from one that worked.
+   * That drainer wanted `release_repair_job`.
+   */
+  async reportRepair(claimant: string, jobId: string, summary: string): Promise<ReportedRepair> {
+    const note = summary.trim();
+    if (!note) {
+      throw new BadRequestException(
+        "say what you changed — the summary is what a reviewer reads beside the version",
+      );
+    }
+    const [job] = await this.db
+      .select({
+        id: repairJobs.id,
+        testId: repairJobs.testId,
+        runId: repairJobs.runId,
+        kind: repairJobs.kind,
+      })
+      .from(repairJobs)
+      .where(
+        and(
+          eq(repairJobs.id, jobId),
+          eq(repairJobs.status, "claimed"),
+          eq(repairJobs.claimedBy, claimant),
+          gt(repairJobs.claimExpiresAt, this.clock.now()),
+        ),
+      )
+      .limit(1);
+    // Same reasoning as `release`: a claim you do not hold is not-found, never a conflict — a
+    // claimant learns nothing about jobs that are not its own. A LAPSED claim lands here too,
+    // which is correct: the work is somebody else's now, so its report is not accepted.
+    if (!job) throw new NotFoundException(`No repair job ${jobId} is claimed by ${claimant}`);
+    if (job.kind !== "repair") {
+      throw new BadRequestException(`job ${jobId} is a ${job.kind} job, which changes no test`);
+    }
+
+    const [version] = await this.db
+      .select({ id: testVersions.id, version: testVersions.version })
+      .from(testVersions)
+      .where(
+        and(eq(testVersions.repairJobId, jobId), eq(testVersions.reviewState, "unreviewed")),
+      )
+      .orderBy(desc(testVersions.version))
+      .limit(1);
+    if (!version) {
+      throw new BadRequestException(
+        `Nothing was written for job ${jobId}, so there is no repair to report. Apply the fix first (apply_fix, or edit_test), or release the job if you cannot fix it.`,
+      );
+    }
+
+    const now = this.clock.now();
+    await this.db
+      .update(repairJobs)
+      // `claimed_by` is left in place: it is the ATTRIBUTION of the repair now, not a live claim.
+      // The status is what ends the claim, and `hasClaimOn` reads the status.
+      .set({ status: "done", report: note, updatedAt: now })
+      .where(eq(repairJobs.id, jobId));
+
+    const [run] = job.runId
+      ? await this.db
+          .select({ status: runs.status })
+          .from(runs)
+          .where(eq(runs.id, job.runId))
+          .limit(1)
+      : [];
+
+    return {
+      ok: true,
+      jobId,
+      status: "done",
+      testId: job.testId,
+      version: version.version,
+      versionId: version.id,
+      reviewState: "unreviewed",
+      runId: job.runId,
+      runStatus: run?.status ?? null,
+      note: `v${version.version} of this test is saved as an UNREVIEWED version and is waiting for a human to accept or reject it. Run ${job.runId ?? "(purged)"} is still ${run?.status ?? "unchanged"} — a repair does not turn a run green. Report it as a proposed fix awaiting review, not as fixed.`,
+    };
   }
 
   /**

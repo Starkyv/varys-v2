@@ -115,6 +115,7 @@ const LOCATOR_PATCH_SCHEMA = {
 const AGENT_TOOLS: readonly string[] = [
   "claim_repair_job",
   "release_repair_job",
+  "report_repair",
   "open_repair_session",
   "close_repair_session",
   "read_test",
@@ -137,7 +138,11 @@ const AGENT_TOOLS: readonly string[] = [
  * `tools/call` for a human exactly as `AGENT_TOOLS` filters the other way, so an out-of-scope
  * tool reads as "Unknown tool" for either principal.
  */
-const AGENT_ONLY_TOOLS: readonly string[] = ["claim_repair_job", "release_repair_job"];
+const AGENT_ONLY_TOOLS: readonly string[] = [
+  "claim_repair_job",
+  "release_repair_job",
+  "report_repair",
+];
 
 /**
  * For an agent principal: which arguments of a tool name the TEST it would reach, and whether one
@@ -146,8 +151,9 @@ const AGENT_ONLY_TOOLS: readonly string[] = ["claim_repair_job", "release_repair
  * check the scope of the wrong thing entirely.
  *
  * A tool listed here with none of its id arguments supplied is addressing an open SESSION instead;
- * that is already covered, because the session could only have been opened through a scope check
- * and `assertOwner` refuses a session this principal does not own.
+ * that is covered separately, and twice over: `assertOwner` refuses a session this principal does
+ * not own, and the claim on the session's test is re-checked on every call (slice 04) so a
+ * released or lapsed claim cannot be outlived by a session opened under it.
  */
 const AGENT_TEST_SCOPE: Record<string, { args: readonly ("testId" | "runId")[]; required: boolean }> = {
   open_repair_session: { args: ["runId", "testId"], required: true },
@@ -337,17 +343,37 @@ export class McpController {
    * (ADR-0005). Thrown as a plain error, so it reaches the caller as an `isError` tool result
    * with a message a drainer can act on.
    *
-   * Nothing writes `claimed_by` until slice 03, so today every test-addressing call from an
-   * agent lands here — which is the refusal this slice is specced to produce, from the real
-   * check rather than a stub that later has to be found and removed.
+   * Two things are checked, because a claim can end in two ways: the test named by an argument
+   * must be covered by a claim this principal holds, and — for a call addressing an open repair
+   * SESSION — the claim that session was opened under must still hold. The second is what makes
+   * revocation immediate: releasing a job, or letting its lease lapse, stops the tools working on
+   * the next call rather than when the browser eventually closes.
    */
   private async assertAgentScope(
     name: string,
     args: Record<string, unknown>,
     user: McpPrincipal,
   ): Promise<void> {
+    // A session-addressed tool: the session was opened under a claim, but a claim can be released
+    // or lapse while the browser is still parked — so ownership of the session is NOT enough. The
+    // claim is re-checked on every call, which is what makes "losing the claim revokes tool
+    // access immediately" true rather than true-until-the-session-closes.
+    //
+    // `close_repair_session` is exempt on purpose: refusing it would leave a real browser running
+    // with no way for its owner to shut it down, which is a worse outcome than letting a drainer
+    // tidy up after a claim it no longer holds. It changes nothing about any test.
+    const sessionId = args.sessionId === undefined ? "" : String(args.sessionId);
+    if (sessionId && name !== "close_repair_session") {
+      const sessionTestId = this.authoring.sessionTestId(sessionId);
+      if (sessionTestId && !(await this.repairJobs.hasClaimOn(user.id, sessionTestId))) {
+        throw new Error(
+          `${user.name} no longer holds a claim on test ${sessionTestId} — the claim was released or has lapsed, so this session may no longer change it. Claim the job again, or close the session.`,
+        );
+      }
+    }
+
     const scope = AGENT_TEST_SCOPE[name];
-    if (!scope) return; // a session-only tool: `assertOwner` above is the whole check
+    if (!scope) return; // nothing else names a test: the claim re-check above is the whole check
 
     const ids: string[] = [];
     for (const arg of scope.args) {
@@ -541,6 +567,29 @@ export class McpController {
         handler: (args) => this.repairJobs.release(user.id, String(args.jobId ?? "")),
       },
       {
+        name: "report_repair",
+        description:
+          "Report that you have repaired the test of a job you hold, and close the job. Call it AFTER the fix is written (apply_fix, or edit_test) — it records what you did against the version you wrote and finishes the job; it does not write anything itself, so a report with no version behind it is refused.\n\nWhat it does NOT do, and what you must therefore not claim: it does not turn the failing run green. The version you wrote is saved UNREVIEWED and waits for a human to accept or reject it, and the run that failed is still failed. Report your work as a proposed fix awaiting review — never as fixed. The response carries the version number, the run's unchanged status, and the wording to use.\n\nReporting ends your claim, so your access to that test stops here: do everything you need to do to the test first, then report. If you could NOT fix it, call release_repair_job instead.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            jobId: { type: "string", description: "The `jobId` claim_repair_job handed you." },
+            summary: {
+              type: "string",
+              description:
+                "What you changed and why, in a couple of sentences — this is what the reviewer reads beside the version, so name the element you re-pinned to and the signal it now matches on.",
+            },
+          },
+          required: ["jobId", "summary"],
+        },
+        handler: (args) =>
+          this.repairJobs.reportRepair(
+            user.id,
+            String(args.jobId ?? ""),
+            String(args.summary ?? ""),
+          ),
+      },
+      {
         name: "open_repair_session",
         description:
           "Open an existing test for diagnosis and editing, by re-driving it yourself. Takes either a `runId` (a specific failure) or a `testId` (that test's most recent failure — use this when the user names a test rather than a run). Launches a browser, seeds the run's environment, replays the test's OWN steps (the exact version that ran, with the same drive a Run uses) up to the step that failed, and PARKS there — so the page the failing step faced is live in front of you. Returns why it failed: the run's error, what the recorded locator was looking for (`recordedLocator`), the matcher's verdict on that locator against the page as it is now (`diagnosis`), every element actually on the page (`nodes`, with testId/id/duplicate flags), and a screenshot. Investigate with observe/hover, move to any other step with goto_step, and test candidate locators with try_locator.\n\nThis session can change the test in any way the user asks. A broken locator goes through try_locator → apply_fix, which re-checks the candidate against the live page and refuses one that does not resolve. Everything else — a checkpoint's name, capture mode, compare mode, judge prompt, threshold or masks, a typed value, a navigate URL, waits, adding/removing/reordering steps, re-capturing a step's element off the live page — goes through read_test → edit_test. Both write a new audited version of the test with the previous one retained; always tell the user what you changed and the new version number. What it does NOT do is record a new test: `checkpoint` and `finish_session` are refused, because there is no draft here.\n\nRead `replay.note` first — if the drive broke EARLIER than the run did, the step you were sent to was never reached, so deal with the earlier step first (goto_step with that index). Close with close_repair_session when done.",
@@ -562,7 +611,7 @@ export class McpController {
         },
         handler: (args) =>
           a.openRepair({
-            owner: { id: user.id, email: user.email },
+            owner: { id: user.id, email: user.email, kind: user.kind },
             runId: args.runId ? String(args.runId) : undefined,
             testId: args.testId ? String(args.testId) : undefined,
             stepIndex: args.stepIndex !== undefined ? Number(args.stepIndex) : undefined,
@@ -741,6 +790,7 @@ export class McpController {
         },
         handler: (args) =>
           a.editTest({
+            actor: { id: user.id, email: user.email, kind: user.kind },
             sessionId: args.sessionId ? String(args.sessionId) : undefined,
             testId: args.testId ? String(args.testId) : undefined,
             ...(args.name !== undefined ? { name: String(args.name) } : {}),

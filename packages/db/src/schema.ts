@@ -140,6 +140,25 @@ export const testVersions = pgTable("test_versions", {
   /** Who authored this version (e.g. "system" for an in-viewer mask/threshold
    *  persist). Audit pair with createdAt. Null for the original recording. */
   createdBy: text("created_by"),
+  /**
+   * Whether this version has been reviewed by a human (Slice 19, slice 04).
+   *
+   * `reviewed` for everything a person wrote — which is every version a human editor or the
+   * attended MCP path produces, hence the default. `unreviewed` is written ONLY by an
+   * unattended Repair Agent: an AI edit to someone's corpus is never trusted by default, so it
+   * sits in the repair review queue until accepted. `rejected` records a version a reviewer
+   * threw away; the test was reverted by appending the previous definition as a new version, so
+   * the history keeps the rejected attempt rather than erasing it.
+   */
+  reviewState: text("review_state").notNull().default("reviewed"),
+  /** The Repair Job this version was written under, when an agent wrote it — what links a
+   *  version awaiting review back to the failure it claims to fix. Plain uuid (no FK) because
+   *  the job's table is created after this one in the bootstrap DDL. */
+  repairJobId: uuid("repair_job_id"),
+  /** Who accepted or rejected this version, and when. Both null while it is `unreviewed`, and
+   *  for every version that never needed reviewing. */
+  reviewedBy: text("reviewed_by"),
+  reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -416,6 +435,9 @@ export const repairJobs = pgTable(
      *  swept back to `queued` with its attempt count incremented, so a drainer that died
      *  mid-repair strands nothing. Null whenever `claimed_by` is. */
     claimExpiresAt: timestamp("claim_expires_at", { withTimezone: true }),
+    /** What the drainer said it did when it reported the repair (slice 04) — the account a
+     *  reviewer reads beside the version. Null until a repair is reported. */
+    report: text("report"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -557,6 +579,15 @@ CREATE TABLE IF NOT EXISTS test_versions (
 );
 -- Bring an existing test_versions table (created before created_by) up to date.
 ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS created_by text;
+-- Human review of a version (Slice 19, slice 04). Defaults to 'reviewed' so every version that
+-- already exists — and every version a person writes — needs no decision; only an unattended
+-- Repair Agent writes 'unreviewed', which is what puts it in the repair review queue.
+ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS review_state text NOT NULL DEFAULT 'reviewed';
+ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS repair_job_id uuid;
+ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS reviewed_by text;
+ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS reviewed_at timestamptz;
+CREATE INDEX IF NOT EXISTS test_versions_unreviewed_idx
+  ON test_versions (created_at DESC) WHERE review_state = 'unreviewed';
 CREATE TABLE IF NOT EXISTS runs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   test_version_id uuid NOT NULL REFERENCES test_versions(id),
@@ -726,6 +757,8 @@ CREATE INDEX IF NOT EXISTS repair_jobs_status_idx ON repair_jobs (status, create
 -- it is swept back to 'queued' with attempts incremented. Added by ALTER so an existing queue
 -- gains the column without the CREATE TABLE above (IF NOT EXISTS) silently skipping it.
 ALTER TABLE repair_jobs ADD COLUMN IF NOT EXISTS claim_expires_at timestamptz;
+-- The drainer's account of what it repaired (slice 04), shown beside the unreviewed version.
+ALTER TABLE repair_jobs ADD COLUMN IF NOT EXISTS report text;
 -- Repair Agent credentials (Slice 19, slice 02 / ADR-0005): the second issuer on /mcp, for an
 -- unattended drainer that cannot complete the browser OAuth leg. Only the token's SHA-256 is
 -- stored, so the secret is unrecoverable after provisioning; expiry is NOT NULL because ADR-0005

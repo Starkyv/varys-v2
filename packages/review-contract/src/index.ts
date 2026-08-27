@@ -154,6 +154,80 @@ export interface ClaimedRepairJob {
 }
 
 /**
+ * What a drainer gets back when it REPORTS a repair (Slice 19, slice 04).
+ *
+ * The two fields that matter are the ones that say what did NOT happen: the version is
+ * `unreviewed`, and `runOutcome` is still the failure that started this. A repair does not turn a
+ * run green — a human accepting the version is what makes the repair real (slice 06 adds the
+ * amber re-run, behind slice 05's justification gate). Saying so in the payload means a drainer
+ * reports "proposed a fix, awaiting review" rather than "fixed".
+ */
+export interface ReportedRepair {
+  ok: true;
+  jobId: string;
+  /** Terminal for the drainer: the job is `done` and the claim is over. */
+  status: RepairJobStatus;
+  testId: string;
+  /** The version number the repair was written as, and its id for the review surface. */
+  version: number;
+  versionId: string;
+  /** Always `unreviewed` — this is the whole point of the slice. */
+  reviewState: VersionReviewState;
+  /** The originating run and the status it still has: untouched by the repair. */
+  runId: string | null;
+  runStatus: string | null;
+  note: string;
+}
+
+/**
+ * Whether a `test_version` has been through human review (Slice 19, slice 04). Everything a
+ * person writes is `reviewed` on arrival; only an unattended Repair Agent writes `unreviewed`,
+ * and `rejected` marks one a reviewer threw away (the test having been reverted by appending its
+ * previous definition as a new version).
+ */
+export type VersionReviewState = "reviewed" | "unreviewed" | "rejected";
+
+/**
+ * One repaired version awaiting a human decision — the repair review queue (Slice 19, slice 04).
+ * Deliberately thin: the side-by-side locator diff, the justification and the blast radius are
+ * slice 13's job. What is here is enough to decide with: which test, which version, who wrote it,
+ * what they said they did, and the Brief it was supposed to serve.
+ */
+export interface RepairReviewItem {
+  versionId: string;
+  testId: string;
+  testName: string;
+  /** The version awaiting review, and the version it was written on top of (what a reject
+   *  reverts to). */
+  version: number;
+  previousVersion: number | null;
+  /** Attribution — `Repair Agent "<label>" (Claude repair)` for an unattended repair. */
+  createdBy: string | null;
+  createdAt: string;
+  /** The job this repair was reported under, and its run — null if the link is gone. */
+  jobId: string | null;
+  runId: string | null;
+  /** What the drainer said it did, and the Brief it was meant to satisfy. */
+  report: string | null;
+  brief: string | null;
+  /** True while this is still the test's LATEST version — i.e. the definition runs use. A
+   *  later edit having landed on top is why an accept is not automatically "this is live". */
+  isActiveDefinition: boolean;
+}
+
+/** The outcome of accepting or rejecting a repaired version. */
+export interface RepairReviewDecision {
+  ok: true;
+  versionId: string;
+  /** `reviewed` after an accept, `rejected` after a reject. */
+  reviewState: VersionReviewState;
+  /** After a reject: the new version appended to restore the previous definition. Null after
+   *  an accept, which writes no version — the repaired one is already the active definition. */
+  revertedToVersion: number | null;
+  note: string;
+}
+
+/**
  * One Repair Agent credential as the management surface sees it (Slice 19, slice 02 / ADR-0005).
  * Never carries the token: the secret is shown exactly once, at provisioning.
  */

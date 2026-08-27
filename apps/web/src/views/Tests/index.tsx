@@ -1,4 +1,8 @@
-import type { FolderSummary } from "@varys/review-contract";
+import type {
+  FolderSummary,
+  RepairPolicy,
+  SetRepairPolicyRequest,
+} from "@varys/review-contract";
 import {
   Button,
   ChevronRight,
@@ -10,13 +14,16 @@ import {
   Play,
   Search,
   SegmentedControl,
+  Select,
   Skeleton,
+  Sparkles,
 } from "@varys/ui";
 import { useCallback, useMemo, useState } from "react";
+import { useConfirm } from "../../context/confirm";
 import { useRouter } from "../../context/router";
 import { useRunDialog } from "../../context/run-dialog";
 import { useToast } from "../../context/toast";
-import { useFolders, useTags, useTests, useUpdateTest } from "../../queries";
+import { useFolders, useSetRepairPolicy, useTags, useTests, useUpdateTest } from "../../queries";
 import { type FolderFilter, FolderRail } from "./components/FolderRail";
 import { TagFilter } from "./components/TagFilter";
 import { TestRow } from "./components/TestRow";
@@ -61,6 +68,9 @@ export function Tests() {
   const update = useUpdateTest();
   const { openRunDialog } = useRunDialog();
   const { toast } = useToast();
+  const confirm = useConfirm();
+  const setPolicy = useSetRepairPolicy();
+  const [bulkPolicy, setBulkPolicy] = useState<RepairPolicy>("auto");
   const { route, navigate } = useRouter();
 
   // The open folder lives in the URL (`?view=tests&folder=<id|unfiled>`) so a shared link reopens
@@ -156,6 +166,56 @@ export function Tests() {
     );
   }
 
+  // Bulk Repair Policy (Slice 19) — applies to whatever is currently scoped, with the scope
+  // spelled out in the confirmation rather than inferred. A folder scope resolves on the SERVER
+  // so it includes subfolders the pane isn't showing; a tag scope crosses folder boundaries; and
+  // with neither, it applies to exactly the tests listed. Never "everything" by accident: opting
+  // a whole corpus into unattended editing must be something you asked for.
+  const bulkScope: { label: string; body: SetRepairPolicyRequest } | null =
+    (() => {
+      if (selectedFolder && !tagFilter) {
+        return {
+          label: `every test in “${selectedFolder.name}” and its subfolders`,
+          body: { policy: bulkPolicy, folderId: selectedFolder.id },
+        };
+      }
+      if (tagFilter) {
+        return {
+          label: `every test tagged “${tagFilter}”`,
+          body: { policy: bulkPolicy, tag: tagFilter },
+        };
+      }
+      if (filtered.length > 0) {
+        return {
+          label: `the ${filtered.length} test${filtered.length === 1 ? "" : "s"} listed here`,
+          body: { policy: bulkPolicy, testIds: filtered.map((t) => t.id) },
+        };
+      }
+      return null;
+    })();
+
+  async function applyBulkPolicy() {
+    if (!bulkScope) return;
+    const ok = await confirm({
+      title: bulkPolicy === "auto" ? "Turn on auto-repair?" : "Turn off auto-repair?",
+      message:
+        bulkPolicy === "auto"
+          ? `${bulkScope.label} will queue a repair for Claude when a locator stops resolving. A repair always lands as an unreviewed version — it can never turn a run green on its own.`
+          : `${bulkScope.label} will stop queueing repairs. A broken locator will simply leave the run red.`,
+      confirmLabel: bulkPolicy === "auto" ? "Turn on" : "Turn off",
+    });
+    if (!ok) return;
+    setPolicy.mutate(bulkScope.body, {
+      onSuccess: (r) =>
+        toast(
+          r.updated === 0
+            ? "No tests matched — nothing changed"
+            : `Repair policy set to ${bulkPolicy} on ${r.updated} test${r.updated === 1 ? "" : "s"}`,
+        ),
+      onError: (e) => toast(e instanceof Error ? e.message : "Couldn’t set the repair policy"),
+    });
+  }
+
   function clearFilters() {
     setFolderFilter("__all");
     setTagFilter(null);
@@ -244,6 +304,33 @@ export function Tests() {
                 </span>
               )}
             </nav>
+            <div className={styles.policyBulk}>
+              <span className={styles.policyBulkIcon} aria-hidden>
+                <Sparkles size={13} />
+              </span>
+              <span className={styles.policyBulkLabel}>Repair policy</span>
+              <Select
+                ariaLabel="Repair policy to apply"
+                selectSize="sm"
+                options={[
+                  { value: "auto", label: "Auto" },
+                  { value: "manual", label: "Manual" },
+                ]}
+                value={bulkPolicy}
+                onValueChange={(v) => setBulkPolicy(v as RepairPolicy)}
+                className={styles.policyBulkSelect}
+              />
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={!bulkScope || setPolicy.isPending}
+                loading={setPolicy.isPending}
+                onClick={applyBulkPolicy}
+                title={bulkScope ? `Apply to ${bulkScope.label}` : "Nothing in scope"}
+              >
+                Apply
+              </Button>
+            </div>
             <SegmentedControl<"icons" | "list">
               ariaLabel="View"
               size="sm"

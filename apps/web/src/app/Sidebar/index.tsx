@@ -12,6 +12,7 @@ import {
   Pencil,
   Puzzle,
   Sliders,
+  Sparkles,
   Squares,
 } from "@varys/ui";
 import { motion } from "framer-motion";
@@ -45,6 +46,7 @@ const GROUPS: NavGroup[] = [
       { key: "runs", name: "Runs", Icon: Activity },
       { key: "suiteRuns", name: "Suite runs", Icon: ListRun },
       { key: "needsReview", name: "Needs review", Icon: Eye },
+      { key: "repairQueue", name: "Repair queue", Icon: Sparkles },
     ],
   },
   {

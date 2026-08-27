@@ -121,8 +121,10 @@ export class RunsService {
         triggeredBy: runs.triggeredBy,
         triggerSource: runs.triggerSource,
         notes: runs.notes,
+        failureKind: runs.failureKind,
         testId: testVersions.testId,
         testName: tests.name,
+        repairPolicy: tests.repairPolicy,
         definition: testVersions.definition,
       })
       .from(runs)
@@ -293,6 +295,10 @@ export class RunsService {
       traceUrl: url(row.traceArtifactKey),
       timeline,
       notes: row.notes ?? null,
+      // Only an unresolvable locator is repairable (Slice 19) — recorded by the runner, so a
+      // pixel regression or a crash reads as null here and the repair affordance stays hidden.
+      failureKind: row.failureKind === "locator" ? "locator" : null,
+      repairPolicy: row.repairPolicy === "auto" ? "auto" : "manual",
       checkpoints,
     };
   }

@@ -903,3 +903,10 @@
     font-weight: var(--font-weight-semibold);
   }
 }
+
+/* --- repair policy card --- */
+.policyNote {
+  margin-top: var(--space-12);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}

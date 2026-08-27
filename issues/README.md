@@ -78,3 +78,57 @@ model**: **Pending baseline** (first run, awaiting approval) → **Baseline** (s
 **Pending baseline**, an approved one reads **Baseline**, a matched re-run reads **Passed**, and a
 diff reads **Failed** on the run page. 2–5 are independent fan-out from 1 (grab in any order). **6 is
 deferred** (the sole schema touch; not needed for the core ask).
+
+## Slice 19 — Self-healing tests: assertions + the repair queue
+
+Tracer-bullet slices for [`prd/self-healing-repair-queue.md`](../prd/self-healing-repair-queue.md).
+ADRs: [0003](../docs/adr/0003-repair-on-user-cloud-claude-claim-drain.md) (cloud Claude claims from
+a Varys-owned queue), [0004](../docs/adr/0004-brief-authored-tests-converge-no-agentic-kind.md) (no
+agentic test kind), [0005](../docs/adr/0005-scoped-repair-agent-credential.md) (scoped Repair Agent
+credential; amends [0002](../docs/adr/0002-mcp-oauth-per-user.md)).
+
+Depends on **slice 18** (repair session full edit) for `edit_test`.
+
+**Three independent entry points** — 00, 01/02, and 09. The assertions branch (09–12) is fully
+independent of the queue and can run in parallel with all of it.
+
+```
+00 (wrong-fix spike, HITL) ───────────────────────── gates GA of 05
+
+01 (policy + enqueue) ──┬──▶ 03 (claim + lease) ──┬──▶ 04 (repair → unreviewed) ──┬──▶ 05 (justification, HITL) ──▶ 06 (healed)
+02 (agent credential) ──┘                          │                               └──▶ 13 (review UI)
+                        └──▶ 07 (cluster + breaker) └──▶ 08 (triage)
+
+09 (assertion engine) ──┬──▶ 10 (extraction-failed repairable)   [also needs 01]
+                        ├──▶ 11 (judge fallback)
+                        └──▶ 12 (Claude pins assertions, HITL)
+```
+
+| #  | Slice                                                              | Type | Label           | Blocked by |
+|----|--------------------------------------------------------------------|------|-----------------|------------|
+| 00 | [Wrong-fix rate spike on real failed runs](heal-00-wrong-fix-rate-spike.md) | HITL | needs-decision | — |
+| 01 | [Repair Policy + job enqueued + queue visible](heal-01-repair-policy-enqueue-visible.md) | AFK | in-review | — |
+| 02 | [Repair Agent credential (second issuer)](heal-02-repair-agent-credential.md) | AFK | ready-for-agent | — |
+| 03 | [Claim a job under a lease](heal-03-claim-under-lease.md) | AFK | ready-for-agent | 01, 02 |
+| 04 | [Repair round trip → unreviewed version](heal-04-repair-round-trip-unreviewed.md) | AFK | ready-for-agent | 03 |
+| 05 | [Brief-justification gate](heal-05-brief-justification-gate.md) | HITL | needs-design (00 gates GA) | 04 |
+| 06 | [`healed` outcome + re-run + digest](heal-06-healed-outcome-rerun.md) | AFK | ready-for-agent | 05 |
+| 07 | [Failure clustering + circuit breaker](heal-07-clustering-circuit-breaker.md) | AFK | ready-for-agent | 01 |
+| 08 | [Triage jobs (read-only diagnosis)](heal-08-triage-jobs.md) | AFK | ready-for-agent | 03 |
+| 09 | [`@varys/assertion-engine` + replay evaluation](heal-09-assertion-engine-replay.md) | AFK | ready-for-agent | — |
+| 10 | [Extraction-failed repairable, relation-false never](heal-10-extraction-failed-repairable.md) | AFK | ready-for-agent | 01, 09 |
+| 11 | [Judge fallback for unpinnable assertions](heal-11-judge-fallback-unpinnable.md) | AFK | ready-for-agent | 09 |
+| 12 | [Claude pins assertions during authoring](heal-12-claude-pins-assertions.md) | HITL | needs-design | 09 |
+| 13 | [Repair review UI (signal diff + justification)](heal-13-repair-review-ui.md) | AFK | ready-for-agent | 04 |
+
+**Start with 01 and 02 in parallel** (no blockers, and 03 needs both), or take **09** if you would
+rather ship the new capability before the new architecture.
+
+> **Why `healed` is slice 06 and not slice 01.** Repair deliberately lands an *unreviewed version
+> while the run stays `failed`* (04), and only gains the amber outcome after the justification gate
+> exists (05). Sequenced this way, the unsafe state — a repair turning a run green with no guard —
+> never exists, not even mid-implementation.
+
+> **Measure 00 alongside 01.** Claude's wrong-fix rate decides whether `healed` is a useful amber or
+> noise nobody reviews, and whether the stateless-bundle alternative in ADR-0005 would have
+> sufficed. It costs a session with tools that already ship, not new code.
