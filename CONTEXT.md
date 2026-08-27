@@ -93,6 +93,13 @@ Recording what Claude decided while driving — the steps it walked, the multi-s
 of every element it chose, and how each Assertion is to be evaluated — so ordinary runs resolve
 all of it in the worker with no model call. Pinning is what makes a brief-authored test an
 ordinary test. Distinct from **baseline approval**, which is about the image, not the target.
+
+An assertion's pin is *verified against the live page before it is stored*, and the two ways that
+can go wrong are not alike. A side that cannot be READ means the pin is broken, and it is refused —
+storing it would author a check that has never once evaluated. A pin that reads both values and
+finds they DISAGREE is correct, and the page is not: it is stored as written and reported. This is
+the same rule as "a false relation is never repairable", one moment earlier — rewording a check at
+authoring time until the app agrees with it hides exactly the bug the check was for.
 _Avoid_: cache, lock, freeze
 
 **Repair Policy**:

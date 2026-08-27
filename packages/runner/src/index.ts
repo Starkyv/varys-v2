@@ -53,6 +53,11 @@ import {
 } from "playwright";
 import { classifyThrownFailure } from "@varys/repair-policy";
 import { evaluateAssertions } from "./assertions";
+
+// Assertion EXTRACTION — the half of an assertion that needs a live page. Re-exported so the
+// Authoring Session can verify a pin against the page it was authored against using the SAME
+// reader replay uses. A second extractor would verify something subtly different from what runs.
+export { extractSide, evaluateAssertions } from "./assertions";
 import {
   enqueueRepairIfAuto,
   enqueueTriageIfAuto,

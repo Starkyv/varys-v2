@@ -535,6 +535,64 @@ describe("createRecording accumulator", () => {
   });
 });
 
+/**
+ * Assertions on a recording (Slice 19, slice 12).
+ *
+ * Deliberately NOT steps: an assertion is evaluated against the page the last step left, so it has
+ * no position in the sequence, and folding it into `steps` would give it one it does not have.
+ */
+describe("createRecording — declared assertions", () => {
+  const pin = {
+    kind: "relation" as const,
+    left: { target: { tag: "span", testId: "total" }, as: "number" as const },
+    right: { literal: 60.5 },
+    relation: "eq" as const,
+    tolerance: 0.01,
+  };
+
+  it("carries declared assertions onto the definition without touching the steps", () => {
+    const rec = createRecording();
+    rec.push(buildEntryNavigate("https://app.example.com/", "https://app.example.com"));
+    rec.assert({ id: "total-matches-sum", check: "The total adds up", pinned: pin });
+    rec.assert({ id: "chart-ok", check: "The chart looks reasonable", unpinnableReason: "not a comparison" });
+
+    // An assertion is not a step, and must not inflate the step or checkpoint counts.
+    expect(rec.stepCount()).toBe(1);
+    expect(rec.checkpointCount()).toBe(0);
+    expect(rec.assertions().map((a) => a.id)).toEqual(["total-matches-sum", "chart-ok"]);
+
+    const def = rec.getDefinition("assert flow", { width: 800, height: 600, deviceScaleFactor: 1 });
+    expect(() => parseTestDefinition(def)).not.toThrow();
+    expect(def.assertions).toHaveLength(2);
+    expect(def.assertions?.[0]).toMatchObject({ id: "total-matches-sum", pinned: { relation: "eq" } });
+    expect(def.assertions?.[1]).toMatchObject({ id: "chart-ok", unpinnableReason: "not a comparison" });
+  });
+
+  it("omits `assertions` entirely when none were declared", () => {
+    // Every human (DOM-recorder) recording is this one, and it must stay byte-identical to what it
+    // produced before the field existed.
+    const rec = createRecording();
+    rec.push(buildEntryNavigate("https://app.example.com/", "https://app.example.com"));
+    const def = rec.getDefinition("no assertions", { width: 800, height: 600, deviceScaleFactor: 1 });
+    expect(def.assertions).toBeUndefined();
+    expect(Object.keys(def)).not.toContain("assertions");
+  });
+
+  it("REPLACES a re-declared id rather than declaring it twice", () => {
+    // An authoring session that corrects a pin it already declared must correct it — declaring a
+    // duplicate id would produce a definition the schema then rejects, losing the whole session.
+    const rec = createRecording();
+    rec.push(buildEntryNavigate("https://app.example.com/", "https://app.example.com"));
+    rec.assert({ id: "total", check: "first attempt", pinned: pin });
+    rec.assert({ id: "total", check: "second attempt", pinned: { ...pin, relation: "gte" } });
+    expect(rec.assertions()).toHaveLength(1);
+    expect(rec.assertions()[0].check).toBe("second attempt");
+    const def = rec.getDefinition("re-pin", { width: 800, height: 600, deviceScaleFactor: 1 });
+    expect(def.assertions).toHaveLength(1);
+    expect(() => parseTestDefinition(def)).not.toThrow();
+  });
+});
+
 describe("human <-> agent parity", () => {
   // The divergence guarantee: the same (fingerprint, value) inputs produce identical steps
   // whichever driver supplies them — because both call the same factory (ADR 0001).

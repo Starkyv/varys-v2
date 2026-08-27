@@ -2,6 +2,7 @@ import type { IncomingHttpHeaders } from "node:http";
 import { Body, Controller, Get, Headers, HttpException, Inject, Post, Res } from "@nestjs/common";
 import { Public } from "../auth/public.decorator";
 import { RepairJobsService } from "../repair-jobs/repair-jobs.service";
+import type { PinAssertionInput } from "./authoring-session.service";
 import { AuthoringInstructionsService } from "./authoring-instructions.service";
 import {
   AuthoringSessionService,
@@ -88,6 +89,35 @@ const EDITABLE_WAIT_SCHEMA = {
 
 /** The locator signals an edit can set (empty string clears one); everything else the recorder
  *  captured is preserved, so an edit never collapses the bundle to a single selector. */
+/** One side of a pinned assertion (Slice 19, slice 12). Shared by `left` and `right` so the two
+ *  cannot drift into describing the same thing differently. */
+const ASSERTION_SIDE_SCHEMA = {
+  type: "object",
+  properties: {
+    ref: {
+      type: "string",
+      description:
+        "The element ref (from observe) this side reads. Captured into a full multi-signal fingerprint, exactly as a click is — pin to the element, never to a selector you wrote.",
+    },
+    as: {
+      type: "string",
+      enum: ["text", "number", "sum-number", "count", "exists"],
+      description:
+        "How this side's text becomes a comparable value. `text` = its text; `number` = its text parsed as a number ($1,234 and 12% both parse); `count` = how many elements match; `sum-number` = the sum of every matching element's number; `exists` = is it there (true/false), for which 'not there' is the ANSWER and not a failure.",
+    },
+    selector: {
+      type: "string",
+      description:
+        "Required for `count` / `sum-number` ONLY, and rejected elsewhere: a selector matching EVERY member of the set (e.g. \"#invoice .amount\"). A single ref marks one winner by design, so it cannot express a set — but keep the ref too, since it supplies the fingerprint and the frame the set is searched inside.",
+    },
+    literal: {
+      type: ["string", "number"],
+      description:
+        "A fixed value instead of an element — right-hand side only. Use for \"the header equals 'Total'\" or \"the count is greater than 0\".",
+    },
+  },
+} as const;
+
 const LOCATOR_PATCH_SCHEMA = {
   type: "object",
   properties: {
@@ -105,10 +135,18 @@ const LOCATOR_PATCH_SCHEMA = {
  * from `tools/list` AND unresolvable in `tools/call`, so this is a capability boundary, not a hint.
  *
  * Three deliberate exclusions:
- *  - `open_session`, `checkpoint`, `finish_session`, `discard_session` — authoring a NEW test is a
- *    human act; an agent that could open an Authoring Session could invent tests unattended.
+ *  - `open_session`, `checkpoint`, `pin_assertion`, `declare_unpinnable_assertion`,
+ *    `finish_session`, `discard_session` — authoring a NEW test is a human act; an agent that could
+ *    open an Authoring Session could invent tests unattended. The two assertion tools sit here for
+ *    a sharper reason than the rest: an agent able to DECLARE a check could answer a red run by
+ *    writing a new assertion that passes, which is the failure the whole repair-safety story is
+ *    built to prevent. A drainer changes assertions only through `edit_test`, which refuses any id
+ *    the test does not already declare.
  *  - `failed_runs` — a cross-test read. A drainer is handed its work by the job it claimed; it has
  *    no business browsing every other test's failures.
+ *  - `find_elements` — read-only perception, and arguably harmless for a drainer diagnosing why an
+ *    assertion could not read a value. Withheld anyway: widening an agent's capability surface is
+ *    a decision to take deliberately, not a side effect of the slice that introduced the tool.
  *  - baseline approval — not an MCP tool at anyone's disposal, and permanently off-limits to an
  *    agent per DESIGN.md §4 (approving deletes the previous baseline with no rollback).
  */
@@ -1039,6 +1077,108 @@ export class McpController {
             compareMode: args.compareMode === "context" ? "context" : args.compareMode === "pixel" ? "pixel" : undefined,
             prompt: args.prompt ? String(args.prompt) : undefined,
             threshold: args.threshold !== undefined ? Number(args.threshold) : undefined,
+          }),
+      },
+      {
+        name: "find_elements",
+        description:
+          "Get refs for elements you want to READ — the counterpart to observe, and the tool you need before pin_assertion.\n\n`observe` lists what you can ACT on: links, buttons, headings, anything clickable. The things an assertion reads are almost never any of those — a total in a `<span>`, a figure in a `<td>`, a count in a badge — so they never appear in a snapshot and you cannot reference them. This finds them by CSS selector and stamps a ref on each.\n\nWhat comes back is a ref per match plus the element's tag, its text, and its data-testid / id if it has one. Read the text: the most common way a pin goes wrong is pointing at a right-looking wrong node, and the text is how you catch that before you pin it.\n\nThe ref is what you then pass to pin_assertion, and that matters — the selector is only how the element was found here, once. What gets stored on the test is the full multi-signal fingerprint captured from the ref, the same one a click records, so the check survives a re-skin that would break the selector.\n\nFor a `count` or `sum-number` side, call this with the selector you intend to use for the SET and check `total` — that number is exactly what the assertion will read. Nothing is recorded and the page is unchanged, so this is always safe to call.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sessionId: { type: "string" },
+            selector: {
+              type: "string",
+              description:
+                "A CSS selector for the elements to read, e.g. `[data-testid=\"total\"]` or `#invoice .amount`.",
+            },
+            limit: {
+              type: "number",
+              description: "Cap on how many matches are listed (default 20, max 100). `total` always reports the real count.",
+            },
+          },
+          required: ["sessionId", "selector"],
+        },
+        handler: (args) =>
+          a.findElements(
+            String(args.sessionId ?? ""),
+            String(args.selector ?? ""),
+            args.limit !== undefined ? Number(args.limit) : undefined,
+          ),
+      },
+      {
+        name: "pin_assertion",
+        description:
+          "Declare an ASSERTION on the test — a check on a RELATIONSHIP between two things on the page, which no screenshot can express: a total against the sum of its column, a row count against a badge, a header against a fixed string. A checkpoint asks \"does this look like it did before?\"; an assertion asks \"do these two numbers still agree?\", and it catches the bug a pixel-perfect page can still have.\n\nCall this ONLY when the user or plan asks for such a check — same discipline as `checkpoint`. Do not invent assertions to make a test feel thorough.\n\nYou PIN it: you decide once, here, which elements to read and how to compare them, and every later run evaluates it in the worker with NO model call. That is the whole point — the check costs nothing to run nightly forever.\n\nThe vocabulary is FIXED and nothing else is accepted. Each side is read `as` one of: `text` (its text), `number` (its text parsed as a number), `count` (HOW MANY elements match), `sum-number` (the sum of every matching element's number), `exists` (is it there — true/false). The two sides are compared with `relation`: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `contains`, or `non-empty` (which reads the left side only, so pass no `right`). Numeric relations may carry a `tolerance` — always use one for money (0.01), so float arithmetic cannot manufacture a failure.\n\nPin to ELEMENTS, by `ref` from observe — never a selector you wrote. The ref is captured into the same multi-signal fingerprint a click records, which is what lets the check survive a re-skin. The one exception: `count` and `sum-number` read a SET, which a single ref cannot express, so those sides need `selector` as well (e.g. \"#invoice .amount\") — the ref still supplies the fingerprint and the frame the set lives in.\n\nThe server EVALUATES your pin against the live page before storing it. If a side cannot be read, the pin is REFUSED with the reason and nothing is recorded — fix it and call again. If both sides read but the relation is false, the pin is STORED and you are told: that is a finding about the application, and you must report it to the user rather than reword the check until it passes.\n\nIf the vocabulary genuinely cannot express the check — anything qualitative, \"the chart looks reasonable\", \"the layout isn't broken\" — do NOT force it into the nearest fit. A pin that is subtly wrong is worse than an honest fallback, because it looks exact. Call declare_unpinnable_assertion instead.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sessionId: { type: "string" },
+            id: {
+              type: "string",
+              description:
+                "A stable, boring id for this check (letters, digits, - and _). It is the identity the assertion's pass/fail history hangs off — like a checkpoint name keys a baseline — so choose one that survives a rewording of `check`, e.g. \"total-matches-sum\".",
+            },
+            check: {
+              type: "string",
+              description:
+                "The claim, in plain language, as a human will read it when it fails: \"The invoice total equals the sum of the line items\". Not a description of the mechanism — the claim.",
+            },
+            left: { ...ASSERTION_SIDE_SCHEMA, description: "The left-hand side: the element this check reads." },
+            right: {
+              ...ASSERTION_SIDE_SCHEMA,
+              description:
+                "The right-hand side: another element to read, or a fixed value via `literal`. Omit entirely for `non-empty`, which reads the left side only.",
+            },
+            relation: {
+              type: "string",
+              enum: ["eq", "neq", "gt", "gte", "lt", "lte", "contains", "non-empty"],
+              description: "How the two coerced values are compared.",
+            },
+            tolerance: {
+              type: "number",
+              description:
+                "Numeric relations only: slack, so a rounding difference is not a failure. Use 0.01 for money. Rejected on `contains` / `non-empty`, where it would be silently ignored.",
+            },
+          },
+          required: ["sessionId", "id", "check", "left", "relation"],
+        },
+        handler: (args) =>
+          a.pinAssertion(String(args.sessionId ?? ""), {
+            id: String(args.id ?? ""),
+            check: String(args.check ?? ""),
+            left: (args.left ?? {}) as PinAssertionInput["left"],
+            right: args.right as PinAssertionInput["right"],
+            relation: args.relation as PinAssertionInput["relation"],
+            tolerance: args.tolerance !== undefined ? Number(args.tolerance) : undefined,
+          }),
+      },
+      {
+        name: "declare_unpinnable_assertion",
+        description:
+          "Declare an assertion you could NOT pin, and say why — the honest exit from `pin_assertion`, and the right call whenever the fixed vocabulary cannot express the check.\n\nUse it for anything qualitative: \"the chart looks reasonable\", \"the dashboard isn't showing an error state\", \"the layout is intact\". These are real checks worth asserting; they just are not two extractions and a relation. Varys evaluates them on every run by handing the page to a vision judge, which answers in prose — approximate, marked as approximate everywhere it is shown, and still able to fail the run.\n\nWhat this tool exists to prevent is the near-miss: forcing a qualitative claim into `contains`, or eyeballing a total into an `eq` against a literal that happens to be right today. A pin that is subtly wrong is WORSE than an honest fallback, because it looks exact and nobody re-examines it.\n\nBut do not reach for this to avoid thinking. If the check compares two things on the page, pin it — that is almost always possible once you look for the two elements. Reserve this for checks that genuinely are not comparisons.\n\n`reason` is stored on the test and shown to the author beside the check, so write it for them: name WHICH part of the claim the vocabulary cannot express, specifically enough that they could rephrase it into a pinnable one if they would rather. \"Could not pin it\" is not a reason.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sessionId: { type: "string" },
+            id: {
+              type: "string",
+              description: "A stable, boring id (letters, digits, - and _) — the key this check's history hangs off.",
+            },
+            check: { type: "string", description: "The claim, in plain language, as the author stated it." },
+            reason: {
+              type: "string",
+              description:
+                "Which part of this check the fixed vocabulary cannot express, in terms the author can act on — e.g. \"'looks reasonable' is a judgement about the whole chart, not a comparison between two values on the page; there is no element pair to read.\"",
+            },
+          },
+          required: ["sessionId", "id", "check", "reason"],
+        },
+        handler: (args) =>
+          a.declareUnpinnableAssertion(String(args.sessionId ?? ""), {
+            id: String(args.id ?? ""),
+            check: String(args.check ?? ""),
+            reason: String(args.reason ?? ""),
           }),
       },
       {

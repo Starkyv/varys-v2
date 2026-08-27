@@ -118,7 +118,7 @@ independent of the queue and can run in parallel with all of it.
 | 09 | [`@varys/assertion-engine` + replay evaluation](heal-09-assertion-engine-replay.md) | AFK | in-review | — |
 | 10 | [Extraction-failed repairable, relation-false never](heal-10-extraction-failed-repairable.md) | AFK | in-review | 01, 09 |
 | 11 | [Judge fallback for unpinnable assertions](heal-11-judge-fallback-unpinnable.md) | AFK | in-review | 09 |
-| 12 | [Claude pins assertions during authoring](heal-12-claude-pins-assertions.md) | HITL | needs-design | 09 |
+| 12 | [Claude pins assertions during authoring](heal-12-claude-pins-assertions.md) | HITL | in-review (wording + real-pin review outstanding) | 09 |
 | 13 | [Repair review UI (signal diff + justification)](heal-13-repair-review-ui.md) | AFK | ready-for-agent | 04 |
 
 **Start with 01 and 02 in parallel** (no blockers, and 03 needs both), or take **09** if you would

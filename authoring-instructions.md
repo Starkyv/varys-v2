@@ -136,6 +136,60 @@ An element checkpoint has the same locator requirements as a click — a named, 
 than climbing to a control). If the thing you want to capture is a generic wrapper with no name,
 use `fullpage` or a `region` rect instead.
 
+### Assertions — checks a screenshot cannot make
+
+A checkpoint asks *"does this look like it did before?"*. An **assertion** asks a different
+question: *"do these two things on the page still agree?"* — the total against the sum of its
+column, the row count against the badge, the header against a fixed string. That is the class of
+bug a screenshot cannot catch, because the page can be pixel-perfect and arithmetically wrong.
+
+Declare one with `pin_assertion` **only when the user or the plan asks for such a check** — the
+same discipline as checkpoints. Do not add assertions to make a test feel thorough. A test that
+was never asked to check the arithmetic should finish with none.
+
+When you do declare one, **pin it**. You are deciding, once, which elements to read and how to
+compare them; every later run then evaluates it in the worker with no model call at all. That is
+what makes an assertion free to run nightly across a whole corpus.
+
+Four rules, in the order they bite:
+
+0. **Get refs with `find_elements`, not `observe`.** `observe` lists what you can *act* on, and
+   the things an assertion reads — a total in a span, a figure in a cell, a count in a badge —
+   are never in it. `find_elements` takes a CSS selector and stamps a ref on each match, and it
+   reports each element's text: read that before you pin, because pointing at a right-looking
+   wrong node is the most common way a pin goes silently wrong.
+1. **Pin to elements, never to selectors you wrote.** Pass a `ref` from `find_elements`. It is captured
+   into the same multi-signal fingerprint a click records, which is what lets the check survive a
+   re-skin. A pin whose target is a bare CSS string has one signal and dies on the next deploy.
+   The single exception is a `count` or `sum-number` side, which reads a *set* a single ref cannot
+   express: pass `selector` **as well as** the ref, so the fingerprint and the frame still travel.
+2. **Use the vocabulary or say you can't.** The coercions (`text`, `number`, `sum-number`, `count`,
+   `exists`) and relations (`eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `contains`, `non-empty`) are the
+   whole language. Reach for `pin_assertion` first and look hard for the two elements — most checks
+   that sound qualitative turn out to be a comparison once you look. But when a check genuinely is
+   not a comparison, **do not force it into the nearest fit**. `contains` is not a synonym for
+   "roughly right", and an `eq` against a literal you read off the screen today is a check that
+   passes for the wrong reason tomorrow. Call `declare_unpinnable_assertion` and say which part of
+   the claim the vocabulary cannot express, in terms the author could act on. A pin that is subtly
+   wrong is worse than an honest fallback, because it looks exact and nobody re-examines it.
+3. **Always put a tolerance on money.** `tolerance: 0.01` on a currency comparison, so float
+   arithmetic cannot manufacture a failure nobody can reproduce.
+
+The server evaluates every pin against the live page before storing it, so you get one of three
+answers back and each means something different:
+
+- **Refused** — a side could not be read at all. Nothing was stored. Fix the ref or the selector
+  and call again; do not work around it by changing the check.
+- **Stored, relation false** — both values were read and they disagree. The pin is *correct*; the
+  page does not satisfy the author's claim. **Report this to the user and stop.** Do not reword the
+  check, loosen the relation, or raise the tolerance until it passes — that is precisely the bug
+  assertions exist to catch, and hiding it is worse than never having written the check.
+- **Stored, passed** — done. Report what you pinned.
+
+In your finish report, list every assertion you declared: the check, whether it is pinned or
+judged, and — for a pinned one — which elements it reads and what it compares. For anything you
+could not pin, say why in the same breath, so the author can decide whether to rephrase it.
+
 ### Finish report
 
 In your finish summary, list every step whose locator you were not confident about: which

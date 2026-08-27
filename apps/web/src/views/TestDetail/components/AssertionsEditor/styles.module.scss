@@ -158,3 +158,16 @@
   color: var(--color-text-subtle);
   line-height: var(--line-height-relaxed);
 }
+
+/* The recorded reason a check could not be pinned. Set apart from the generic vocabulary help
+ * below it: this one is about THIS check, and is the sentence the author acts on. */
+.unpinnableReason {
+  margin: var(--space-4) 0 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.unpinnableLabel {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-subtle);
+}

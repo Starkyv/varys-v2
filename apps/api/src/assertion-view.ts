@@ -42,6 +42,7 @@ export function summarizeAssertion(declared: Assertion): TestConfigAssertion {
     check: declared.check,
     mode: declared.pinned ? "pinned" : "judged",
     pinned: summarizePinnedAssertion(declared.pinned),
+    unpinnableReason: declared.unpinnableReason ?? null,
     pinningHelp: declared.pinned ? null : PINNABLE_CHECK_HELP,
   };
 }

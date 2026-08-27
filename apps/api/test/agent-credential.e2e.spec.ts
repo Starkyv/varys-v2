@@ -118,6 +118,17 @@ describe("Repair Agent credential — a second issuer on /mcp", () => {
     for (const forbidden of ["open_session", "checkpoint", "finish_session", "discard_session", "failed_runs"]) {
       expect(agentTools).not.toContain(forbidden);
     }
+    // The two assertion-DECLARING tools (Slice 19, slice 12) sit behind the same boundary, for a
+    // sharper reason than the rest: an agent that could declare a check could answer a red run by
+    // writing a new assertion that passes — inventing the evidence that its repair worked. It
+    // changes assertions only through `edit_test`, which refuses any id the test does not already
+    // declare, so it can reword or re-pin an existing check and never conjure one.
+    // `find_elements` is withheld too. It is only read-only perception, and a drainer diagnosing a
+    // failed extraction has a real use for it — but widening an agent's capability surface is a
+    // decision to take deliberately, not a side effect of the slice that added the tool.
+    for (const forbidden of ["pin_assertion", "declare_unpinnable_assertion", "find_elements"]) {
+      expect(agentTools).not.toContain(forbidden);
+    }
   });
 
   it("is refused for opening an Authoring Session", async () => {

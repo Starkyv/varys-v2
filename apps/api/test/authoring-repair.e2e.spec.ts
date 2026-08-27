@@ -135,7 +135,9 @@ describe("Repair session → diagnose a failed run", () => {
       arguments: { sessionId: sid, name: "nope", mode: "fullpage" },
     }).expect(200);
     expect(shot.body.result.isError).toBe(true);
-    expect(shot.body.result.content[0].text).toMatch(/records nothing/i);
+    // The refusal names WHY rather than just saying no: the tool records into a draft, and a
+    // repair session has none. (Wording last changed in heal-04; this expectation had drifted.)
+    expect(shot.body.result.content[0].text).toMatch(/there is no draft here/i);
 
     const fin = await rpc("tools/call", {
       name: "finish_session",

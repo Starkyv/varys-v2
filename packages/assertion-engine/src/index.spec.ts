@@ -695,3 +695,53 @@ describe("an assertion with no pinned form is judged, not skipped", () => {
     expect(PINNABLE_CHECK_HELP).toContain("tolerance");
   });
 });
+
+/**
+ * `unpinnableReason` (Slice 19, slice 12) — the difference between "nobody tried" and "this was
+ * examined and cannot be pinned".
+ *
+ * Both are the same absent `pinned` field, and they ask opposite things of an author: one is a
+ * to-do, the other is a decision they may want to argue with. The field exists so a surface can
+ * tell them apart, and the schema exists so it can never claim both at once.
+ */
+describe("an assertion records WHY it could not be pinned", () => {
+  it("accepts a reason on an unpinned assertion", () => {
+    const parsed = assertion.parse({
+      id: "chart-ok",
+      check: "The chart looks reasonable",
+      unpinnableReason:
+        "'looks reasonable' is a judgement about the whole chart, not a comparison between two values on the page",
+    });
+    expect(parsed.unpinnableReason).toContain("not a comparison");
+    expect(parsed.pinned).toBeUndefined();
+  });
+
+  it("leaves it absent for an assertion nobody has examined", () => {
+    // Legal, and different: this one is simply unpinned. A surface that showed a reason here would
+    // be inventing one.
+    const parsed = assertion.parse({ id: "someday", check: "Someday this will be checked" });
+    expect(parsed.unpinnableReason).toBeUndefined();
+  });
+
+  it("REFUSES an assertion that is both pinned and unpinnable", () => {
+    // Two contradictory claims in one record. Refused at the schema, so no surface downstream ever
+    // has to decide which half to believe.
+    const both = assertion.safeParse({
+      id: "total",
+      check: "The total adds up",
+      pinned: {
+        kind: "relation",
+        left: { target: { anything: true }, as: "number" },
+        right: { literal: 1 },
+        relation: "eq",
+      },
+      unpinnableReason: "could not pin it",
+    });
+    expect(both.success).toBe(false);
+    expect(JSON.stringify(both.error?.issues)).toMatch(/cannot be both pinned and unpinnable/);
+  });
+
+  it("refuses an empty reason, which says nothing an author can act on", () => {
+    expect(assertion.safeParse({ id: "x", check: "y", unpinnableReason: "" }).success).toBe(false);
+  });
+});

@@ -117,6 +117,16 @@ export function AssertionsEditor({
                   </span>
                   <p className={styles.modeBlurb}>{MODE_META[a.mode].blurb}</p>
                   <PinnedAssertion pinned={a.pinned} />
+                  {/* Why it could not be pinned, from whoever tried (slice 12). This is what turns
+                      the Approximate badge from a verdict into something the author can act on —
+                      "nobody pinned this yet" and "this was examined and cannot be pinned" are the
+                      same missing pinned form, and they ask opposite things of them. */}
+                  {a.unpinnableReason && (
+                    <p className={styles.unpinnableReason}>
+                      <span className={styles.unpinnableLabel}>Couldn’t be pinned</span>{" "}
+                      {a.unpinnableReason}
+                    </p>
+                  )}
                   {/* …and, for an approximate check, exactly what would make it exact — so the
                       author can rephrase rather than just be told it is second-best. */}
                   {a.pinningHelp && <p className={styles.pinningHelp}>{a.pinningHelp}</p>}

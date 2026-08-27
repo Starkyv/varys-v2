@@ -1,4 +1,13 @@
-import type { Fingerprint, Rect, Step, TestDefinition, Variable, Viewport, Wait } from "@varys/step-schema";
+import type {
+  Assertion,
+  Fingerprint,
+  Rect,
+  Step,
+  TestDefinition,
+  Variable,
+  Viewport,
+  Wait,
+} from "@varys/step-schema";
 
 /**
  * `@varys/recorder` is split so its entry (`index.ts`) is the **DOM-free shared core**
@@ -134,14 +143,30 @@ export interface RecordedComparison {
 export interface Recording {
   push(step: Step): void;
   checkpoint(name: string, spec: RecordedCheckpoint): void;
+  /**
+   * Declare an Assertion on the recording (Slice 19, slice 12) — a check on a RELATIONSHIP, which
+   * no screenshot expresses. Pinned or judged: the assertion carries its own answer to that.
+   *
+   * Kept beside `checkpoint` because it is the same kind of thing — something the test asserts —
+   * and deliberately NOT a step: an assertion is evaluated against the page the last step left,
+   * so it has no position in the sequence. Re-declaring an existing id REPLACES it, so an
+   * authoring session that re-pins a check it already declared corrects it rather than declaring
+   * a duplicate the schema would then reject.
+   */
+  assert(declared: Assertion): void;
   getDefinition(name: string, viewport: Viewport): TestDefinition;
   stepCount(): number;
   /** Count of screenshot (checkpoint) steps — for the zero-checkpoint warning. */
   checkpointCount(): number;
+  /** The assertions declared so far, in declaration order. */
+  assertions(): Assertion[];
 }
 
 export function createRecording(onStep?: OnStep): Recording {
   const steps: Step[] = [];
+  /** Declared assertions, keyed by their stable id so a re-declaration corrects rather than
+   *  duplicates. Insertion order is preserved, which is the order the editor lists them in. */
+  const declaredAssertions = new Map<string, Assertion>();
   const push = (s: Step) => {
     steps.push(s);
     onStep?.(s);
@@ -172,16 +197,31 @@ export function createRecording(onStep?: OnStep): Recording {
         push({ type: "screenshot", name, captureMode: "element", target: spec.target, ...comparison, ...waits });
       }
     },
+    assert(declared) {
+      declaredAssertions.set(declared.id, declared);
+    },
     getDefinition(name, viewport) {
       // Variables are derived from the recorded tokens — declared once each.
       const variables = variablesFromSteps(steps);
-      return { name, viewport, steps: [...steps], ...(variables.length ? { variables } : {}) };
+      const assertions = [...declaredAssertions.values()];
+      return {
+        name,
+        viewport,
+        steps: [...steps],
+        ...(variables.length ? { variables } : {}),
+        // Omitted when empty, so a recording that declares none is byte-identical to before —
+        // which is every human (DOM-recorder) recording.
+        ...(assertions.length ? { assertions } : {}),
+      };
     },
     stepCount() {
       return steps.length;
     },
     checkpointCount() {
       return steps.filter((s) => s.type === "screenshot").length;
+    },
+    assertions() {
+      return [...declaredAssertions.values()];
     },
   };
 }

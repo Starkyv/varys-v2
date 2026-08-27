@@ -1528,6 +1528,15 @@ export interface TestConfigAssertion {
   /** The pinned form, or null when the assertion is judged rather than pinned. */
   pinned: PinnedAssertionView | null;
   /**
+   * Why this check could not be pinned, written by whoever tried (slice 12's Authoring Session).
+   * Null when it is pinned, and null when nobody has examined it.
+   *
+   * The distinction that earns it a field: "nobody has pinned this yet" and "this was examined and
+   * genuinely cannot be pinned" are the same absent `pinned`, and they ask opposite things of an
+   * author. With a reason, the Approximate badge explains itself; without one it is a shrug.
+   */
+  unpinnableReason: string | null;
+  /**
    * What the pinned vocabulary CAN express, so an author looking at an approximate check knows how
    * to rephrase it into an exact one. Null for an assertion that is already pinned — there is
    * nothing to rephrase.

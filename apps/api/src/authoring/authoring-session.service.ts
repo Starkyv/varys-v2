@@ -14,10 +14,19 @@ import {
   type EnvCookie,
   type EnvironmentProfile,
   type EnvLocalStorageItem,
+  extractSide,
   performStepAction,
   seedCookies,
   seedLocalStorage,
 } from "@varys/runner";
+import {
+  type Coercion,
+  coercionSchema,
+  evaluatePinned,
+  isUnaryRelation,
+  type Relation,
+  relationSchema,
+} from "@varys/assertion-engine";
 import { resolveStep, resolveWaits } from "@varys/variable-resolver";
 import { and, desc, eq, ilike, ne } from "drizzle-orm";
 import {
@@ -29,8 +38,11 @@ import {
   type Recording,
 } from "@varys/recorder";
 import {
+  type Assertion,
+  assertion as assertionSchema,
   describeStep,
   type Fingerprint,
+  type PinnedAssertion,
   type Rect,
   type Step,
   streamIdleExpression,
@@ -154,6 +166,57 @@ export interface CheckpointInput {
   prompt?: string;
   /** Pixel-mode tolerance: max mismatched-pixel ratio (0..1). */
   threshold?: number;
+}
+
+/**
+ * One side of a proposed pinned assertion, as the authoring tool receives it (Slice 19, slice 12).
+ *
+ * A side is either an ELEMENT on the live page (`ref`, captured into a full multi-signal
+ * fingerprint exactly as a click or a checkpoint is) or a fixed value the author supplies
+ * (`literal`). Never both, and never a hand-written selector standing in for the element —
+ * a pin whose target is a bare CSS string is a pin that breaks on the next re-skin.
+ */
+export interface PinSideInput {
+  /** The element ref (from observe) this side reads. Omit only for a literal right-hand side. */
+  ref?: string;
+  /** How the read text becomes a comparable value. */
+  as?: Coercion;
+  /**
+   * For the SET coercions (`count`, `sum-number`) only: a selector that addresses EVERY member
+   * of the set, not just the one `ref` points at.
+   *
+   * Required there and rejected elsewhere, and that asymmetry is the extraction contract rather
+   * than a preference: the scored matcher marks a single winner by design, so it cannot express
+   * "all the amount cells". The `ref` is still required alongside it — it supplies the real
+   * fingerprint (and with it the frame chain the set is searched inside), so the pin is not
+   * reduced to a bare string.
+   */
+  selector?: string;
+  /** A fixed value written by the author — the right-hand side of "the header equals 'Total'". */
+  literal?: string | number;
+}
+
+/** What an assertion declaration reports back — enough for Claude to tell the author what it did. */
+export interface PinAssertionResult {
+  ok: true;
+  assertion: { id: string; check: string; mode: "pinned" | "judged" };
+  /** The pinned form in words: which elements, which coercions, which relation. */
+  proposed: string;
+  /** The live verdict the pin produced when it was stored. Null for a judged declaration. */
+  verdict: "passed" | "relation-false" | null;
+  detail: string;
+  /** Something Claude must pass on to the author, or null. */
+  note: string | null;
+}
+
+/** A proposed pinned assertion, before it is captured, validated and evaluated. */
+export interface PinAssertionInput {
+  id: string;
+  check: string;
+  left: PinSideInput;
+  right?: PinSideInput;
+  relation: Relation;
+  tolerance?: number;
 }
 
 /** The matcher's `Page` parameter, taken from `verify` itself: the Authoring Session drives
@@ -602,7 +665,14 @@ export interface FinishResult {
   testId: string;
   version: number;
   checkpointCount: number;
-  /** Set when the draft asserts nothing (zero checkpoints) — surfaced to Claude. */
+  /** Declared Assertions (Slice 19, slice 12), and the split that matters: `pinned` is evaluated
+   *  exactly in the worker with no model call, `judged` is a model reading the page. Reported
+   *  separately because a draft whose checks are all judged asserts far less than the total
+   *  suggests. */
+  assertionCount: number;
+  pinnedAssertionCount: number;
+  judgedAssertionCount: number;
+  /** Set when the draft asserts nothing at all (no checkpoints AND no assertions). */
   warning: string | null;
 }
 
@@ -611,6 +681,63 @@ export interface FinishResult {
  * landmark element and return a compact node list. Self-contained (no outer refs, no
  * inner named functions) so it serializes cleanly into the page via `page.evaluate`.
  */
+/**
+ * In-page: stamp a `data-varys-ref` on every element matching a caller-supplied selector, and
+ * report what each one says (Slice 19, slice 12).
+ *
+ * The companion to {@link collectSnapshot}, and it exists because the two answer different
+ * questions. `observe` surfaces what you can ACT on — links, buttons, headings, anything with a
+ * pointer cursor — which is the right set for a test that clicks and types. An assertion READS,
+ * and the things it reads are almost never interactive: a total in a `<span>`, a figure in a
+ * `<td>`, a count in a badge. None of those ever get a ref from `observe`, so without this an
+ * assertion tool cannot reach its own subject matter.
+ *
+ * It hands back a REF, not a selector, and that is the whole point: the selector is how the node
+ * is found here, once, and what gets stored on the test is the full multi-signal fingerprint
+ * captured from the ref — the same one a click records. So a pin is never reduced to the CSS
+ * string that happened to locate it during authoring.
+ *
+ * Shares `window.__varysRef` with `collectSnapshot`, so refs from the two are drawn from one
+ * sequence and can never collide.
+ */
+function stampRefs(arg: { selector: string; limit: number }): {
+  ok: boolean;
+  error?: string;
+  total: number;
+  nodes: Array<{ ref: string; tag: string; text: string; testId?: string; id?: string }>;
+} {
+  let found: Element[];
+  try {
+    found = Array.from(document.querySelectorAll(arg.selector));
+  } catch {
+    return { ok: false, error: "not a valid CSS selector", total: 0, nodes: [] };
+  }
+  const w = window as unknown as { __varysRef?: number };
+  let counter = w.__varysRef ?? 0;
+  const nodes: Array<{ ref: string; tag: string; text: string; testId?: string; id?: string }> = [];
+  for (const el of found.slice(0, arg.limit)) {
+    let ref = el.getAttribute("data-varys-ref");
+    if (!ref) {
+      counter += 1;
+      ref = `e${counter}`;
+      el.setAttribute("data-varys-ref", ref);
+    }
+    const testId = el.getAttribute("data-testid") || undefined;
+    const id = el.getAttribute("id") || undefined;
+    nodes.push({
+      ref,
+      tag: el.tagName.toLowerCase(),
+      // Trimmed and capped: this is for the model to confirm it found the right thing, not a
+      // transcript of the page.
+      text: (el.textContent || "").trim().slice(0, 120),
+      ...(testId ? { testId } : {}),
+      ...(id ? { id } : {}),
+    });
+  }
+  w.__varysRef = counter;
+  return { ok: true, total: found.length, nodes };
+}
+
 function collectSnapshot(): { nodes: SnapshotNode[] } {
   const SEL =
     'a[href], button, input, select, textarea, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="tab"], [role="menuitem"], [role="option"], [role="switch"], [contenteditable=""], [contenteditable="true"], [onclick], h1, h2, h3, [role="heading"]';
@@ -2048,6 +2175,325 @@ export class AuthoringSessionService implements OnApplicationShutdown {
     };
   }
 
+  // ── Assertions (Slice 19, slice 12) ────────────────────────────────────────────────
+
+  /**
+   * Ref the elements an assertion needs to READ (Slice 19, slice 12).
+   *
+   * `observe` answers "what can I act on?" and refs interactive and landmark elements only. An
+   * assertion reads values — a total in a span, a figure in a table cell, a count in a badge — and
+   * none of those ever appear there. This is how those become addressable.
+   *
+   * Read-only: it stamps refs and reports text. Nothing is recorded, and the page is otherwise
+   * unchanged, so it is always safe to call. The output is deliberately the elements' TEXT as well
+   * as their refs, because the first thing that goes wrong when pinning is reading the right-looking
+   * wrong node — and the model can only catch that if it is shown what the node actually says.
+   */
+  async findElements(
+    sessionId: string,
+    selector: string,
+    limit = 20,
+  ): Promise<{ selector: string; total: number; returned: number; nodes: unknown[]; note: string | null }> {
+    const s = this.require(sessionId);
+    const sel = (selector ?? "").trim();
+    if (!sel) throw new BadRequestException("`selector` is required — a CSS selector for the elements to read.");
+    const capped = Math.min(Math.max(1, Math.floor(limit) || 20), 100);
+
+    // Same `new Function` shim `captureFp` uses: under tsx, esbuild's keepNames wraps named
+    // functions in `__name(...)`, which is not defined inside the page and throws on evaluate.
+    const src = stampRefs.toString();
+    const body = `var __name = function (f) { return f; }; return (${src})(arg);`;
+    const run = new Function("arg", body) as (arg: { selector: string; limit: number }) => unknown;
+    const evaluate = s.page.evaluate.bind(s.page) as unknown as (
+      fn: (arg: { selector: string; limit: number }) => unknown,
+      arg: { selector: string; limit: number },
+    ) => Promise<unknown>;
+    const result = (await evaluate(run, { selector: sel, limit: capped })) as {
+      ok: boolean;
+      error?: string;
+      total: number;
+      nodes: unknown[];
+    };
+    if (!result.ok) throw new BadRequestException(`\`${sel}\` is ${result.error}`);
+
+    return {
+      selector: sel,
+      total: result.total,
+      returned: result.nodes.length,
+      nodes: result.nodes,
+      note:
+        result.total === 0
+          ? "Nothing matched. Check the selector against what observe reported, or navigate/wait until the value you want is on the page."
+          : result.total > result.nodes.length
+            ? `${result.total} elements matched; the first ${result.nodes.length} are listed. If you are pinning a count/sum-number side, that full total is what the assertion will read.`
+            : null,
+    };
+  }
+
+  /** The SET coercions: they read EVERY matching element, which the scored matcher cannot express. */
+  private static readonly SET_COERCIONS: readonly Coercion[] = ["count", "sum-number"];
+
+  /**
+   * Capture one side of a proposed pin off the live page.
+   *
+   * The `ref` is captured into a full multi-signal fingerprint by the SAME path a click or a
+   * checkpoint uses — which is the point of AC 3. A pin whose target is a hand-written selector
+   * has none of the fallback signals the matcher scores, so it resolves until the first re-skin
+   * and then fails as a locator problem the repair queue has to clean up.
+   */
+  private async captureSide(
+    s: SessionState,
+    side: PinSideInput,
+    which: "left" | "right",
+  ): Promise<{ target: Fingerprint; as: Coercion }> {
+    const as = side.as;
+    if (!as || !coercionSchema.safeParse(as).success) {
+      throw new BadRequestException(
+        `the ${which}-hand side needs \`as\` — one of ${coercionSchema.options.join(", ")} — to say how its text becomes a comparable value`,
+      );
+    }
+    if (!side.ref) {
+      throw new BadRequestException(
+        `the ${which}-hand side needs a \`ref\` from observe. Pin to the ELEMENT, not to a selector you wrote: the fingerprint carries every signal the replay matcher scores, and a bare selector carries one.`,
+      );
+    }
+    const isSet = AuthoringSessionService.SET_COERCIONS.includes(as);
+    if (!isSet && side.selector) {
+      throw new BadRequestException(
+        `\`selector\` addresses a SET, so it applies to ${AuthoringSessionService.SET_COERCIONS.join(" / ")} only — the ${which}-hand side reads \`${as}\`, which is one element, and that element is already identified by its ref.`,
+      );
+    }
+    if (isSet && !side.selector?.trim()) {
+      throw new BadRequestException(
+        `a \`${as}\` side reads EVERY matching element, so the ${which}-hand side needs a \`selector\` that addresses the whole set (e.g. "#invoice .amount"). Its \`ref\` still identifies one member, which is what supplies the fingerprint and the frame it lives in.`,
+      );
+    }
+
+    const locator = this.resolveRef(s.page, side.ref);
+    // `climb: false` — an assertion READS this exact node's text, so it must not rise to the
+    // actionable control the way a click does. Same choice a checkpoint makes, for the same reason.
+    const target = await this.captureFp(s.page, locator, false);
+    if (isSet) {
+      const selector = side.selector?.trim() ?? "";
+      // Sanity-check the set selector against the live page before it is stored. A selector that
+      // matches nothing would pin a `count` of zero that looks like a legitimate answer.
+      const matched = await s.page.locator(selector).count().catch(() => -1);
+      if (matched < 0) {
+        throw new BadRequestException(`\`selector\` is not a valid selector: ${selector}`);
+      }
+      if (matched === 0) {
+        throw new BadRequestException(
+          `\`selector\` "${selector}" matches nothing on this page, so a \`${as}\` side would read an empty set — which is a real answer, not an error, and would pin a check that silently passes. Fix the selector.`,
+        );
+      }
+      return { target: { ...target, selectorOverride: selector }, as };
+    }
+    return { target, as };
+  }
+
+  /**
+   * Pin an assertion during authoring (Slice 19, slice 12) — the moment the design's core idea
+   * reaches assertions: Claude decides HOW to evaluate the check once, Varys remembers the answer,
+   * and no model runs again unless the answer goes stale.
+   *
+   * Three guarantees, in the order they are enforced, because each one only means something if the
+   * one before it held:
+   *
+   *  1. **Only the vocabulary.** The proposed form is parsed by `@varys/step-schema`'s assertion
+   *     schema before anything else happens, so nothing model-authored can reach the definition —
+   *     a coercion or relation outside the fixed set is a 400, not a stored surprise.
+   *  2. **Real fingerprints.** Each side is captured off a live `ref`, never a written selector.
+   *  3. **It actually evaluates.** The pin is run against the page it was authored against, using
+   *     the runner's own extractor — so "this pin works" is demonstrated rather than assumed.
+   *
+   * The failure modes are deliberately not treated alike. An `extraction-failed` verdict means the
+   * pin is BROKEN — a side could not be read at all — and it is refused: storing it would author a
+   * test that has never once evaluated. A `relation-false` verdict means the pin WORKS and the page
+   * disagrees with the author's claim, which is a finding rather than a defect in the pin, so it is
+   * stored and reported loudly. Refusing that one instead would quietly train an author to reword
+   * their check until the app agrees with it, which is the same bug the whole assertion story
+   * exists to prevent.
+   */
+  async pinAssertion(sessionId: string, input: PinAssertionInput): Promise<PinAssertionResult> {
+    const s = this.require(sessionId);
+    if (s.repair) {
+      throw new BadRequestException(
+        "This is a repair session — `pin_assertion` declares an assertion on a NEW draft, and there is no draft here. To change an assertion on the test under repair, use read_test → edit_test with `assertions`.",
+      );
+    }
+    const id = (input.id ?? "").trim();
+    const check = (input.check ?? "").trim();
+    if (!check) {
+      throw new BadRequestException(
+        "`check` is required: one plain-language sentence saying what this assertion claims about the app. It is the only part of an assertion a human reads when it fails.",
+      );
+    }
+    if (!relationSchema.safeParse(input.relation).success) {
+      throw new BadRequestException(
+        `\`relation\` must be one of ${relationSchema.options.join(", ")} — the fixed vocabulary. If none of them expresses this check, do not force the nearest fit: call declare_unpinnable_assertion and say why.`,
+      );
+    }
+    const unary = isUnaryRelation(input.relation);
+
+    const left = await this.captureSide(s, input.left, "left");
+    let right: PinnedAssertion["right"] | undefined;
+    if (unary) {
+      if (input.right) {
+        throw new BadRequestException(
+          `\`${input.relation}\` reads the left-hand side only — drop \`right\`, or pick a relation that compares two things.`,
+        );
+      }
+    } else {
+      if (!input.right) {
+        throw new BadRequestException(`\`${input.relation}\` compares two things — \`right\` is required.`);
+      }
+      right =
+        input.right.literal !== undefined
+          ? { literal: input.right.literal }
+          : await this.captureSide(s, input.right, "right");
+    }
+
+    // Only the vocabulary reaches the definition. Zod-validated here, before the live evaluation,
+    // so a malformed proposal is refused without touching the page.
+    const parsed = assertionSchema.safeParse({
+      id,
+      check,
+      pinned: {
+        kind: "relation",
+        left,
+        // A unary relation has no right-hand side, and the schema still wants the key. An inert
+        // empty literal is what slice 09's own pinned forms use, and the choice matters beyond
+        // tidiness: mirroring `left` here would make `pinnedSideTarget(…, "right")` hand the repair
+        // path a fingerprint for a side that does not exist, so a repair could "re-pin" it.
+        right: right ?? { literal: "" },
+        relation: input.relation,
+        ...(input.tolerance !== undefined ? { tolerance: input.tolerance } : {}),
+      },
+    });
+    if (!parsed.success) {
+      throw new BadRequestException(
+        `that pinned form is not in the vocabulary: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
+      );
+    }
+    const declared = parsed.data as Assertion;
+    const pinned = declared.pinned as PinnedAssertion;
+
+    // …and now the part that makes this a PIN rather than a proposal: run it, here, against the
+    // page it was authored against, with the extractor replay itself uses.
+    const leftSide = await extractSide(s.page as never, pinned.left.target, pinned.left.as);
+    const rightSide =
+      unary || "literal" in pinned.right
+        ? undefined
+        : await extractSide(s.page as never, pinned.right.target, pinned.right.as);
+    const evaluation = evaluatePinned(pinned, { left: leftSide, right: rightSide });
+
+    if (evaluation.outcome === "extraction-failed") {
+      throw new BadRequestException(
+        `this pin does not evaluate against the page in front of you, so it has not been stored: ${evaluation.detail}. ` +
+          (evaluation.cause === "unresolved"
+            ? "A side could not be read at all — re-check the ref (or, for a count/sum-number side, the selector)."
+            : "A value was read but could not become what the coercion asked for — a different `as`, or a different relation, may be the honest fit.") +
+          " Fix it and call pin_assertion again, or call declare_unpinnable_assertion if the vocabulary cannot express this check.",
+      );
+    }
+
+    s.rec.assert(declared);
+    // `evaluatePinned` is typed over every AssertionOutcome, but a PINNED evaluation can only ever
+    // reach three, and the fourth (`extraction-failed`) threw above — the judged pair belongs to
+    // slice 11's fallback and is unreachable here. Narrowed explicitly rather than cast, so a new
+    // outcome added later fails this branch loudly instead of being reported as a pass.
+    const verdict = evaluation.outcome === "relation-false" ? "relation-false" : "passed";
+    return {
+      ok: true,
+      assertion: { id: declared.id, check: declared.check, mode: "pinned" },
+      // What was pinned, in words — so the author reviewing this in the session sees WHICH
+      // elements, WHICH coercions and WHICH relation before the draft is ever promoted.
+      proposed: this.describePin(pinned),
+      verdict,
+      detail: evaluation.detail,
+      note:
+        verdict === "relation-false"
+          ? "The pin WORKS — both values were read — but the check does not hold on this page right now. That is a finding about the application, not a problem with the pin, and the assertion has been stored as written. Tell the author: either the app is wrong, or the check is. Do NOT reword the check to make it pass."
+          : null,
+    };
+  }
+
+  /**
+   * Declare an assertion that CANNOT be pinned, with the reason (Slice 19, slices 11 + 12).
+   *
+   * The honest exit, and it has to be as easy to reach as `pin_assertion` or it will not be taken.
+   * A check the vocabulary cannot express — "the chart looks reasonable" — is still worth
+   * asserting; slice 11 judges it. What must not happen is the near-miss: forcing a qualitative
+   * claim into `contains` and producing an assertion that passes for the wrong reason. A pin that
+   * is subtly wrong is worse than an honest fallback, because it looks exact.
+   *
+   * The `reason` is not paperwork. Stored on the definition, it is what turns the editor's
+   * "Approximate" badge from a verdict into something the author can act on — the difference
+   * between "nobody has pinned this yet" and "this was examined and cannot be pinned".
+   */
+  async declareUnpinnableAssertion(
+    sessionId: string,
+    input: { id: string; check: string; reason: string },
+  ): Promise<PinAssertionResult> {
+    const s = this.require(sessionId);
+    if (s.repair) {
+      throw new BadRequestException(
+        "This is a repair session — there is no draft to declare an assertion on. Use read_test → edit_test to change the test under repair.",
+      );
+    }
+    const check = (input.check ?? "").trim();
+    const reason = (input.reason ?? "").trim();
+    if (!check) throw new BadRequestException("`check` is required — the plain-language claim.");
+    if (!reason) {
+      throw new BadRequestException(
+        "`reason` is required: say WHICH part of this check the vocabulary cannot express, specifically enough that the author can rephrase it. \"Could not pin it\" tells them nothing they did not already know.",
+      );
+    }
+    const parsed = assertionSchema.safeParse({ id: (input.id ?? "").trim(), check, unpinnableReason: reason });
+    if (!parsed.success) {
+      throw new BadRequestException(
+        parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "),
+      );
+    }
+    s.rec.assert(parsed.data as Assertion);
+    return {
+      ok: true,
+      assertion: { id: parsed.data.id, check, mode: "judged" },
+      proposed: `judged (approximate): ${reason}`,
+      verdict: null,
+      detail:
+        "Declared without a pinned form. Every run will hand this check to the vision judge, which reads the page and answers it in prose — approximate, and marked as such wherever it is shown.",
+      note: "Tell the author this one is approximate, and why, so they can rephrase it into an exact check if they would rather have one.",
+    };
+  }
+
+  /** A short handle for a target, preferring the most durable signal — the same order the matcher
+   *  itself prefers, so the label names the signal that will actually find it on replay. */
+  private static targetLabel(t: Fingerprint): string {
+    if (t.selectorOverride) return t.selectorOverride;
+    if (t.testId) return `[data-testid="${t.testId}"]`;
+    if (t.accessibleName) return `"${t.accessibleName}"`;
+    if (t.attributes?.id) return `#${t.attributes.id}`;
+    if (t.text) return `"${t.text.slice(0, 40)}"`;
+    if (t.role) return `<${t.role}>`;
+    return `<${t.tag}>`;
+  }
+
+  /** The pinned form in one line — which elements, which coercions, which relation. The same
+   *  vocabulary the editor renders, so the session and the review surface describe it alike. */
+  private describePin(pinned: PinnedAssertion): string {
+    const side = (t: Fingerprint, as: Coercion) =>
+      `${as} of ${AuthoringSessionService.targetLabel(t)}`;
+    const l = side(pinned.left.target, pinned.left.as);
+    if (isUnaryRelation(pinned.relation)) return `${l} ${pinned.relation}`;
+    const r =
+      "literal" in pinned.right
+        ? JSON.stringify(pinned.right.literal)
+        : side(pinned.right.target, pinned.right.as);
+    const slack = pinned.tolerance !== undefined ? ` (± ${pinned.tolerance})` : "";
+    return `${l} ${pinned.relation} ${r}${slack}`;
+  }
+
   /**
    * End the session and persist the draft. Deterministic per-mode discipline: an INTERACTIVE
    * session may be finished ONLY on the user's explicit instruction — the caller passes
@@ -2069,6 +2515,12 @@ export class AuthoringSessionService implements OnApplicationShutdown {
     }
     const definition = s.rec.getDefinition(s.name, s.viewport);
     const checkpointCount = s.rec.checkpointCount();
+    // What the draft asserts BEYOND its pictures (Slice 19, slice 12), split by exact vs
+    // approximate — the split is the number a reviewer actually wants, because a draft whose
+    // checks are all judged asserts far less than the count alone suggests.
+    const declared = s.rec.assertions();
+    const pinnedCount = declared.filter((a) => a.pinned).length;
+    const judgedCount = declared.length - pinnedCount;
     const previews = [...s.previews].map(([checkpointName, bytes]) => ({ checkpointName, bytes }));
     const { id, version } = await this.tests.createDraft(definition, {
       intent: s.intent,
@@ -2077,14 +2529,21 @@ export class AuthoringSessionService implements OnApplicationShutdown {
     });
     this.sessionEvents.next({ sessionId, testId: id, version, checkpointCount, name: s.name });
     await this.teardown(sessionId);
-    this.log.log(`finished authoring session ${sessionId} → draft ${id} (v${version})`);
+    this.log.log(
+      `finished authoring session ${sessionId} → draft ${id} (v${version}, ${declared.length} assertion(s))`,
+    );
     return {
       testId: id,
       version,
       checkpointCount,
+      assertionCount: declared.length,
+      pinnedAssertionCount: pinnedCount,
+      judgedAssertionCount: judgedCount,
       warning:
-        checkpointCount === 0
-          ? "This draft has no checkpoints, so it asserts nothing yet. That's expected if the plan never asked for one — a human can add a checkpoint in review. Do NOT add a checkpoint just to clear this notice."
+        // An assertion IS an assertion: a draft that declares one is not a draft that asserts
+        // nothing, so the zero-checkpoint notice must not claim otherwise.
+        checkpointCount === 0 && declared.length === 0
+          ? "This draft has no checkpoints and no assertions, so it asserts nothing yet. That's expected if the plan never asked for one — a human can add one in review. Do NOT invent a checkpoint just to clear this notice."
           : null,
     };
   }

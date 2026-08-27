@@ -93,8 +93,22 @@ export interface Assertion<TTarget = unknown> {
   id: string;
   /** Plain language: what this assertion is claiming about the app. */
   check: string;
-  /** Absent ⇒ declared but not yet pinned; it is documentation, and no run evaluates it. */
+  /** Absent ⇒ no pinned form, so every run JUDGES this check instead (slice 11). */
   pinned?: PinnedAssertion<TTarget>;
+  /**
+   * Why this check has no pinned form — written by whoever tried to pin it and could not
+   * (slice 12's Authoring Session today, a human by hand otherwise).
+   *
+   * The distinction it records is one the shape alone cannot: "nobody has tried to pin this yet"
+   * and "this was examined and genuinely cannot be pinned" are the same absent `pinned` field, and
+   * they call for opposite things from an author. A recorded reason turns the editor's
+   * "Approximate" badge from a verdict into an explanation they can act on — which is the whole
+   * point of telling them at all.
+   *
+   * Meaningless when `pinned` is set, and rejected there: a pinned assertion that also carries a
+   * reason it could not be pinned is two contradictory claims in one record.
+   */
+  unpinnableReason?: string;
 }
 
 /** Assertion ids are used in URLs, DB keys and history joins — keep them boring. */
@@ -132,7 +146,8 @@ export function pinnedAssertionSchema<T extends z.ZodTypeAny>(target: T) {
 
 /** Build the assertion schema (id + check + optional pinned form) over a target schema. */
 export function assertionSchema<T extends z.ZodTypeAny>(target: T) {
-  return z.object({
+  return z
+    .object({
     id: z
       .string()
       .min(1)
@@ -142,6 +157,19 @@ export function assertionSchema<T extends z.ZodTypeAny>(target: T) {
       ),
     check: z.string().min(1),
     pinned: pinnedAssertionSchema(target).optional(),
+    unpinnableReason: z.string().min(1).optional(),
+  })
+  .superRefine((declared, ctx) => {
+    // Both set is a contradiction, not a merge: it claims the check was pinned AND that it could
+    // not be. Refusing it here means no surface downstream has to decide which half to believe.
+    if (declared.pinned && declared.unpinnableReason !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["unpinnableReason"],
+        message:
+          "an assertion cannot be both pinned and unpinnable — drop unpinnableReason, or drop the pinned form",
+      });
+    }
   });
 }
 
