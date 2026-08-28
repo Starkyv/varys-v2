@@ -14,7 +14,8 @@ If a screen is slow to load, a test can snap a screenshot before everything's re
 - a short **delay** (a fixed number of seconds), or
 - **wait for something to appear** before continuing.
 
-You can add a wait before any step, or set a default wait that applies before every step.
+You can add a wait before any step, including a step that opens a page. A default wait applies
+before every step except those, which settle on their own.
 
 <Callout>
   You usually don't need waits — Varys already waits for the page to settle after navigating. Add

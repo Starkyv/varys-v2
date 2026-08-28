@@ -292,7 +292,9 @@ export async function applyWaits(page: Page, waits: Wait[] | undefined): Promise
  * Perform one token-resolved ACTION step (navigate / click / type) against the page — the
  * shared drive primitive used by BOTH a full Run and the locator-verify probe, so "reached
  * step N" in verify means the same drive a Run performs. Click/type apply the given default
- * waits ahead of their own `waitBefore` (mirroring the run loop). A screenshot is not an
+ * waits ahead of their own `waitBefore` (mirroring the run loop); a navigate applies ONLY its
+ * own — the defaults exist to settle a page before an element is resolved, and extending them
+ * to every navigation would change how every already-stored test replays. A screenshot is not an
  * action (no-op — it doesn't change page state). Throws when a click/type target can't be
  * located. The step's tokens must already be resolved (via `resolveStep`).
  */
@@ -302,6 +304,9 @@ export async function performStepAction(
   defaultWaits: Wait[],
 ): Promise<void> {
   if (step.type === "navigate") {
+    // The step's own waits run BEFORE the goto — they settle the page being LEFT (the arrival is
+    // covered by `networkidle`), which is what stops a `goto` abandoning in-flight work.
+    await applyWaits(page, step.waitBefore ?? []);
     await page.goto(step.url, { waitUntil: "networkidle" });
     return;
   }

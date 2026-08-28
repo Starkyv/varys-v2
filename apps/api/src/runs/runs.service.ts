@@ -214,6 +214,7 @@ export class RunsService {
         environmentId: runs.environmentId,
         error: runs.error,
         failedStepIndex: runs.failedStepIndex,
+        trace: runs.trace,
         traceArtifactKey: runs.traceArtifactKey,
         triggeredBy: runs.triggeredBy,
         triggerSource: runs.triggerSource,
@@ -260,8 +261,11 @@ export class RunsService {
       if (s.type === "screenshot") masksByName.set(s.name, (s.masks ?? []) as Rect[]);
     }
 
-    // Environment name for the reviewer's context; "default" when none was chosen.
-    const environment = await this.environmentName(row.environmentId);
+    // Environment name for the reviewer's context; "default" when none was chosen. `exists` is
+    // what a re-run needs: an environment deleted since the run has to be re-chosen, not silently
+    // dropped (which would run a {{baseUrl}} test with no base URL).
+    const env = await this.runEnvironment(row.environmentId);
+    const environment = env.name;
 
     const results = await this.db
       .select({
@@ -401,6 +405,9 @@ export class RunsService {
       testId: row.testId,
       testName: row.testName,
       environment,
+      environmentId: env.exists ? row.environmentId : null,
+      environmentMissing: !!row.environmentId && !env.exists,
+      trace: row.trace,
       runTimestamp: row.createdAt.toISOString(),
       triggeredBy: row.triggeredBy,
       triggerSource: row.triggerSource,
@@ -449,13 +456,22 @@ export class RunsService {
    * seeds/replaces under the very environment the run executed against.
    */
   private async environmentName(environmentId: string | null): Promise<string> {
-    if (!environmentId) return ENVIRONMENT;
+    return (await this.runEnvironment(environmentId)).name;
+  }
+
+  /** Same resolution, keeping the "does it still exist?" answer — which is what a re-run needs
+   *  and what `environmentName` throws away (a dangling id reads as "default" there, and offering
+   *  a one-click re-run against "default" would drop the base URL a `{{baseUrl}}` test needs). */
+  private async runEnvironment(
+    environmentId: string | null,
+  ): Promise<{ name: string; exists: boolean }> {
+    if (!environmentId) return { name: ENVIRONMENT, exists: false };
     const [env] = await this.db
       .select({ name: environments.name })
       .from(environments)
       .where(eq(environments.id, environmentId))
       .limit(1);
-    return env?.name ?? ENVIRONMENT;
+    return { name: env?.name ?? ENVIRONMENT, exists: !!env };
   }
 
   /** Every STANDALONE run, newest first — the Runs history (all outcomes).

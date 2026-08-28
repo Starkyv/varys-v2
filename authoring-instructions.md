@@ -249,6 +249,24 @@ and tidying things up on your own initiative is how a test quietly stops asserti
 written to assert. And it does not verify locators the way `apply_fix` does: after editing one,
 `goto_step` back to that step and confirm with `try_locator` before you call it fixed.
 
+### Proving the fix
+
+A locator that resolves against a parked page is not the same claim as a test that replays end to
+end, so finish the job: call `run_test` (with the repair session's `sessionId`, or the `testId`)
+and read the verdict back. That runs the version you just wrote, on the real worker, against the
+real app.
+
+Report the `outcome`, not the `status`, and do not round it up. `passed` is the evidence your
+repair worked. `pending-baseline` means nothing was compared and a human must approve the capture
+— it is not a pass and must never be described as one. `regression` means the page differs from
+the baseline, which is a human's decision and never something to fix by re-pinning. `failed` with
+`failureKind: locator` means there is still a locator to repair; any other kind means the failure
+is not yours to fix by re-pinning at all.
+
+If the wait elapses, `finished` is false — keep waiting with `run_status` rather than reporting an
+outcome you do not have. Runs cost real time against the real app, so run the test when you need
+the answer, not reflexively after every edit.
+
 Always report what you changed and the new version number; the user must be able to find and undo
 it. And if the honest answer is that the control needs a `data-testid` or an `aria-label` in the
 app, say that too rather than letting a patch that will rot again pass for a fix.

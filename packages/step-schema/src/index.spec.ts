@@ -292,3 +292,37 @@ describe("declared assertions", () => {
     expect(() => parseTestDefinition(pinned({ left: { target: { role: "cell" }, as: "number" } }))).toThrow();
   });
 });
+
+describe("navigate waits", () => {
+  it("accepts a navigate step carrying its own waitBefore", () => {
+    const def = parseTestDefinition({
+      ...base,
+      steps: [
+        { type: "navigate", url: "http://x/" },
+        {
+          type: "navigate",
+          url: "http://x/explorer",
+          waitBefore: [{ kind: "delay", ms: 2000 }, { kind: "networkIdle" }],
+        },
+      ],
+    });
+    expect(def.steps[1]).toMatchObject({
+      type: "navigate",
+      waitBefore: [{ kind: "delay", ms: 2000 }, { kind: "networkIdle" }],
+    });
+  });
+
+  it("keeps waitBefore optional on navigate (every already-stored definition has none)", () => {
+    const def = parseTestDefinition({ ...base, steps: [{ type: "navigate", url: "http://x/" }] });
+    expect(def.steps[0]).not.toHaveProperty("waitBefore");
+  });
+
+  it("rejects a negative delay on a navigate the same way it does elsewhere", () => {
+    expect(() =>
+      parseTestDefinition({
+        ...base,
+        steps: [{ type: "navigate", url: "http://x/", waitBefore: [{ kind: "delay", ms: -1 }] }],
+      }),
+    ).toThrow();
+  });
+});

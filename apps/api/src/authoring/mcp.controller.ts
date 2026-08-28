@@ -1,5 +1,5 @@
 import type { IncomingHttpHeaders } from "node:http";
-import { Body, Controller, Get, Headers, HttpException, Inject, Post, Res } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Headers, HttpException, Inject, Post, Res } from "@nestjs/common";
 import { Public } from "../auth/public.decorator";
 import { RepairJobsService } from "../repair-jobs/repair-jobs.service";
 import type { PinAssertionInput } from "./authoring-session.service";
@@ -11,6 +11,7 @@ import {
 } from "./authoring-session.service";
 import { McpAuthService, type McpPrincipal, McpUnauthorized } from "./mcp-auth.service";
 import { McpStatusService } from "./mcp-status.service";
+import { RunToolService } from "./run-tool.service";
 
 /** The slice of the HTTP response we touch — avoids depending on express types directly
  *  (it's only available transitively via @nestjs/platform-express). */
@@ -232,6 +233,9 @@ export class McpController {
     @Inject(McpAuthService) private readonly mcpAuth: McpAuthService,
     @Inject(AuthoringInstructionsService) private readonly instructions: AuthoringInstructionsService,
     @Inject(RepairJobsService) private readonly repairJobs: RepairJobsService,
+    // Running a test and reading the verdict back (slice 14) — the half of "fix it" that proves
+    // the fix. Human principals only; see `RunToolService` for why an agent may not reach it.
+    @Inject(RunToolService) private readonly runTool: RunToolService,
   ) {}
 
   // Streamable HTTP: this server doesn't push, so the optional server→client SSE stream
@@ -938,6 +942,67 @@ export class McpController {
           required: ["sessionId"],
         },
         handler: (args) => a.discard(String(args.sessionId ?? "")),
+      },
+      {
+        name: "run_test",
+        description:
+          "Run a test for real and wait for the verdict — the ONLY thing that proves a repair worked.\n\nUse it to close your own loop: after apply_fix or edit_test, run the test and read what came back, then tell the user what you changed AND whether it now works. A locator that resolves against a parked page is not the same claim as a test that replays end to end.\n\nIt queues a run of the test's LATEST version — so the fix you just wrote is what executes — against the same worker a human's Run button uses, and waits up to `waitSeconds`. If the wait elapses the answer says `finished: false`; call run_status with the runId rather than reporting anything.\n\nRead `outcome`, not `status`, and report it in those terms — three of them are NOT passes and are easy to misreport:\n · `passed` — verified against its baseline. This is the evidence a repair worked.\n · `pending-baseline` — there was no baseline, so NOTHING was compared. A human must approve the capture in Needs review. You cannot approve it and must not call this passing.\n · `baseline` — this run set the golden. It verified nothing.\n · `regression` — the capture differs from the baseline. A human decides; this is not something to fix by re-pinning a locator.\n · `healed` — it verified, but on a repair nobody has accepted yet.\n · `failed` — read `failureKind`: `locator` is the one class a re-pin fixes (open a repair session on this run), anything else is a crash, a timeout, a failed judge or an assertion that does not hold, and re-pinning must not be used to make it go away.\n\n`failingAssertions` lists only the checks that did not hold, with both values that were read — often the fastest way to see what is actually wrong.\n\nBe honest about cost and effect: this drives a real browser against the real app, and every run is visible to the user in Varys. Run it when you need the answer, not as a reflex after every edit.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            testId: { type: "string", description: "The test to run (the id in the test's web-app URL)." },
+            sessionId: {
+              type: "string",
+              description:
+                "Instead of a testId: run the test an open REPAIR session is on. The usual call after apply_fix.",
+            },
+            environmentId: {
+              type: "string",
+              description:
+                "Run against this environment. Omit for the default (env-less) one — the same choice the Run button offers.",
+            },
+            waitSeconds: {
+              type: "number",
+              description: "How long to wait for the verdict before answering `finished: false` (default 90, max 300).",
+            },
+          },
+        },
+        handler: async (args) => {
+          // A sessionId is the ergonomic path straight after a fix: the session already knows which
+          // test is under repair, so the model does not have to carry the id around.
+          const sessionId = args.sessionId ? String(args.sessionId) : "";
+          const testId = sessionId
+            ? (a.sessionTestId(sessionId) ?? "")
+            : String(args.testId ?? "");
+          if (sessionId && !testId) {
+            throw new BadRequestException(
+              `Session ${sessionId} is not a repair session, so there is no test to run — pass testId instead.`,
+            );
+          }
+          return this.runTool.runTest(testId, {
+            actor: user.email,
+            environmentId: args.environmentId ? String(args.environmentId) : undefined,
+            waitSeconds: args.waitSeconds !== undefined ? Number(args.waitSeconds) : undefined,
+          });
+        },
+      },
+      {
+        name: "run_status",
+        description:
+          "Pick up a run you already started — the continuation of a run_test whose wait elapsed. Same answer shape, same rules about which outcomes are not passes. Waits up to `waitSeconds` for the run to finish before answering, so a loop of these costs one call per wait rather than one per second.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            runId: { type: "string", description: "The runId run_test handed you." },
+            waitSeconds: { type: "number", description: "How long to wait this time (default 90, max 300)." },
+          },
+          required: ["runId"],
+        },
+        handler: (args) =>
+          this.runTool.runStatus(
+            String(args.runId ?? ""),
+            args.waitSeconds !== undefined ? Number(args.waitSeconds) : undefined,
+          ),
       },
       {
         name: "verify_locator",

@@ -42,7 +42,11 @@ export function resolveWaits(waits: Wait[], profile: EnvironmentProfile): Wait[]
 export function resolveStep(step: Step, profile: EnvironmentProfile): Step {
   switch (step.type) {
     case "navigate":
-      return { ...step, url: resolveString(step.url, profile) };
+      return {
+        ...step,
+        url: resolveString(step.url, profile),
+        ...(step.waitBefore ? { waitBefore: resolveWaits(step.waitBefore, profile) } : {}),
+      };
     case "type":
       return {
         ...step,

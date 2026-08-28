@@ -40,6 +40,32 @@ describe("resolveDefinition", () => {
     });
   });
 
+  it("resolves a tokenized selector wait on a navigate step", () => {
+    const def = {
+      name: "t",
+      viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+      steps: [
+        { type: "navigate", url: "{{baseUrl}}/" },
+        {
+          type: "navigate",
+          url: "{{baseUrl}}/explorer",
+          waitBefore: [
+            { kind: "delay", ms: 500 },
+            { kind: "selector", state: "hidden", target: { tag: "div", text: "{{baseUrl}}" } },
+          ],
+        },
+      ],
+    } as unknown as TestDefinition;
+
+    const nav = resolveDefinition(def, profile).steps[1] as {
+      url: string;
+      waitBefore: Array<{ kind: string; target?: { text: string } }>;
+    };
+    expect(nav.url).toBe("https://demo.example.com/explorer");
+    expect(nav.waitBefore[0]).toEqual({ kind: "delay", ms: 500 });
+    expect(nav.waitBefore[1]?.target?.text).toBe("https://demo.example.com");
+  });
+
   it("leaves fingerprint text literal (no data variables anymore)", () => {
     const def = {
       name: "t",

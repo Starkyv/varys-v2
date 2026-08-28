@@ -10,11 +10,6 @@ import { z } from "zod";
  * for the definition shape; widen it as those slices land.
  */
 
-export const navigateStep = z.object({
-  type: z.literal("navigate"),
-  url: z.string().min(1),
-});
-
 /**
  * Multi-signal element fingerprint captured at record time. The ranked matcher
  * (MVP) and the confidence-scored matcher (later) both resolve against these
@@ -239,6 +234,22 @@ export const screenshotStep = z.object({
   threshold: z.number().positive().max(1).optional(),
 });
 
+/**
+ * A navigation to a URL. Replayed as `page.goto(url, { waitUntil: "networkidle" })`.
+ *
+ * `waitBefore` runs BEFORE the navigation — the page you are leaving, not the one you arrive at
+ * (network idle covers the arrival). It is how an author settles a page whose in-flight work would
+ * otherwise be abandoned mid-flight by the `goto`. Unlike the other step types, the test-level
+ * `defaults.waitBefore` do NOT apply to a navigate: a global settle exists for the steps that
+ * resolve an element, and applying it to every navigation would change how every stored test
+ * replays.
+ */
+export const navigateStep = z.object({
+  type: z.literal("navigate"),
+  url: z.string().min(1),
+  waitBefore: z.array(wait).optional(),
+});
+
 export const clickStep = z.object({
   type: z.literal("click"),
   target: fingerprint,
@@ -310,8 +321,9 @@ export const testDefinition = z
     /** The test's declared variables. Optional for back-compat — old definitions
      *  (recorded before this slice) carry none. */
     variables: z.array(variable).optional(),
-    /** Test-level defaults the runner applies before EVERY step that supports waits
-     *  (click / type / screenshot — not navigate). Merged AHEAD of each step's own
+    /** Test-level defaults the runner applies before EVERY step that resolves an element
+     *  (click / hover / type / screenshot — never a navigate, which carries only its own
+     *  `waitBefore`). Merged AHEAD of each step's own
      *  `waitBefore`, so a global "wait for network idle before each checkpoint" lives
      *  here and per-step waits layer on top. Optional/back-compat — old definitions
      *  carry none, and the runner's hard-coded pre-screenshot settle remains a net. */

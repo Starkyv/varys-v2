@@ -120,6 +120,7 @@ independent of the queue and can run in parallel with all of it.
 | 11 | [Judge fallback for unpinnable assertions](heal-11-judge-fallback-unpinnable.md) | AFK | in-review | 09 |
 | 12 | [Claude pins assertions during authoring](heal-12-claude-pins-assertions.md) | HITL | in-review (wording + real-pin review outstanding) | 09 |
 | 13 | [Repair review UI (signal diff + justification)](heal-13-repair-review-ui.md) | AFK | in-review (hand-verification outstanding) | 04 |
+| 14 | [Attended repair loop: `run_test`, judge no longer required](heal-14-attended-repair-loop.md) | AFK | in-review (weakens 05 — read the flags) | 04, 05 |
 
 **Start with 01 and 02 in parallel** (no blockers, and 03 needs both), or take **09** if you would
 rather ship the new capability before the new architecture.

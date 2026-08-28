@@ -2739,9 +2739,11 @@ export class AuthoringSessionService implements OnApplicationShutdown {
     }
   }
 
-  /** Drain pending waits onto a freshly-built step's `waitBefore` (navigate has none). */
+  /** Drain pending waits onto a freshly-built step's `waitBefore` — including a navigate, whose
+   *  waits run before the `goto` (the wait was performed live before navigating, so recording it
+   *  there is what replay has to repeat). */
   private withWaits(s: SessionState, step: Step): Step {
-    if (s.pendingWaits.length === 0 || step.type === "navigate") return step;
+    if (s.pendingWaits.length === 0) return step;
     const waits = s.pendingWaits;
     s.pendingWaits = [];
     return { ...step, waitBefore: [...(step.waitBefore ?? []), ...waits] } as Step;

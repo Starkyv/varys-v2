@@ -2,6 +2,7 @@ import type { RepairJobStatus, RepairJobSummary, RepairReviewItem } from "@varys
 import {
   Badge,
   Button,
+  cx,
   EmptyState,
   ErrorState,
   InfoTip,
@@ -196,7 +197,19 @@ function RepairReviews() {
               <p className={styles.justification}>
                 <span className={styles.justificationLabel}>Justified as</span> {item.justification}
                 {item.justificationReasoning && (
-                  <span className={styles.verdict}>Judge: {item.justificationReasoning}</span>
+                  /* WHO stood behind the claim, not just what was said about it. A verdict from an
+                     independent judge and the agent's own account are different amounts of
+                     evidence in front of the same decision, and a reviewer who cannot tell them
+                     apart is reading the second one as if it were the first. */
+                  <span
+                    className={cx(
+                      styles.verdict,
+                      item.justificationValidated === false && styles.verdictUnvalidated,
+                    )}
+                  >
+                    {item.justificationValidated === false ? "" : "Judge: "}
+                    {item.justificationReasoning}
+                  </span>
                 )}
               </p>
             )}

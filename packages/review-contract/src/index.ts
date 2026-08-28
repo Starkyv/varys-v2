@@ -362,6 +362,12 @@ export interface RepairReviewItem {
    *  written before the gate existed. */
   justification: string | null;
   justificationReasoning: string | null;
+  /** Whether an INDEPENDENT judge stood behind that reasoning (Slice 19, slice 14), or the repair
+   *  stands on the agent's own account because no judge is configured. Null for a version written
+   *  before the distinction existed. A reviewer must be able to tell the two apart at a glance:
+   *  unvalidated is not "worse", it is a different amount of evidence in front of the same
+   *  decision. */
+  justificationValidated: boolean | null;
   /** True while this is still the test's LATEST version — i.e. the definition runs use. A
    *  later edit having landed on top is why an accept is not automatically "this is live". */
   isActiveDefinition: boolean;
@@ -623,7 +629,8 @@ export type EditableWait =
   | { kind: "streamIdle"; quietMs?: number; timeoutMs?: number };
 
 /** One step as the test-config editor renders it — label + the waits before it, plus
- *  the screenshot-only knobs (threshold). `supportsWaits` is false for navigate. */
+ *  the screenshot-only knobs (threshold). Every step type carries its own `waitBefore`;
+ *  `defaultWaitsApply` says whether the test-level defaults run ahead of them too. */
 export interface TestConfigStep {
   /** 0-based position in the definition's step list — the key a patch addresses this step by.
    *  Not stable across a patch that adds, removes or reorders steps: re-read the config after
@@ -632,9 +639,11 @@ export interface TestConfigStep {
   type: "navigate" | "click" | "hover" | "type" | "screenshot";
   /** Human label (same `describeStep` vocabulary as the run timeline). */
   label: string;
-  /** False for navigate (no `waitBefore` in the schema); true otherwise. */
-  supportsWaits: boolean;
-  /** The waits the runner applies before this step (after the test-level defaults). */
+  /** Whether the test-level `defaults.waitBefore` run ahead of this step's own waits. False for
+   *  navigate — a navigation carries only what its author put on it. */
+  defaultWaitsApply: boolean;
+  /** The waits the runner applies before this step (after the test-level defaults, where those
+   *  apply). On a navigate they run before the `goto`, settling the page being left. */
   waitBefore: ConfigWait[];
   /** Navigate-only: the URL this step navigates to (tokenized, e.g. `{{baseUrl}}/reports`);
    *  null for every other step type. */
@@ -1661,6 +1670,16 @@ export interface RunView {
   testName: string;
   /** Environment name the run executed against ("default" when none was chosen). */
   environment: string;
+  /** The environment id a re-run should target — null when the run was env-less, and also null
+   *  when the environment it used has since been DELETED, so a re-run can never point at a dead
+   *  id. `environmentMissing` distinguishes those two cases. */
+  environmentId: string | null;
+  /** True when this run recorded an environment that no longer exists. A re-run then has to ask
+   *  which environment to use instead of silently falling back to env-less. */
+  environmentMissing: boolean;
+  /** Whether the trigger asked for a Playwright trace, so a re-run can repeat the same request.
+   *  Distinct from `traceUrl`, which is null until the trace is actually captured. */
+  trace: boolean;
   /** When the run was created, ISO 8601. */
   runTimestamp: string;
   /** Who triggered the run (email / "ai" sentinel), and how — `manual` | `suite` |

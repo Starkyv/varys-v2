@@ -243,6 +243,12 @@
   color: var(--color-text-subtle);
 }
 
+/* No independent judge stood behind the claim above — said in warning tone rather than left to
+   read like a verdict, because "the agent says so" and "a judge agreed" are different evidence. */
+.verdictUnvalidated {
+  color: var(--color-warning-fg);
+}
+
 .brief {
   margin: 2px 0 0;
   font-size: var(--font-size-xs);

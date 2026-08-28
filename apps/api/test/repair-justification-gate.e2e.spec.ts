@@ -42,7 +42,11 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  *  - **throw** → also abandoned, never applied — but the job returns to the queue, because a
  *    broken judge says nothing about the repair.
  *  - **no Brief at all** → refused before any judge is asked: there is no clause to check against,
- *    and an unchecked repair is exactly what this gate exists to prevent.
+ *    and a repair a configured judge cannot check is exactly what this gate exists to prevent.
+ *  - **no judge configured at all** → NOT a refusal (slice 14, amending this slice). Configuring a
+ *    judge is what asks for a second opinion; a project that never did has not asked, and the
+ *    repair stands on the agent's own account — recorded as unvalidated, still unreviewed, still
+ *    a human's decision. The gate that never depended on a judge is the one that matters.
  *
  * The rubric's WORDING — whether the real model accepts a rename and rejects a substitution — is
  * exercised by the live-judge block at the bottom, which runs only when a real judge is configured
@@ -267,7 +271,8 @@ describe("Every repair is gated on a brief-clause justification", () => {
 
   async function versions(testId: string) {
     const rows = await pool.query(
-      `SELECT version, definition, review_state, justification, justification_reasoning, created_by
+      `SELECT version, definition, review_state, justification, justification_reasoning,
+              justification_validated, created_by
          FROM test_versions WHERE test_id = $1 ORDER BY version ASC`,
       [testId],
     );
@@ -277,6 +282,7 @@ describe("Every repair is gated on a brief-clause justification", () => {
       review_state: string;
       justification: string | null;
       justification_reasoning: string | null;
+      justification_validated: boolean | null;
       created_by: string | null;
     }>;
   }
@@ -446,7 +452,7 @@ describe("Every repair is gated on a brief-clause justification", () => {
     expect(job.claimedBy).toBeNull();
   }, 300_000);
 
-  it("refuses to repair a test with no Brief at all, without asking a judge", async () => {
+  it("refuses to repair a test with no Brief at all while a judge is configured, without asking it", async () => {
     judgeMode = "pass";
     const { testId, runId, jobId } = await queuedJob("no brief", "locatorRepairBroken", null);
     const before = await versions(testId);
@@ -468,21 +474,42 @@ describe("Every repair is gated on a brief-clause justification", () => {
     expect((await jobById(jobId)).status).toBe("failed");
   }, 300_000);
 
-  it("refuses when no judge is configured — an unvalidated repair is never applied", async () => {
+  /**
+   * With NO judge configured the gate is not a gate — it is a record (Slice 19, slice 14, amending
+   * this slice). Configuring a judge is what asks for repairs to be argued past a second opinion;
+   * a project that never configured one has not asked for that, and refusing the repair over a
+   * setting nobody chose would block work a human explicitly wanted done. The safety that remains
+   * is the one that was always load-bearing: the version is still UNREVIEWED, and a human still
+   * accepts it — now knowing that nothing independent stood behind the agent's account.
+   */
+  it("stands on the agent's own account when no judge is configured, and says so", async () => {
     judgeMode = "absent";
+    judgeCalls = [];
     const { testId, jobId } = await queuedJob("no judge", "locatorRepairBroken");
-    const before = await versions(testId);
     await repairUpTo("commit-btn", jobId);
 
-    const refused = await call("report_repair", {
+    const reported = await call("report_repair", {
       jobId,
       summary: "re-pinned the click",
       justification: GOOD_JUSTIFICATION,
     });
-    expect(refused.isError).toBe(true);
-    expect(refused.text).toContain("no judge is configured");
-    expect((await versions(testId)).at(-1)?.definition).toEqual(before.at(-1)?.definition);
-    expect((await jobById(jobId)).status).toBe("queued");
+    expect(reported.isError).toBe(false);
+    // Nothing was asked of a judge, because there was none to ask.
+    expect(judgeCalls).toHaveLength(0);
+
+    // The repair stands — and stands UNREVIEWED, which is the gate that never depended on a judge.
+    const written = (await versions(testId)).at(-1);
+    expect(written?.review_state).toBe("unreviewed");
+    expect(JSON.stringify(written?.definition)).toContain("commit-btn");
+    expect(written?.justification).toBe(GOOD_JUSTIFICATION);
+    // The reviewer is told which of the two kinds of evidence they are reading.
+    expect(written?.justification_validated).toBe(false);
+    expect(written?.justification_reasoning).toContain("Not independently validated");
+    expect((await jobById(jobId)).status).toBe("done");
+
+    const item = (await reviews()).find((r) => r.testId === testId);
+    expect(item?.justificationValidated).toBe(false);
     judgeMode = "pass";
   }, 300_000);
+
 });

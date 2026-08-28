@@ -1,4 +1,4 @@
-# Slice 19 (heal-00 … heal-13) — manual test plan
+# Slice 19 (heal-00 … heal-14) — manual test plan
 
 Everything the self-healing feature promises, and how to see each of it with your own eyes.
 Written to be worked through top to bottom: Part 0 gets the stack up, Part 1 runs what the
@@ -40,20 +40,21 @@ The schema — including every heal column — is applied on API startup; there 
 
 Stop with `Ctrl-C`; `pnpm db:down` stops Postgres.
 
-### 0.3 Configure the AI judge — do not skip this
+### 0.3 Configure the AI judge — optional, and what changes without one
 
-Three heal slices are *gated* on a judge, and without one they refuse rather than pass, which
-looks like a bug if you weren't expecting it:
+Since **heal-14** a judge is no longer a precondition for a repair. Configuring one turns the
+slice-05 gate ON; leaving it unset means a reported repair stands on the agent's own account,
+marked **not independently validated** in the review queue. What still needs a judge:
 
-- **heal-05** the repair-justification gate (no judge ⇒ every repair is refused **and reverted**)
-- **heal-11** the assertion judge fallback
-- `context` checkpoints generally
+- **heal-11** the assertion judge fallback (an unpinnable check cannot be answered without one)
+- `context` checkpoints
+- **heal-05** itself — you can only test the gate's three refusals with a judge configured
 
 **Configurations → AI judge (context comparison)**: provider `anthropic`, model
 `claude-sonnet-5`, paste an API key → **Save**. (Env alternative: `VARYS_JUDGE_PROVIDER`,
 `VARYS_JUDGE_MODEL`, `VARYS_JUDGE_API_KEY`.) Settings are read per call, so no restart.
 
-Keep this in mind — you will deliberately *remove* the judge later to test the refusal path
+Keep this in mind — you will deliberately *remove* the judge later to test the unjudged path
 (§2.5, case C).
 
 ### 0.4 Provision a Repair Agent credential
@@ -207,6 +208,9 @@ npx vitest run test/triage.e2e.spec.ts
 # heal-13: the review surface's evidence
 npx vitest run src/repair-jobs/repair-signal-diff.spec.ts   # the diff itself (fast, no containers)
 npx vitest run test/repair-review-diff.e2e.spec.ts          # it arrives on the endpoint, screenshot serves
+
+# heal-14: run_test / run_status, and the unjudged repair
+npx vitest run test/run-test-tool.e2e.spec.ts
 ```
 
 **Known**: `test/repair-edit.e2e.spec.ts` fails 2 of its assertions (an inserted step's captured
@@ -298,9 +302,12 @@ that claims Refresh satisfies the save clause.
 Expect: the judge **rejects** it, the version is reverted, the job ends, and the message says the
 repair was not applied. This is the case "it resolves" can never gate.
 
-**Case C — no judge.** Blank the API key in **Configurations → AI judge**, then report a repair.
-Expect: refused, reverted, and the job goes **back to the queue** (not `failed`) — an unvalidated
-repair is never applied, but the work is not lost either. Restore the key afterwards.
+**Case C — no judge (changed by heal-14).** Blank the API key in **Configurations → AI judge**,
+then report a repair.
+Expect: it **succeeds**. No judge is asked, the version stands `unreviewed`, the job closes
+`done`, and the review queue shows the reasoning line in warning tone: *"Not independently
+validated — no AI judge was configured…"*. The human gate is untouched; only the machine one is
+absent. Restore the key afterwards to test A, B and D.
 
 **Case D — the happy path.** With `broken.html` and a good justification, the verdict is stored on
 the version and shown in review as *"Judge: …"* beside the Brief.
@@ -414,6 +421,22 @@ the *readability* differs):
 | D | With `totals-wrong.html` served, ask Claude to pin total = sum | Pin is **stored as written** and reported **loudly**: both sides read, and they disagree. Claude should tell you it found a bug, not soften the check until the app agrees |
 | E | Ask for something qualitative | `declare_unpinnable_assertion`, with an actionable reason (§2.11 A) |
 | F | As the **drainer**, look for `pin_assertion` / `declare_unpinnable_assertion` | Absent. An agent that could declare a check could answer a red run by writing an assertion that passes |
+
+### 2.12b heal-14 — the attended loop: ask your own Claude, and let it prove the fix
+
+This is the path most people will actually use, and it has **no judge, no queue, no job**. Drive it
+from the **`varys`** server (you, signed in), not `varys-repair`.
+
+| # | Do | Expect |
+|---|---|---|
+| A | `cp broken.html index.html`, run the test so it goes red | Failed on the locator |
+| B | Ask Claude: *"the test 'save flow' is failing — diagnose it, fix it, run it, and tell me what you changed"* | It opens a repair session, parks at the failing step, tries candidates, applies the one that resolves, then calls `run_test` itself and reports the outcome |
+| C | Check the test's history | The new version is **`reviewed`** and live — a human asked for it, a human is present, so it is not queued for review |
+| D | Ask it to run a test that has never run | Outcome `pending-baseline`, and Claude must say a human has to approve the capture — **not** that the test passes |
+| E | Ask it to run a test whose page changed visually | `regression`, and Claude must not try to "fix" it by re-pinning |
+| F | Pass `waitSeconds: 5` (or run a slow test) | `finished: false` plus a runId; Claude continues with `run_status` rather than reporting an outcome |
+| G | As the **drainer** (`varys-repair`), look for `run_test` / `run_status` | Absent from `tools/list`, and "Unknown tool" if called — an agent that could trigger runs could retry until something went green |
+| H | Watch the Runs list while B happens | The run appears there like any other, attributed to you — nothing about it is hidden |
 
 ### 2.13 heal-13 — the review surface (this session's slice)
 

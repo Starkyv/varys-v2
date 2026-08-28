@@ -61,6 +61,7 @@ export class RepairReviewsService {
         jobId: testVersions.repairJobId,
         justification: testVersions.justification,
         justificationReasoning: testVersions.justificationReasoning,
+        justificationValidated: testVersions.justificationValidated,
         definition: testVersions.definition,
         screenshotKey: testVersions.repairScreenshotKey,
         // The test's highest version number, so the caller can tell an unreviewed version that
@@ -129,6 +130,7 @@ export class RepairReviewsService {
       brief: r.brief,
       justification: r.justification ?? null,
       justificationReasoning: r.justificationReasoning ?? null,
+      justificationValidated: r.justificationValidated ?? null,
       isActiveDefinition: Number(r.latestVersion) === r.version,
       rerunRunId: rerunByVersion.get(r.versionId)?.runId ?? null,
       rerunOutcome: rerunByVersion.get(r.versionId)?.outcome ?? null,

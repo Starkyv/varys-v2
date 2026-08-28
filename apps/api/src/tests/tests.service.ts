@@ -828,8 +828,9 @@ export class TestsService {
         index,
         type: s.type,
         label: describeStep(s),
-        supportsWaits: s.type !== "navigate",
-        waitBefore: s.type === "navigate" ? [] : (s.waitBefore ?? []).map(toConfigWait),
+        // Every step type carries its own waits; only the test-level DEFAULTS skip a navigate.
+        defaultWaitsApply: s.type !== "navigate",
+        waitBefore: (s.waitBefore ?? []).map(toConfigWait),
         url: s.type === "navigate" ? s.url : null,
         checkpointName: s.type === "screenshot" ? s.name : null,
         captureMode: s.type === "screenshot" ? (s.captureMode ?? "element") : null,
@@ -941,14 +942,14 @@ export class TestsService {
     const editedSteps = def.steps.map((s, index) => {
       const p = stepPatch.get(index);
       if (!p || p.remove) return s;
-      // Navigate carries only a URL — no waits, no locator, no checkpoint knobs.
-      if (s.type === "navigate") {
-        if (p.url === undefined) return s;
+      let out = s;
+      // Navigate carries a URL and its own waits — no locator, no checkpoint knobs (every knob
+      // below is guarded on `out.type`, so falling through is safe).
+      if (out.type === "navigate" && p.url !== undefined) {
         const url = p.url.trim();
         if (!url) throw new BadRequestException("A navigation step needs a URL.");
-        return { ...s, url };
+        out = { ...out, url };
       }
-      let out = s;
       const dropLocked =
         p.dropLockedWaits && p.dropLockedWaits.length ? new Set(p.dropLockedWaits) : undefined;
       if (p.waitBefore !== undefined || dropLocked) {

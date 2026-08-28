@@ -427,7 +427,8 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
         steps.push({ index: s.index, remove: true });
         return;
       }
-      if (s.type === "navigate") return;
+      // Navigate is NOT skipped: it has no locator or checkpoint knobs, but it does carry its own
+      // waits, and every check below is guarded on the step type.
       const waitsChanged = JSON.stringify(stepWaits[i]) !== JSON.stringify(initialStepEditable[i]);
       const cur = (thresholds[s.index] ?? "").trim();
       const thresholdChanged =
@@ -765,8 +766,8 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
           <div className={styles.cardHeadText}>
             <div className={styles.cardTitle}>Default waits</div>
             <div className={styles.cardSub}>
-              Run before every step that supports waits — clicks, typing, checkpoints (not the
-              opening navigation) — ahead of each step’s own waits.
+              Run before every step that resolves an element — clicks, typing, checkpoints (never a
+              navigation) — ahead of each step’s own waits.
             </div>
           </div>
         </div>
@@ -863,17 +864,23 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
                     <div className={styles.stepNote}>Removed — saving writes a new version without this step.</div>
                   ) : (
                     <>
-                      {s.supportsWaits ? (
-                        <WaitListEditor
-                          waits={stepWaits[i]}
-                          locked={locked}
-                          onChange={(next) => setStepWait(i, next)}
-                          removedLocked={droppedLocked[s.index] ?? []}
-                          onRemoveLocked={(li) => removeLocked(s.index, li)}
-                          emptyHint="Only the test defaults run here."
-                        />
-                      ) : (
-                        <div className={styles.stepNote}>Navigation settles on network idle automatically.</div>
+                      <WaitListEditor
+                        waits={stepWaits[i]}
+                        locked={locked}
+                        onChange={(next) => setStepWait(i, next)}
+                        removedLocked={droppedLocked[s.index] ?? []}
+                        onRemoveLocked={(li) => removeLocked(s.index, li)}
+                        emptyHint={
+                          s.defaultWaitsApply
+                            ? "Only the test defaults run here."
+                            : "None — the navigation settles on network idle on its own. Add a wait if it needs longer."
+                        }
+                      />
+                      {!s.defaultWaitsApply && (
+                        <div className={styles.stepNote}>
+                          These run before the navigation, settling the page being left. The test
+                          defaults don’t apply to a navigation.
+                        </div>
                       )}
 
                       {s.type === "type" && (

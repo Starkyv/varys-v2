@@ -167,6 +167,17 @@ export const testVersions = pgTable("test_versions", {
   justification: text("justification"),
   justificationReasoning: text("justification_reasoning"),
   /**
+   * Whether an INDEPENDENT judge stood behind that reasoning (Slice 19, slice 14).
+   *
+   * True when a configured judge validated the agent's argument against the Brief; false when no
+   * judge was configured and the repair stands on the agent's own account. Null for versions
+   * written before the distinction existed, and for every version no agent wrote.
+   *
+   * Stored rather than inferred from the reasoning text: the review surface has to tell a
+   * reviewer which of the two they are reading without parsing prose.
+   */
+  justificationValidated: boolean("justification_validated"),
+  /**
    * The page the repair was made against, captured live at the instant the fix was written
    * (Slice 19, slice 13) — an artifact key, served through `/artifacts/:token`.
    *
@@ -755,6 +766,8 @@ ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS repair_job_id uuid;
 -- The agent's brief-clause justification and the judge's verdict on it (Slice 19, slice 05).
 ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS justification text;
 ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS justification_reasoning text;
+-- Did an independent judge stand behind that reasoning, or only the agent itself (slice 14)?
+ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS justification_validated boolean;
 -- The page a repair was made against, captured live when the fix was written (slice 13).
 ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS repair_screenshot_key text;
 ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS reviewed_by text;

@@ -767,7 +767,14 @@ export class RepairJobsService {
     // test in the cluster must see the argument the repair was allowed to stand on.
     await this.db
       .update(testVersions)
-      .set({ justification: claim, justificationReasoning: verdict.reasoning })
+      .set({
+        justification: claim,
+        justificationReasoning: verdict.reasoning,
+        // Whether a SECOND opinion stood behind this, or only the agent's own (slice 14). Stored
+        // rather than inferred from the reasoning text, because the review surface has to be able
+        // to say which of the two a reviewer is looking at without parsing prose.
+        justificationValidated: verdict.validated,
+      })
       .where(
         inArray(testVersions.id, [version.id, ...fanned.map((f) => f.versionId)]),
       );
@@ -1116,7 +1123,7 @@ export class RepairJobsService {
     written: Array<{ id: string; version: number; definition: unknown }>,
     summary: string,
     justification: string,
-  ): Promise<JudgeResult> {
+  ): Promise<JudgeResult & { validated: boolean }> {
     const [test] = await this.db
       .select({ name: tests.name, brief: tests.intent })
       .from(tests)
@@ -1140,21 +1147,32 @@ export class RepairJobsService {
       );
     };
 
+    // Is independent validation available at all? Asked FIRST, because it decides whether this is
+    // a gate or a record. Configuring a judge is what turns the gate on: a project that has one
+    // has asked for repairs to be argued past a second opinion, and every precondition below is
+    // part of that bargain. A project that has none has not, and the honest response is to write
+    // the agent's account down and let the human review it — not to refuse work the human asked
+    // for over a setting they never chose (Slice 19, slice 14, amending slice 05).
+    const judge = await this.judgeSource.resolve();
+    if (!judge) {
+      this.log.log(
+        `repair for job ${job.id}: no judge configured — the repair stands on its own account, marked unvalidated for review`,
+      );
+      return {
+        verdict: "pass",
+        reasoning:
+          "Not independently validated — no AI judge was configured when this repair was reported, so it stands on the agent's own account. Read the signal diff below before accepting.",
+        validated: false,
+      };
+    }
+
     if (!test?.brief?.trim()) {
-      // Nothing to justify against, so nothing can be checked — and an unchecked repair is exactly
-      // what this gate exists to prevent. Refused rather than waved through, and said plainly
-      // enough that the remedy (give the test a Brief) is obvious.
+      // With a judge configured, a Brief is the thing it checks against — so a repair with none
+      // cannot be validated at all. Refused rather than waved through, and said plainly enough
+      // that the remedy (give the test a Brief) is obvious.
       await abandon(
         "this test has no Brief, so there is no clause to justify a repair against — give the test a Brief before it can be repaired automatically",
         { status: "failed" },
-      );
-    }
-
-    const judge = await this.judgeSource.resolve();
-    if (!judge) {
-      await abandon(
-        "no judge is configured, so the justification could not be validated — and an unvalidated repair is never applied",
-        this.giveBack(this.clock.now()),
       );
     }
 
@@ -1193,7 +1211,7 @@ export class RepairJobsService {
     if (verdict.verdict !== "pass") {
       await abandon(`the justification was rejected — ${verdict.reasoning}`, { status: "failed" });
     }
-    return verdict;
+    return { ...verdict, validated: true };
   }
 
   /** The step the run recorded as broken, for the gate's evidence. Read off the version that

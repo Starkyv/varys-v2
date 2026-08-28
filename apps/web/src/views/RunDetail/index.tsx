@@ -1,8 +1,9 @@
-import { ArrowLeft, Button, Check, ErrorState, ExternalLink, Flask, IconButton, Skeleton, Sparkles, Trash } from "@varys/ui";
+import { ArrowLeft, Button, Check, ErrorState, ExternalLink, Flask, IconButton, Play, Skeleton, Sparkles, Trash } from "@varys/ui";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { createElement, useEffect, useMemo, useState } from "react";
 import { useConfirm } from "../../context/confirm";
 import { useRouter } from "../../context/router";
+import { useRunDialog } from "../../context/run-dialog";
 import { useToast } from "../../context/toast";
 import { absoluteTime, formatActor } from "../../lib/format";
 import { StatusBadge, statusLabel } from "../../lib/status";
@@ -10,6 +11,7 @@ import {
   useApproveAll,
   useDeleteRun,
   useEnqueueRepairJob,
+  useRunTest,
   useRunView,
   useUpdateRunNotes,
 } from "../../queries";
@@ -44,6 +46,8 @@ export function RunDetail({ runId }: { runId: string }) {
   const approveAll = useApproveAll(runId);
   const del = useDeleteRun();
   const enqueueRepair = useEnqueueRepairJob();
+  const rerun = useRunTest();
+  const { openRunDialog } = useRunDialog();
   const notesMutation = useUpdateRunNotes(runId);
   const confirm = useConfirm();
   const reduce = useReducedMotion();
@@ -99,6 +103,40 @@ export function RunDetail({ runId }: { runId: string }) {
   const openTrace = () => window.open(timelineViewerUrl(data.traceUrl as string), "_blank", "noopener");
 
   const inFlight = data.status === "queued" || data.status === "running";
+
+  /**
+   * Re-run THIS run: the same test, against the same environment, with the same trace request —
+   * one click, no dialog, because every input is already on screen. It replays the test's LATEST
+   * version, not the one this run used (`RunsService.create` always pins the newest): the point of
+   * a re-run is "does it pass now", and re-running a superseded definition would answer a question
+   * nobody asked.
+   *
+   * The one case that cannot be one click is an environment deleted since the run — there is no id
+   * to target, and falling back to env-less would run a `{{baseUrl}}` test with no base URL. That
+   * opens the run dialog on this test instead, so the environment is a deliberate choice.
+   */
+  function onRerun() {
+    if (data.environmentMissing) {
+      toast(`“${data.environment}” no longer exists — pick an environment for this run`);
+      openRunDialog(data.testId);
+      return;
+    }
+    rerun.mutate(
+      {
+        testId: data.testId,
+        environmentId: data.environmentId ?? undefined,
+        trace: data.trace,
+      },
+      {
+        onSuccess: ({ runId: newRunId }) => {
+          toast(`Re-running “${data.testName}” · ${data.environment}`);
+          navigate({ name: "runDetail", runId: newRunId });
+        },
+        onError: (e) => toast(e instanceof Error ? e.message : "Couldn’t start the re-run"),
+      },
+    );
+  }
+
   async function onDelete() {
     const ok = await confirm({
       title: inFlight ? "Cancel & delete run?" : "Delete run?",
@@ -140,6 +178,20 @@ export function RunDetail({ runId }: { runId: string }) {
             )}
           </div>
         </div>
+        <Button
+          variant="secondary"
+          iconLeft={<Play size={15} />}
+          disabled={rerun.isPending}
+          loading={rerun.isPending}
+          title={
+            data.environmentMissing
+              ? `The environment this ran against no longer exists — pick another`
+              : `Run this test again against ${data.environment}${data.trace ? ", keeping a trace" : ""}`
+          }
+          onClick={onRerun}
+        >
+          Re-run
+        </Button>
         <Button
           variant="secondary"
           iconLeft={<Flask size={15} />}
