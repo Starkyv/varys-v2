@@ -50,6 +50,7 @@ import { NotesCard } from "../../components/NotesCard";
 import { ScheduleEditor } from "../../components/ScheduleEditor";
 import { AssertionsEditor } from "./components/AssertionsEditor";
 import { BaselineMaskCanvas } from "./components/BaselineMaskCanvas";
+import { useConfirm } from "../../context/confirm";
 import { useRouter } from "../../context/router";
 import { useRunDialog } from "../../context/run-dialog";
 import { useToast } from "../../context/toast";
@@ -57,6 +58,7 @@ import { draftToInput, scheduleKey, type ScheduleDraft } from "../../lib/cron";
 import { relativeTime } from "../../lib/format";
 import { StatusBadge } from "../../lib/status";
 import {
+  useDeleteTest,
   useEnvironments,
   useSaveTestConfig,
   useTestConfig,
@@ -171,6 +173,8 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
   const { navigate } = useRouter();
   const { openRunDialog } = useRunDialog();
   const { toast } = useToast();
+  const confirm = useConfirm();
+  const del = useDeleteTest();
   const save = useSaveTestConfig(config.id);
   const notesUpdate = useUpdateTest();
   const briefUpdate = useUpdateTest();
@@ -671,6 +675,25 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
     );
   };
 
+  /** Hard-delete this test — it and every run, baseline, and version it owns. No undo,
+   *  so it is gated behind a confirm; on success there is nothing left to show here. */
+  async function onDelete() {
+    const ok = await confirm({
+      title: `Delete “${config.name}”?`,
+      message: "This permanently removes the test and all of its runs, baselines, and history. This can’t be undone.",
+      confirmLabel: "Delete test",
+      tone: "danger",
+    });
+    if (!ok) return;
+    del.mutate(config.id, {
+      onSuccess: () => {
+        toast(`Deleted “${config.name}”`);
+        navigate({ name: "tests" });
+      },
+      onError: (e) => toast(e instanceof Error ? e.message : "Delete failed"),
+    });
+  }
+
   return (
     <div className={styles.page}>
       <div className={styles.header}>
@@ -690,6 +713,15 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
         <span className={styles.headerSpacer} />
         <Button variant="secondary" iconLeft={<Play size={14} />} onClick={() => openRunDialog(config.id)}>
           Run now
+        </Button>
+        <Button
+          variant="ghost"
+          iconLeft={<Trash size={14} />}
+          onClick={() => void onDelete()}
+          disabled={del.isPending}
+          title="Delete this test"
+        >
+          Delete
         </Button>
       </div>
 

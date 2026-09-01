@@ -94,6 +94,9 @@ ingress:
     - /dashboard
     - /runs
     - /suite-runs
+    # The repair queue, its reviews and the circuit breaker (Slice 19). Missing here, the SPA's
+    # fetches fall through to index.html and the Repair queue page reports "the API returned HTML".
+    - /repair-jobs
     - /tests
     - /drafts
     - /authoring
