@@ -55,6 +55,7 @@ import {
   fetchRuns,
   fetchRunView,
   fetchSuite,
+  deleteSuiteRun,
   fetchSuiteRun,
   fetchSuiteRuns,
   fetchSuites,
@@ -69,6 +70,7 @@ import {
   runTest,
   saveTestConfig,
   setRepairPolicy,
+  rerunSuiteRun,
   triggerSuiteRun,
   updateSuite,
   type UpdateEnvironmentBody,
@@ -539,6 +541,34 @@ export function useTriggerSuiteRun() {
       triggerSuiteRun(vars.suiteId, vars.environmentIds, vars.trace),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: suiteRunsQueryKey() });
+      qc.invalidateQueries({ queryKey: needsReviewQueryKey() });
+    },
+  });
+}
+
+/** Repeat a past fan-out. The new suite run is a NEW row, so only the history needs refreshing —
+ *  the report being viewed is untouched. */
+export function useRerunSuiteRun() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (suiteRunId: string) => rerunSuiteRun(suiteRunId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: suiteRunsQueryKey() });
+      qc.invalidateQueries({ queryKey: needsReviewQueryKey() });
+    },
+  });
+}
+
+/** Delete a fan-out and its children. Refreshes the suite-run history, the flat runs list and
+ *  the review queue — deleted children take their pending checkpoints with them. */
+export function useDeleteSuiteRun() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (suiteRunId: string) => deleteSuiteRun(suiteRunId),
+    onSuccess: (_data, suiteRunId) => {
+      qc.invalidateQueries({ queryKey: suiteRunsQueryKey() });
+      qc.invalidateQueries({ queryKey: suiteRunQueryKey(suiteRunId) });
+      qc.invalidateQueries({ queryKey: runsQueryKey() });
       qc.invalidateQueries({ queryKey: needsReviewQueryKey() });
     },
   });

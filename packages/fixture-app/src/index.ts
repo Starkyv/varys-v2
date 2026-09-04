@@ -1,4 +1,4 @@
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 
 /**
  * Deterministic in-repo target app. It stands in for "the app under test" so
@@ -27,7 +27,10 @@ export type Variant =
   | "locatorRepairDeleted"
   | "totals"
   | "totalsWrong"
-  | "totalsMissing";
+  | "totalsMissing"
+  | "apiHealthy"
+  | "apiDown"
+  | "apiHang";
 
 function html(variant: Variant): string {
   // A stable hero with one volatile sub-region (#stamp, top-left) — stampA/stampB
@@ -350,6 +353,51 @@ function html(variant: Variant): string {
 </html>`;
   }
 
+  if (variant === "apiHealthy" || variant === "apiDown" || variant === "apiHang") {
+    // The API-failure shape this fixture exists for: `#rows` is rendered ONLY when `/api/rows`
+    // answers 200. Under `apiDown` (500) and `apiHang` (never answers) the element is simply
+    // absent, so a step targeting it fails as an UNRESOLVED LOCATOR — the exact misreport the
+    // run's network capture is there to explain. The markup is otherwise identical across all
+    // three, so nothing but the data differs.
+    return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Varys Fixture — API</title>
+<style>
+  * { margin: 0; }
+  body { background: #ffffff; font-family: Arial, sans-serif; padding: 24px; }
+  #load { width: 160px; height: 40px; font-size: 16px; }
+  #rows {
+    width: 240px; height: 120px; margin-top: 24px;
+    background: #3366cc; color: #ffffff;
+    display: flex; align-items: center; justify-content: center; font-size: 20px;
+  }
+</style>
+</head>
+<body>
+  <button id="load" data-testid="load">Load rows</button>
+  <script>
+    // Fired by the CLICK, so the request is attributed to the click step and the step that
+    // then cannot find #rows is the NEXT one - the ordinary shape of a data-caused failure,
+    // where the failed request and the failed step are different steps.
+    document.getElementById("load").addEventListener("click", function () {
+      fetch("/api/rows")
+        .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+        .then(function (data) {
+          var d = document.createElement("div");
+          d.id = "rows";
+          d.setAttribute("data-testid", "rows");
+          d.textContent = data.label;
+          document.body.appendChild(d);
+        })
+        .catch(function () { /* leave the page without #rows, as a real app would */ });
+    });
+  </script>
+</body>
+</html>`;
+  }
+
   if (variant === "iframe") {
     // Content rendered INSIDE a same-origin `srcDoc` iframe — the DataGenie Brief report / Wisdom
     // visualization shape. The real content (`#report`, `data-testid="brief-body"`) lives in the
@@ -504,7 +552,31 @@ export interface FixtureServer {
 export async function startFixtureServer(): Promise<FixtureServer> {
   let variant: Variant = "default";
 
-  const server = createServer((_req, res) => {
+  // Requests left deliberately unanswered by `apiHang`. Held so `close()` can end them — an
+  // open socket would otherwise keep the server (and the test process) from shutting down.
+  const hanging = new Set<ServerResponse>();
+
+  const server = createServer((req, res) => {
+    // The one non-HTML route: the data call the `api*` variants' page makes. Its behaviour is
+    // what the variant selects — 200, 500, or never answered — so a test can produce each shape
+    // of API failure against otherwise identical markup.
+    if ((req.url ?? "").startsWith("/api/rows")) {
+      if (variant === "apiHang") {
+        // No response, ever. This is what an API timeout looks like from the browser: no status,
+        // no transport error, just an outstanding request when the run gives up.
+        hanging.add(res);
+        res.on("close", () => hanging.delete(res));
+        return;
+      }
+      if (variant === "apiDown") {
+        res.writeHead(500, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "rows unavailable" }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ label: "Rows" }));
+      return;
+    }
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     res.end(html(variant));
   });
@@ -518,9 +590,12 @@ export async function startFixtureServer(): Promise<FixtureServer> {
     setVariant: (v) => {
       variant = v;
     },
-    close: () =>
-      new Promise<void>((resolve, reject) =>
+    close: () => {
+      for (const res of hanging) res.destroy();
+      hanging.clear();
+      return new Promise<void>((resolve, reject) =>
         server.close((err) => (err ? reject(err) : resolve())),
-      ),
+      );
+    },
   };
 }

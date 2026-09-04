@@ -371,6 +371,29 @@
   color: var(--color-danger-fg);
 }
 
+/* The per-step API-problem badge. `margin-left: auto` right-aligns the pair; the sibling
+   selector then stops the duration claiming a second auto margin and splitting the gap. */
+.apiBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+  margin-left: auto;
+  height: 18px;
+  padding: 0 var(--space-6);
+  border-radius: var(--radius-full);
+  background: var(--color-danger-soft);
+  color: var(--color-danger-fg);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.apiBadge + .duration {
+  margin-left: var(--space-8);
+}
+
 .duration {
   flex: 0 0 auto;
   margin-left: auto;

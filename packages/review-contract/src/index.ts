@@ -1406,26 +1406,62 @@ export interface SuiteRunCounts {
 export interface SuiteRunSummary {
   suiteRunId: string;
   suiteName: string;
+  /** The suite this fan-out came from; `null` once that suite is deleted (the FK is SET NULL, so
+   *  the history survives under the name snapshot). A re-run needs it — without it there is no
+   *  membership to re-resolve, so the UI disables the button rather than guessing. */
+  suiteId: string | null;
   /** Distinct environment names the fan-out targeted ("default" when none). */
   environments: string[];
+  /** The surviving environment ids the fan-out targeted — what a re-run aims at. Empty for an
+   *  env-less fan-out, and it omits any environment deleted since (see `environmentsMissing`). */
+  environmentIds: string[];
+  /** How many of the targeted environments no longer exist. A re-run against the survivors
+   *  narrows the fan-out, so the UI says so instead of quietly running fewer children. */
+  environmentsMissing: number;
+  /** Distinct member tests in the fan-out — `total` is this × the environment count. */
+  testCount: number;
   /** Derived from the children: all-queued → queued; any queued/running →
    *  running; else failed > needs_review > passed. */
   status: string;
   counts: SuiteRunCounts;
   runTimestamp: string;
+  /** When the LAST child reached a terminal state; `null` while any child is still in flight. */
+  finishedAt: string | null;
+  /** Wall-clock from the trigger to that last child finishing; `null` while in flight. */
+  durationMs: number | null;
+  /** Who launched the fan-out — an email for a person's trigger, the `schedule` sentinel for a
+   *  cron fire. Read off the children, which all carry the launcher's attribution. Null for
+   *  fan-outs created before attribution was recorded. (There is no `triggerSource` here: every
+   *  child of a fan-out is sourced `suite` by construction, so it would say nothing.) */
+  triggeredBy: string | null;
 }
 
 /** One child inside a suite-run report — an ordinary run, opened via `?run=`. */
 export interface SuiteRunChild {
   runId: string;
+  /** The test this child replayed — what a per-child re-run targets. */
+  testId: string;
   testName: string;
   /** Environment name this child ran against ("default" when none). */
   environment: string;
+  /** The environment id, for a one-click per-child re-run; `null` when env-less. */
+  environmentId: string | null;
+  /** Whether that environment has since been deleted — a re-run then has to be re-chosen
+   *  rather than silently falling back to env-less. */
+  environmentMissing: boolean;
   status: string;
   /** Derived display outcome refining `status` (baseline vs verified, …), per
    *  {@link deriveRunOutcome}. The parent aggregate + counts stay on coarse `status`. */
   outcome: RunOutcome;
   error: string | null;
+  /** Whether this child kept a Playwright trace — carried through by a re-run. */
+  trace: boolean;
+  runTimestamp: string;
+  /** How long the child took; `null` while it is still queued or running. */
+  durationMs: number | null;
+  /** Checkpoints of this child still awaiting a human decision — the review debt one row of the
+   *  report carries. */
+  pendingCheckpoints: number;
 }
 
 /** The suite-run report: the aggregate plus children in stable test×env order. */
@@ -1461,6 +1497,38 @@ export interface StepRun {
   durationMs: number;
   /** `passed` (completed) | `failed` (the step that threw). */
   outcome: "passed" | "failed";
+}
+
+/**
+ * One API request a run made — the record that tells a locator failure apart from a backend one.
+ *
+ * `failureKind` is derived from the thrown exception's TYPE, so "the button was renamed" and
+ * "the button never rendered because /api/orders returned 500" both arrive as `locator`. These
+ * are the facts that separate them, attributed to the step that was executing at the time.
+ *
+ * A bounded record, not a full network log: only `xhr` / `fetch` / `document` requests are
+ * candidates, and a run keeps every problem plus its slowest few successes. Nothing here affects
+ * how a run is classified, queued or repaired — it is evidence for a reader.
+ */
+export interface RunNetworkEvent {
+  /** The step in flight when the request STARTED, or null when it started outside any step.
+   *  Joins to `StepRun.index` / `StepLabel.index`. */
+  stepIndex: number | null;
+  method: string;
+  url: string;
+  /** Playwright's resource type: `xhr` | `fetch` | `document`. */
+  resourceType: string;
+  /** HTTP status, or null when no response ever arrived. */
+  status: number | null;
+  /** Chromium's transport error (`net::ERR_TIMED_OUT`), or the marker for a request the server
+   *  never answered before the run ended — the API-timeout case. Null when it completed. */
+  failureText: string | null;
+  /** Wall-clock duration to completion, or to the end of the run for an unanswered request. */
+  durationMs: number;
+  /** Time to first byte; null when Chromium didn't supply it. Separate from `durationMs` so a
+   *  slow SERVER is distinguishable from a large response. */
+  ttfbMs: number | null;
+  startedAt: string;
 }
 
 /**
@@ -1666,6 +1734,10 @@ export interface RunView {
   outcome: RunOutcome;
   /** The test this run belongs to — lets Run Detail link straight to its Test Detail page. */
   testId: string;
+  /** The fan-out this run is a child of, or `null` for a standalone run. Run Detail uses it to
+   *  send you back where you came from: a child opened from a suite-run report returns to that
+   *  report, not to the flat runs history it is deliberately excluded from. */
+  suiteRunId: string | null;
   /** Test name, for display without a separate lookup. */
   testName: string;
   /** Environment name the run executed against ("default" when none was chosen). */
@@ -1706,6 +1778,12 @@ export interface RunView {
   /** The per-step execution timeline (every run): one entry per step that ran,
    *  in order. Empty until the run starts executing. */
   timeline: StepRun[];
+  /** The API traffic this run saw (every run): every failed / errored / unanswered request plus
+   *  the slowest successes, in start order. Read it beside a `locator` failure before believing
+   *  the label — a step whose window contains a 500 or an unanswered request failed because the
+   *  element was never rendered, not because its locator went stale. Empty for a run that made
+   *  no notable requests, and for every run that predates the capture. */
+  network: RunNetworkEvent[];
   checkpoints: CheckpointView[];
   /** Optional free-form note on the run, or null when none. Editable from the run-detail page. */
   notes: string | null;

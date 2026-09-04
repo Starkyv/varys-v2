@@ -2,7 +2,7 @@ import { ArrowLeft, Button, Check, ErrorState, ExternalLink, Flask, IconButton, 
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { createElement, useEffect, useMemo, useState } from "react";
 import { useConfirm } from "../../context/confirm";
-import { useRouter } from "../../context/router";
+import { type Route, useRouter } from "../../context/router";
 import { useRunDialog } from "../../context/run-dialog";
 import { useToast } from "../../context/toast";
 import { absoluteTime, formatActor } from "../../lib/format";
@@ -19,6 +19,7 @@ import { NotesCard } from "../../components/NotesCard";
 import { ApproveDialog } from "./components/ApproveDialog";
 import { AssertionsCard } from "./components/AssertionsCard";
 import { CheckpointViewer } from "./components/CheckpointViewer";
+import { NetworkAlert } from "./components/NetworkAlert";
 import {
   buildTimelineRows,
   defaultSelectedIndex,
@@ -27,6 +28,7 @@ import {
   verbIcon,
 } from "./components/RunTimeline";
 import { StepDetail } from "./components/StepDetail";
+import { groupNetworkByStep, runNetworkProblems } from "./network";
 import styles from "./styles.module.scss";
 
 /**
@@ -60,6 +62,13 @@ export function RunDetail({ runId }: { runId: string }) {
   useEffect(() => setPicked(null), [runId]);
 
   const rows = useMemo(() => (run.data ? buildTimelineRows(run.data) : []), [run.data]);
+
+  // The run's API traffic, keyed by the step that made each request — so selecting a step shows
+  // what its data calls did. The join a `locator` failureKind can't make on its own.
+  const networkByStep = useMemo(
+    () => groupNetworkByStep(run.data?.network ?? []),
+    [run.data],
+  );
 
   // Run-wide image gallery, ordered checkpoint-by-checkpoint as baseline → actual, so the
   // lightbox can traverse every screenshot in the run with the arrow keys.
@@ -103,6 +112,16 @@ export function RunDetail({ runId }: { runId: string }) {
   const openTrace = () => window.open(timelineViewerUrl(data.traceUrl as string), "_blank", "noopener");
 
   const inFlight = data.status === "queued" || data.status === "running";
+
+  /**
+   * Where "back" goes, and where a delete lands. A suite-run child is deliberately absent from
+   * the flat runs history, so sending it there would drop you somewhere it cannot be found —
+   * it returns to the fan-out it belongs to instead.
+   */
+  const parent: Route = data.suiteRunId
+    ? { name: "suiteRunDetail", suiteRunId: data.suiteRunId }
+    : { name: "runs" };
+  const parentLabel = data.suiteRunId ? "Back to the suite run" : "Back to runs";
 
   /**
    * Re-run THIS run: the same test, against the same environment, with the same trace request —
@@ -150,7 +169,7 @@ export function RunDetail({ runId }: { runId: string }) {
     del.mutate(runId, {
       onSuccess: () => {
         toast(inFlight ? "Run cancelled & deleted" : "Run deleted");
-        navigate({ name: "runs" });
+        navigate(parent);
       },
       onError: (e) => toast(e instanceof Error ? e.message : "Couldn’t delete run"),
     });
@@ -159,7 +178,7 @@ export function RunDetail({ runId }: { runId: string }) {
   return (
     <div>
       <header className={styles.header}>
-        <IconButton icon={<ArrowLeft />} label="Back to runs" onClick={() => navigate({ name: "runs" })} />
+        <IconButton icon={<ArrowLeft />} label={parentLabel} onClick={() => navigate(parent)} />
         <div className={styles.titleBlock}>
           <div className={styles.titleRow}>
             <span className={styles.testName}>{data.testName}</span>
@@ -245,6 +264,17 @@ export function RunDetail({ runId }: { runId: string }) {
         </Button>
       </header>
 
+      {/* A failed run that also saw failed API requests. Above everything else because it is
+          upstream of every other reading of the failure: `failureKind` is derived from the thrown
+          exception's type, so a step whose element never rendered for want of data is recorded as
+          a `locator` failure — and someone who trusts that label goes and edits a selector. Worded
+          as a possibility, since the causal link is not something we can actually establish. */}
+      {runNetworkProblems(data).length > 0 && (
+        <div className={styles.networkAlert}>
+          <NetworkAlert run={data} />
+        </div>
+      )}
+
       {/* A triage finding (Slice 19, slice 08): an agent's written explanation of a failure it was
           NOT allowed to fix. Shown ABOVE the timeline and beside the failure, because it is the
           thing that turns a red run into an actionable one — but toned as an observation, never as
@@ -319,6 +349,7 @@ export function RunDetail({ runId }: { runId: string }) {
                     runId={data.runId}
                     target={data.fingerprints[selectedRow.index] ?? null}
                     gallery={gallery}
+                    network={networkByStep.get(selectedRow.index) ?? []}
                   />
                 ) : selectedRow ? (
                   <StepDetail
@@ -333,6 +364,7 @@ export function RunDetail({ runId }: { runId: string }) {
                     traceUrl={data.traceUrl}
                     onOpenTrace={openTrace}
                     target={data.fingerprints[selectedRow.index] ?? null}
+                    network={networkByStep.get(selectedRow.index) ?? []}
                   />
                 ) : null}
               </motion.div>

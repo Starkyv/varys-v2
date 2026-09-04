@@ -1,4 +1,9 @@
-import type { CaptureMode, CheckpointView, FingerprintSummary } from "@varys/review-contract";
+import type {
+  CaptureMode,
+  CheckpointView,
+  FingerprintSummary,
+  RunNetworkEvent,
+} from "@varys/review-contract";
 import {
   Badge,
   Columns,
@@ -16,6 +21,7 @@ import { DecisionBar } from "../DecisionBar";
 import { DiffStage, type DiffMode } from "../DiffStage";
 import { LocatorDetail } from "../LocatorDetail";
 import { MaskTuning } from "../MaskTuning";
+import { NetworkPanel } from "../NetworkPanel";
 import { PendingMaskEditor } from "../PendingMaskEditor";
 import styles from "./styles.module.scss";
 
@@ -30,6 +36,7 @@ export function CheckpointViewer({
   runId,
   target,
   gallery,
+  network = [],
 }: {
   checkpoint: CheckpointView;
   runId: string;
@@ -37,6 +44,9 @@ export function CheckpointViewer({
   target?: FingerprintSummary | null;
   /** Run-wide ordered images, so the lightbox can step across every checkpoint. */
   gallery?: { src: string; label: string }[];
+  /** The API requests that started while this checkpoint's step was running. A checkpoint that
+   *  captured an empty chart usually has the reason here — the diff shows the symptom. */
+  network?: RunNetworkEvent[];
 }) {
   const [mode, setMode] = useState<DiffMode>("side-by-side");
   const [swipe, setSwipe] = useState(50);
@@ -155,6 +165,8 @@ export function CheckpointViewer({
           ))}
 
         <DecisionBar checkpoint={cp} runId={runId} />
+
+        <NetworkPanel events={network} />
 
         {target && <LocatorDetail target={target} />}
       </div>

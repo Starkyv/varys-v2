@@ -1,0 +1,273 @@
+@use "../../styles/mixins" as *;
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-16);
+  margin-bottom: var(--space-20);
+}
+
+.titleBlock {
+  flex: 1;
+  min-width: 0;
+}
+
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+}
+
+.suiteName {
+  font-family: var(--font-display);
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-strong);
+}
+
+.meta {
+  margin-top: 2px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.envs {
+  text-transform: capitalize;
+}
+
+.loadingStack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-20);
+  margin-top: var(--space-20);
+}
+
+/* A deleted environment narrows what a re-run can cover — said once, above the report. */
+.warning {
+  margin-bottom: var(--space-16);
+  padding: var(--space-10) var(--space-16);
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius-md);
+  background: var(--color-warning-soft);
+  color: var(--color-warning-fg);
+  font-size: var(--font-size-sm);
+}
+
+/* --- The aggregate, as counted tiles --- */
+.tiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-12);
+  margin-bottom: var(--space-20);
+}
+
+/* Even, compact tiles that stay readable rather than stretching a "0" across a third of
+   the page on a wide screen. */
+.tile {
+  flex: 1 1 110px;
+  max-width: 180px;
+  text-align: center;
+  padding: var(--space-16) var(--space-8);
+  border-radius: var(--radius-lg);
+}
+
+.tileValue {
+  font-family: var(--font-display);
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-bold);
+  font-variant-numeric: tabular-nums;
+}
+
+.tileLabel {
+  margin-top: 2px;
+  font-size: var(--font-size-xs);
+}
+
+.passed {
+  background: var(--color-success-soft);
+  .tileValue,
+  .tileLabel {
+    color: var(--color-success-fg);
+  }
+}
+.review {
+  background: var(--color-warning-soft);
+  .tileValue,
+  .tileLabel {
+    color: var(--color-warning-fg);
+  }
+}
+.failed {
+  background: var(--color-danger-soft);
+  .tileValue,
+  .tileLabel {
+    color: var(--color-danger-fg);
+  }
+}
+.neutral {
+  background: var(--color-bg-inset);
+  .tileValue {
+    color: var(--color-text);
+  }
+  .tileLabel {
+    color: var(--color-text-muted);
+  }
+}
+.neutralMuted {
+  background: var(--color-bg-inset);
+  .tileValue {
+    color: var(--color-text-muted);
+  }
+  .tileLabel {
+    color: var(--color-text-subtle);
+  }
+}
+
+/* --- The children, as the same table shape as the flat Runs history --- */
+.card {
+  @include card-flush;
+}
+
+.cardHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  padding: var(--space-16) var(--space-20);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.cardTitle {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+}
+
+.count {
+  flex: 1;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+
+.filterEmpty {
+  padding: var(--space-32) var(--space-20);
+  text-align: center;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-subtle);
+}
+
+.scroll {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 760px;
+
+  thead tr {
+    background: var(--color-bg-subtle);
+  }
+
+  th {
+    text-align: left;
+    padding: var(--space-10) var(--space-12);
+    @include overline;
+  }
+}
+
+.thLeft {
+  padding-left: var(--space-20) !important;
+}
+.thRight {
+  text-align: right !important;
+  padding-right: var(--space-20) !important;
+}
+
+.row {
+  border-top: 1px solid var(--color-border);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-standard);
+
+  &:hover {
+    background: var(--color-bg-subtle);
+  }
+  &:focus-visible {
+    outline: none;
+    box-shadow: inset var(--shadow-focus);
+  }
+
+  td {
+    padding: var(--space-12);
+  }
+}
+
+.tdTest {
+  padding-left: var(--space-20) !important;
+}
+
+.testName {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-strong);
+}
+
+.error {
+  margin-top: 3px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-danger-fg);
+  max-width: 360px;
+  @include truncate;
+}
+
+.env {
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+  text-transform: capitalize;
+}
+
+.missing {
+  color: var(--color-text-subtle);
+  text-transform: none;
+}
+
+.numeric {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.when {
+  text-align: right;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+/* Trailing per-row actions (re-run + delete), revealed on hover/focus. */
+.thAction {
+  width: 1%;
+}
+.tdAction {
+  text-align: right;
+  padding-right: var(--space-16) !important;
+  white-space: nowrap;
+}
+.rowBtn {
+  color: var(--color-text-subtle);
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard);
+}
+.row:hover .rowBtn,
+.rowBtn:focus-visible {
+  opacity: 1;
+}
+.rowBtn:hover:not(:disabled) {
+  color: var(--color-primary);
+}
+.deleteBtn:hover:not(:disabled) {
+  color: var(--color-danger);
+}

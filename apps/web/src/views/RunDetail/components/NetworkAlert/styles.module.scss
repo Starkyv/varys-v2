@@ -1,0 +1,98 @@
+@use "../../../../styles/mixins" as *;
+
+.card {
+  padding: var(--space-16) var(--space-20);
+  border-radius: var(--radius-lg);
+  background: var(--color-warning-soft);
+  border: 1px solid var(--color-warning);
+}
+
+.header {
+  display: flex;
+  gap: var(--space-12);
+  align-items: flex-start;
+}
+
+.icon {
+  flex: 0 0 auto;
+  color: var(--color-warning-fg);
+  display: inline-flex;
+}
+
+.title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-warning-fg);
+}
+
+.body {
+  margin: 4px 0 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+  line-height: var(--line-height-snug);
+}
+
+.list {
+  margin: var(--space-12) 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-8);
+  min-width: 0;
+  padding: var(--space-6) var(--space-8);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-surface);
+  font-size: var(--font-size-sm);
+}
+
+.status {
+  flex: 0 0 auto;
+  min-width: 34px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-danger-fg);
+  white-space: nowrap;
+}
+
+.method {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.url {
+  @include truncate;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text);
+}
+
+.during {
+  @include truncate;
+  flex: 0 1 auto;
+  max-width: 240px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.timing {
+  flex: 0 0 auto;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}

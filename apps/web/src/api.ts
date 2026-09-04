@@ -605,6 +605,29 @@ export async function fetchSuiteRun(id: string): Promise<SuiteRunView> {
   return (await res.json()) as SuiteRunView;
 }
 
+/** Repeat a past fan-out — the same suite against the same environments, re-resolved now.
+ *  A 409 means the suite (or every environment it targeted) has since been deleted; that
+ *  message is written for a human, so surface it as-is. */
+export async function rerunSuiteRun(id: string): Promise<{ suiteRunId: string }> {
+  const res = await fetch(`${API_BASE}/suite-runs/${id}/rerun`, { method: "POST" });
+  if (!res.ok) {
+    if (res.status === 409) {
+      const body = (await res.json().catch(() => null)) as { message?: string } | null;
+      throw new Error(body?.message ?? "This suite run can no longer be repeated");
+    }
+    throw new Error(`Failed to re-run this suite (${res.status})`);
+  }
+  return (await res.json()) as { suiteRunId: string };
+}
+
+/** Delete a suite run and every child run it fanned out (irreversible). Baselines are kept. */
+export async function deleteSuiteRun(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/suite-runs/${id}`, { method: "DELETE" });
+  if (!res.ok) {
+    throw new Error(`Failed to delete suite run (${res.status})`);
+  }
+}
+
 /** Fetch all environments (secrets are names-only). Throws on a non-2xx response. */
 export async function fetchEnvironments(): Promise<EnvironmentView[]> {
   const res = await fetch(`${API_BASE}/environments`);

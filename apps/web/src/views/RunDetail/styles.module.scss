@@ -84,6 +84,10 @@
 /* The triage finding. Toned as an OBSERVATION (info, not danger): the failure itself is already
    red in the badge above, and colouring the explanation red too would read as a second failure
    rather than as the thing that makes the first one actionable. */
+.networkAlert {
+  margin: var(--space-16) 0 0;
+}
+
 .triage {
   margin: var(--space-16) 0 0;
   padding: var(--space-14) var(--space-16);

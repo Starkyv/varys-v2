@@ -15,7 +15,7 @@ import {
  *
  *   ?run=<id>        → the run detail / diff viewer
  *   ?test=<id>       → the test detail / config page
- *   ?suiteRun=<id>   → suite runs, with that report selected
+ *   ?suiteRun=<id>   → one suite run's report / child runs
  *   ?view=<name>     → a top-level view
  */
 export type NavKey =
@@ -39,13 +39,14 @@ export type Route =
   | { name: "author" }
   | { name: "suites" }
   | { name: "runs" }
-  | { name: "suiteRuns"; suiteRunId?: string }
+  | { name: "suiteRuns" }
   | { name: "needsReview" }
   | { name: "repairQueue" }
   | { name: "environments" }
   | { name: "extension" }
   | { name: "configurations" }
   | { name: "runDetail"; runId: string }
+  | { name: "suiteRunDetail"; suiteRunId: string }
   | { name: "testDetail"; testId: string };
 
 const VIEW_PARAM: Record<NavKey, string> = {
@@ -73,10 +74,9 @@ export function parseRoute(loc: Location = window.location): Route {
   const test = q.get("test");
   if (test) return { name: "testDetail", testId: test };
   const suiteRun = q.get("suiteRun");
-  if (suiteRun) return { name: "suiteRuns", suiteRunId: suiteRun };
+  if (suiteRun) return { name: "suiteRunDetail", suiteRunId: suiteRun };
   const view = q.get("view");
   const nav = view ? PARAM_VIEW[view] : undefined;
-  if (nav === "suiteRuns") return { name: "suiteRuns" };
   if (nav === "tests") {
     // Persist the open folder in the URL so a shared link reopens the same folder.
     const folder = q.get("folder");
@@ -92,10 +92,8 @@ export function routeToUrl(route: Route): string {
       return `?run=${encodeURIComponent(route.runId)}`;
     case "testDetail":
       return `?test=${encodeURIComponent(route.testId)}`;
-    case "suiteRuns":
-      return route.suiteRunId
-        ? `?view=suite-runs&suiteRun=${encodeURIComponent(route.suiteRunId)}`
-        : "?view=suite-runs";
+    case "suiteRunDetail":
+      return `?suiteRun=${encodeURIComponent(route.suiteRunId)}`;
     case "tests":
       return route.folderId
         ? `?view=tests&folder=${encodeURIComponent(route.folderId)}`
@@ -109,6 +107,7 @@ export function routeToUrl(route: Route): string {
  *  detail under Tests). */
 export function activeNav(route: Route): NavKey {
   if (route.name === "runDetail") return "runs";
+  if (route.name === "suiteRunDetail") return "suiteRuns";
   if (route.name === "testDetail") return "tests";
   return route.name as NavKey;
 }
@@ -175,6 +174,8 @@ export function routeHeading(route: Route): { title: string; subtitle: string } 
       return { title: "Configurations", subtitle: "Global defaults for how screenshots are compared" };
     case "runDetail":
       return { title: "Run detail", subtitle: "Replay timeline & diff review" };
+    case "suiteRunDetail":
+      return { title: "Suite run", subtitle: "One fan-out, child by child" };
     case "testDetail":
       return { title: "Test detail", subtitle: "Waits & thresholds — applied on the next run" };
   }

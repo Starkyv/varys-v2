@@ -42,10 +42,12 @@ export function SuiteRunDialog({ suite, onClose }: { suite: SuiteRunTarget | nul
     trigger.mutate(
       { suiteId: suite.id, environmentIds: envIds, trace },
       {
-        onSuccess: () => {
+        // Straight into the fan-out that was just queued — the report is what you asked for, and
+        // it is the page the children stream into.
+        onSuccess: ({ suiteRunId }) => {
           toast(`Queued “${suite.name}” · ${suite.testCount}×${envCount} = ${total} runs`);
           onClose();
-          navigate({ name: "suiteRuns" });
+          navigate({ name: "suiteRunDetail", suiteRunId });
         },
         onError: (e) => toast(e instanceof Error ? e.message : "Couldn’t start suite run"),
       },

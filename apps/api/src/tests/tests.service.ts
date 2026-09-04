@@ -49,6 +49,7 @@ import {
   environments,
   folders,
   runAssertions,
+  runNetwork,
   runResults,
   runs,
   runSteps,
@@ -885,8 +886,13 @@ export class TestsService {
 
   /**
    * Apply a config patch (waits + threshold + step locators) onto the test's latest
-   * definition and write a NEW audited test_version (latest+1, `createdBy` = the editing
-   * user). Locator edits merge onto the step's fingerprint, preserving its other signals.
+   * definition and store the result (`createdBy` = the editing user).
+   *
+   * A person's save REPLACES that latest row in place — editing a test does not accumulate
+   * copies of its whole definition. `version` still increments as the live definition's
+   * revision counter. An agent's write (`review` present), and any save landing on a version
+   * still awaiting review, append instead — see the write itself for why the repair queue
+   * needs that. Locator edits merge onto the step's fingerprint, preserving its other signals.
    * Optimistic
    * concurrency: the patch's `baseVersion` must match the current latest, else 409 —
    * so a stale editor can't silently clobber a newer version. Selector waits the
@@ -906,7 +912,12 @@ export class TestsService {
     review?: { unreviewed?: boolean; repairJobId?: string | null },
   ): Promise<{ version: number; versionId: string }> {
     const [latest] = await this.db
-      .select({ version: testVersions.version, definition: testVersions.definition })
+      .select({
+        id: testVersions.id,
+        version: testVersions.version,
+        definition: testVersions.definition,
+        reviewState: testVersions.reviewState,
+      })
       .from(testVersions)
       .where(eq(testVersions.testId, id))
       .orderBy(desc(testVersions.version))
@@ -1181,21 +1192,42 @@ export class TestsService {
       throw new BadRequestException(describeValidationError(err));
     }
 
+    // A person's save REPLACES the definition it was based on rather than appending beside it:
+    // the editor is not a history tool, and a mask nudge or a locator tweak used to duplicate the
+    // whole definition into a fresh row. `version` still increments — it is the live definition's
+    // revision counter, which is what `baseVersion` compares against, so a stale editor is still
+    // a 409 rather than a silent clobber.
+    //
+    // An AGENT's write (`review` present) still appends, and so does a save landing on a version
+    // that is itself awaiting review. Both are load-bearing for the repair queue: rejecting a
+    // repair means restoring the definition BELOW it, and the review diff is v(n-1) vs v(n) —
+    // overwriting either side would leave a reviewer with nothing to compare and nothing to
+    // revert to.
+    const replaceInPlace = !review && latest.reviewState === "reviewed";
     const nextVersion = latest.version + 1;
     let versionId = "";
     await this.db.transaction(async (tx) => {
-      const [inserted] = await tx
-        .insert(testVersions)
-        .values({
-          testId: id,
-          version: nextVersion,
-          definition: validated,
-          createdBy,
-          ...(review?.unreviewed ? { reviewState: "unreviewed" } : {}),
-          ...(review?.repairJobId ? { repairJobId: review.repairJobId } : {}),
-        })
-        .returning({ id: testVersions.id });
-      versionId = inserted?.id ?? "";
+      if (replaceInPlace) {
+        const [updated] = await tx
+          .update(testVersions)
+          .set({ definition: validated, version: nextVersion, createdBy })
+          .where(eq(testVersions.id, latest.id))
+          .returning({ id: testVersions.id });
+        versionId = updated?.id ?? "";
+      } else {
+        const [inserted] = await tx
+          .insert(testVersions)
+          .values({
+            testId: id,
+            version: nextVersion,
+            definition: validated,
+            createdBy,
+            ...(review?.unreviewed ? { reviewState: "unreviewed" } : {}),
+            ...(review?.repairJobId ? { repairJobId: review.repairJobId } : {}),
+          })
+          .returning({ id: testVersions.id });
+        versionId = inserted?.id ?? "";
+      }
       // A checkpoint's name IS its baseline key `(test, checkpoint, env, viewport)`. Renaming the
       // step without moving the rows would silently orphan every approved golden and send the next
       // run back to `pending-baseline`, so the rename travels with the version write — atomically,
@@ -1293,6 +1325,7 @@ export class TestsService {
         await tx.delete(runResults).where(inArray(runResults.runId, runIds));
         await tx.delete(runAssertions).where(inArray(runAssertions.runId, runIds));
         await tx.delete(runSteps).where(inArray(runSteps.runId, runIds));
+        await tx.delete(runNetwork).where(inArray(runNetwork.runId, runIds));
         await tx.delete(runs).where(inArray(runs.id, runIds));
       }
       await tx.delete(baselines).where(eq(baselines.testId, id));

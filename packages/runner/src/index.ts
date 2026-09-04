@@ -7,6 +7,7 @@ import {
   type Db,
   environments,
   runAssertions,
+  runNetwork,
   runResults,
   runs,
   runSteps,
@@ -52,6 +53,7 @@ import {
   type Page,
 } from "playwright";
 import { classifyThrownFailure } from "@varys/repair-policy";
+import { collectNetwork, type NetworkCollector } from "./network";
 import { evaluateAssertions } from "./assertions";
 
 // Assertion EXTRACTION — the half of an assertion that needs a live page. Re-exported so the
@@ -80,6 +82,19 @@ export {
   LocatorUnresolvedError,
   recentLocatorFailures,
 } from "./repair-jobs";
+
+// Network capture (the API-status record on every run). Re-exported so the API and its tests can
+// read the same vocabulary the worker writes with.
+export {
+  CAPTURED_RESOURCE_TYPES,
+  collectNetwork,
+  isProblem,
+  type NetworkCollector,
+  type NetworkEvent,
+  NETWORK_LIMITS,
+  selectNetworkEvents,
+  UNANSWERED,
+} from "./network";
 
 /** Extra Chromium flags from VARYS_BROWSER_ARGS (comma-separated). In containers the
  *  browser runs unprivileged with a small /dev/shm, so set
@@ -634,6 +649,10 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
   // with the context still open when tracing stops.
   let context: BrowserContext | undefined;
   let tracingStarted = false;
+  // The run's API traffic, attributed per step. Function-scoped like the trace so it is flushed
+  // and persisted in `finally` on every outcome — a failed run is precisely when it explains
+  // something. Undefined until the context exists.
+  let network: NetworkCollector | undefined;
   // Set when the run was cancelled/deleted mid-flight — the `finally` then skips persisting the
   // step timeline and trace (the run row is gone, so those writes would only orphan blobs / noise).
   let cancelled = false;
@@ -672,6 +691,11 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
       deviceScaleFactor: recorded.viewport.deviceScaleFactor,
       reducedMotion: "reduce",
     });
+    // Record the run's API traffic, ALWAYS — unlike the trace below, which is on-demand and so
+    // is missing from every run nobody thought to ask for it on. `failedStepIndex` doubles as
+    // "the step currently executing" (see its declaration), which is the attribution we want.
+    network = collectNetwork(context, () => failedStepIndex);
+
     // Trace only when the trigger asked for it (on-demand only — no automatic
     // capture). Screenshots + DOM snapshots make the hosted Trace Viewer useful.
     if (row.trace) {
@@ -1136,6 +1160,25 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
       } catch (stepErr) {
         // eslint-disable-next-line no-console
         console.error(`[runner] step timeline persist failed for run ${runId}:`, stepErr);
+      }
+    }
+    // Persist the API traffic (every run except a cancelled one, whose run row is gone). Flushed
+    // while the context is still open, so a request the server never answered is still reachable.
+    // Best-effort, for the same reason as the timeline: a valuable record, never worth masking
+    // the run outcome the catch above already wrote.
+    if (!cancelled && network) {
+      try {
+        const events = network.finish();
+        if (events.length > 0) {
+          // Delete-then-insert rather than upsert: these rows have no natural key, and a
+          // REDELIVERED job replays the whole run, which would otherwise accumulate a second
+          // copy of the same traffic (the concern documented on the catch above).
+          await db.delete(runNetwork).where(eq(runNetwork.runId, runId));
+          await db.insert(runNetwork).values(events.map((e) => ({ runId, ...e })));
+        }
+      } catch (netErr) {
+        // eslint-disable-next-line no-console
+        console.error(`[runner] network capture persist failed for run ${runId}:`, netErr);
       }
     }
     // Stop + store the trace on BOTH paths, while the context is still open. The

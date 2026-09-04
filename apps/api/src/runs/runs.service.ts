@@ -9,6 +9,7 @@ import {
   baselines,
   environments,
   runAssertions,
+  runNetwork,
   runResults,
   runs,
   runSteps,
@@ -31,6 +32,7 @@ import type {
   Rect,
   Resolution,
   ReviewState,
+  RunNetworkEvent,
   RunSummary,
   RunView,
   StepLabel,
@@ -212,6 +214,7 @@ export class RunsService {
         status: runs.status,
         createdAt: runs.createdAt,
         environmentId: runs.environmentId,
+        suiteRunId: runs.suiteRunId,
         error: runs.error,
         failedStepIndex: runs.failedStepIndex,
         trace: runs.trace,
@@ -364,6 +367,36 @@ export class RunsService {
         outcome: s.outcome as "passed" | "failed",
       }));
 
+    // The API traffic this run saw. Ordered by start so it reads as the run's own timeline, and
+    // joined to the timeline above by `stepIndex` in the viewer. Written bounded by the worker,
+    // so this needs no limit of its own.
+    const networkRows = await this.db
+      .select({
+        stepIndex: runNetwork.stepIndex,
+        method: runNetwork.method,
+        url: runNetwork.url,
+        resourceType: runNetwork.resourceType,
+        status: runNetwork.status,
+        failureText: runNetwork.failureText,
+        durationMs: runNetwork.durationMs,
+        ttfbMs: runNetwork.ttfbMs,
+        startedAt: runNetwork.startedAt,
+      })
+      .from(runNetwork)
+      .where(eq(runNetwork.runId, runId))
+      .orderBy(runNetwork.startedAt);
+    const network: RunNetworkEvent[] = networkRows.map((n) => ({
+      stepIndex: n.stepIndex,
+      method: n.method,
+      url: n.url,
+      resourceType: n.resourceType,
+      status: n.status,
+      failureText: n.failureText,
+      durationMs: n.durationMs,
+      ttfbMs: n.ttfbMs,
+      startedAt: n.startedAt.toISOString(),
+    }));
+
     // Assertion results + per-assertion history (slice 09).
     const assertions = await this.assertionResults(
       runId,
@@ -403,6 +436,7 @@ export class RunsService {
         repairApplied: isRepairInReview(row.versionRepairJobId, row.versionReviewState),
       }),
       testId: row.testId,
+      suiteRunId: row.suiteRunId,
       testName: row.testName,
       environment,
       environmentId: env.exists ? row.environmentId : null,
@@ -417,6 +451,7 @@ export class RunsService {
       fingerprints: buildFingerprints(row.definition as TestDefinition),
       traceUrl: url(row.traceArtifactKey),
       timeline,
+      network,
       notes: row.notes ?? null,
       // Which class of failure this was (Slice 19), recorded by the runner rather than inferred.
       // `locator` is still the only repairable one — the repair affordance keys on exactly that
@@ -611,11 +646,13 @@ export class RunsService {
       for (const b of live) keys.delete(b.key);
     }
 
-    // Non-cascading FK chain: results + assertions + steps before the run row, in one transaction.
+    // Non-cascading FK chain: results + assertions + steps + network before the run row, in one
+    // transaction.
     await this.db.transaction(async (tx) => {
       await tx.delete(runResults).where(eq(runResults.runId, runId));
       await tx.delete(runAssertions).where(eq(runAssertions.runId, runId));
       await tx.delete(runSteps).where(eq(runSteps.runId, runId));
+      await tx.delete(runNetwork).where(eq(runNetwork.runId, runId));
       await tx.delete(runs).where(eq(runs.id, runId));
     });
 

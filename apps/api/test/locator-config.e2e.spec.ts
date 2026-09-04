@@ -1,6 +1,7 @@
 import "reflect-metadata";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
+import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { authed, prepareAuth } from "./auth-harness";
 import { AppModule } from "../src/app.module";
@@ -120,6 +121,42 @@ describe("Locator editor — config", () => {
     const t3 = afterClear.body.definition.steps[1].target;
     expect(t3.text).toBeUndefined(); // cleared
     expect(t3).toMatchObject({ role: "button", accessibleName: "Save", testId: "submit-btn" });
+  });
+
+  it("replaces the latest version in place — repeated saves do not accumulate rows", async () => {
+    const id = await mkTest("in-place");
+    const pool = new Pool({ connectionString: db.connectionString });
+    try {
+      const rows = async () =>
+        Number(
+          (await pool.query("select count(*)::int as n from test_versions where test_id = $1", [id]))
+            .rows[0].n,
+        );
+      expect(await rows()).toBe(1);
+
+      // Three consecutive saves, each based on what the last one produced.
+      for (const [baseVersion, name] of [[1, "One"], [2, "Two"], [3, "Three"]] as const) {
+        const res = await authed(app)
+          .put(`/tests/${id}/config`)
+          .send({ baseVersion, steps: [{ index: 1, target: { accessibleName: name } }] })
+          .expect(200);
+        expect(res.body.version).toBe(baseVersion + 1);
+      }
+
+      // Still ONE definition — the revision counter moved, the row did not multiply.
+      expect(await rows()).toBe(1);
+      const after = await authed(app).get(`/tests/${id}`).expect(200);
+      expect(after.body.version).toBe(4);
+      expect(after.body.definition.steps[1].target.accessibleName).toBe("Three");
+      // The signals the patches never mentioned survived every in-place write.
+      expect(after.body.definition.steps[1].target).toMatchObject({
+        role: "button",
+        text: "Submit",
+        stableClasses: ["btn", "btn-primary"],
+      });
+    } finally {
+      await pool.end();
+    }
   });
 
   it("rejects a stale baseVersion with 409", async () => {

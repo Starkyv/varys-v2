@@ -8,6 +8,7 @@ import {
   Dot,
   ExternalLink,
   Eye,
+  Globe,
   type IconProps,
   Layers,
   Pencil,
@@ -16,6 +17,7 @@ import {
 import { motion, useReducedMotion } from "framer-motion";
 import { type ComponentType, type KeyboardEvent, useRef, useState } from "react";
 import { duration, scorePct } from "../../../../lib/format";
+import { problemCountByStep } from "../../network";
 import { TONE_VARS } from "../../../../lib/status";
 import styles from "./styles.module.scss";
 
@@ -33,6 +35,10 @@ export interface TimelineRowBase {
   label: string;
   /** Unique React key (names can collide on legacy runs; suffix with index). */
   key: string;
+  /** How many of this step's API requests failed, errored or went unanswered. Badged on the
+   *  rail so "the backend misbehaved during step 4" is visible without opening step 4 — the
+   *  distinction a `locator` failureKind cannot make on its own. 0 for a clean step. */
+  networkProblems: number;
 }
 
 export type TimelineRow =
@@ -59,6 +65,7 @@ export function needsDecision(cp: CheckpointView): boolean {
  */
 export function buildTimelineRows(run: RunView): TimelineRow[] {
   const cpByName = new Map(run.checkpoints.map((c) => [c.name, c]));
+  const problems = problemCountByStep(run);
   const rows: TimelineRow[] = [];
 
   run.timeline.forEach((t, i) => {
@@ -74,6 +81,7 @@ export function buildTimelineRows(run: RunView): TimelineRow[] {
         outcome: t.outcome,
         failing,
         checkpoint: cp,
+        networkProblems: problems.get(t.index) ?? 0,
       });
     } else {
       rows.push({
@@ -84,6 +92,7 @@ export function buildTimelineRows(run: RunView): TimelineRow[] {
         durationMs: t.durationMs,
         outcome: t.outcome,
         failing,
+        networkProblems: problems.get(t.index) ?? 0,
       });
     }
   });
@@ -92,7 +101,15 @@ export function buildTimelineRows(run: RunView): TimelineRow[] {
     const failedAt = run.failedStepIndex;
     run.steps
       .filter((s) => s.index > failedAt)
-      .forEach((s) => rows.push({ kind: "never", index: s.index, label: s.label, key: `never-${s.index}` }));
+      .forEach((s) =>
+        rows.push({
+          kind: "never",
+          index: s.index,
+          label: s.label,
+          key: `never-${s.index}`,
+          networkProblems: 0,
+        }),
+      );
   }
 
   return rows;
@@ -326,6 +343,7 @@ export function RunTimeline({
                     never={isNever}
                     durationMs={isNever ? null : row.durationMs}
                     errorPreview={failing ? error : null}
+                    networkProblems={row.networkProblems}
                   />
                 )}
               </div>
@@ -388,12 +406,14 @@ function StepBody({
   never,
   durationMs,
   errorPreview,
+  networkProblems = 0,
 }: {
   label: string;
   failing: boolean;
   never: boolean;
   durationMs: number | null;
   errorPreview?: string | null;
+  networkProblems?: number;
 }) {
   return (
     <div className={cx(styles.body, styles.stepBody)}>
@@ -403,6 +423,15 @@ function StepBody({
       {failing && errorPreview && (
         <span className={styles.errorPreview} title={errorPreview}>
           {errorPreview}
+        </span>
+      )}
+      {networkProblems > 0 && (
+        <span
+          className={styles.apiBadge}
+          title={`${networkProblems} API request${networkProblems === 1 ? "" : "s"} failed, errored or went unanswered while this step ran`}
+        >
+          <Globe size={11} />
+          {networkProblems}
         </span>
       )}
       <span className={cx(styles.duration, failing && styles.durationFailing, never && styles.durationNever)}>

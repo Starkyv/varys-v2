@@ -8,7 +8,15 @@ import {
   type OnApplicationShutdown,
 } from "@nestjs/common";
 import { captureFingerprint } from "@varys/capture";
-import { environments, runAssertions, runResults, runs, tests as testsTable, testVersions } from "@varys/db";
+import {
+  environments,
+  runAssertions,
+  runNetwork,
+  runResults,
+  runs,
+  tests as testsTable,
+  testVersions,
+} from "@varys/db";
 import { verify, type VerifyOutcome, type VerifyStatus } from "@varys/locator-engine";
 import {
   type EnvCookie,
@@ -59,6 +67,7 @@ import type {
   FingerprintPatch,
   FingerprintSummary,
   NewStepInput,
+  RunNetworkEvent,
   TestConfigPatch,
   TestConfigStep,
   TestConfigAssertionPatch,
@@ -404,6 +413,20 @@ export interface RepairSessionResult {
    *  "why is this step failing". Null when the step has no element target, or when the re-drive
    *  never reached the step (nothing meaningful to resolve against). */
   diagnosis: LocatorAssessment | null;
+  /**
+   * The API requests THE ORIGINAL RUN made while the step under diagnosis was executing — not
+   * this re-drive's traffic, which is a different moment in time.
+   *
+   * Read it before concluding anything about the locator. A run whose element never rendered
+   * because its data call failed is recorded as a `locator` failure, because `failureKind` comes
+   * from the thrown exception's type and the matcher cannot tell that apart from a renamed
+   * button. A 500 or an unanswered request here means the element was never going to be on the
+   * page, and re-pinning to whatever looks closest would bury a real backend fault behind a
+   * green test.
+   *
+   * Empty when the step's requests were unremarkable, and for runs that predate the capture.
+   */
+  runNetwork: RunNetworkEvent[];
   url: string;
   title: string;
   /** Everything actionable on the parked page, with identity + duplicate flags. */
@@ -1313,6 +1336,27 @@ export class AuthoringSessionService implements OnApplicationShutdown {
         : `Reproduced: the recorded locator does not resolve on this page. The diagnosis below says which way it fails.`;
 
     const { nodes } = await s.page.evaluate(collectSnapshot);
+    // The ORIGINAL run's traffic for this step. Requests that started outside any step
+    // (`stepIndex` null) are included: a failed auth call during context setup explains a whole
+    // run, and attributing it to no step would hide it from every step's view.
+    const networkRows = await this.db
+      .select({
+        stepIndex: runNetwork.stepIndex,
+        method: runNetwork.method,
+        url: runNetwork.url,
+        resourceType: runNetwork.resourceType,
+        status: runNetwork.status,
+        failureText: runNetwork.failureText,
+        durationMs: runNetwork.durationMs,
+        ttfbMs: runNetwork.ttfbMs,
+        startedAt: runNetwork.startedAt,
+      })
+      .from(runNetwork)
+      .where(eq(runNetwork.runId, repair.runId))
+      .orderBy(runNetwork.startedAt);
+    const stepNetwork: RunNetworkEvent[] = networkRows
+      .filter((n) => n.stepIndex === stepIndex || n.stepIndex === null)
+      .map((n) => ({ ...n, startedAt: n.startedAt.toISOString() }));
     await this.emitFrame(sessionId, { type: "navigate" });
     return {
       sessionId,
@@ -1328,6 +1372,7 @@ export class AuthoringSessionService implements OnApplicationShutdown {
       replay: { reachedStep, brokeAt, reproduced, note },
       recordedLocator: summarizeFingerprint(recordedTarget),
       diagnosis,
+      runNetwork: stepNetwork,
       url: s.page.url(),
       title: await s.page.title().catch(() => ""),
       nodes,

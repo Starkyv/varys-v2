@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Inject,
   Injectable,
   NotFoundException,
@@ -20,6 +21,26 @@ import { RunsService } from "../runs/runs.service";
 import { effectiveTestIds } from "../suites/suite-membership";
 
 const ENVIRONMENT = "default";
+
+/** Checkpoint verdicts of one run, as the outcome derivation and the pending tally read them. */
+type Verdict = { reviewState: ReviewState; resolution: Resolution | null };
+
+/** The child columns every read of a fan-out needs — the shape `summarize` folds. */
+interface ChildRow {
+  runId: string;
+  testId: string;
+  status: string;
+  error: string | null;
+  environmentId: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  triggeredBy: string | null;
+  versionRepairJobId: string | null;
+  versionReviewState: string | null;
+}
+
+/** A child that has not reached a terminal state — its `updatedAt` is not a finish time. */
+const inFlight = (status: string): boolean => status === "queued" || status === "running";
 
 /**
  * Tally child statuses into the aggregate counts (unknown statuses only count toward total —
@@ -134,11 +155,75 @@ export class SuiteRunsService {
     return { suiteRunId: parent.id };
   }
 
+  /**
+   * Re-run a past fan-out: the SAME suite against the SAME environments, resolved fresh.
+   * Membership is re-read at trigger time (that is what `trigger` does), so a re-run answers
+   * "does the suite pass now", not "did that exact set of tests pass" — the same choice the
+   * single-run re-run makes by pinning the latest version.
+   *
+   * Two things can make it impossible, and both are refusals rather than a quiet substitution:
+   * the suite is gone (nothing to re-resolve membership from), or every environment the fan-out
+   * targeted is gone (falling back to env-less would run `{{baseUrl}}` tests with no base URL).
+   */
+  async rerun(suiteRunId: string, triggeredBy?: string): Promise<{ suiteRunId: string }> {
+    const [parent] = await this.db
+      .select({ id: suiteRuns.id, suiteId: suiteRuns.suiteId, suiteName: suiteRuns.suiteName })
+      .from(suiteRuns)
+      .where(eq(suiteRuns.id, suiteRunId))
+      .limit(1);
+    if (!parent) throw new NotFoundException(`Suite run ${suiteRunId} not found`);
+    if (!parent.suiteId) {
+      throw new ConflictException(
+        `The suite “${parent.suiteName}” no longer exists — this report is history only`,
+      );
+    }
+
+    const children = await this.db
+      .select({ environmentId: runs.environmentId, trace: runs.trace })
+      .from(runs)
+      .where(eq(runs.suiteRunId, suiteRunId));
+    const targeted = [...new Set(children.map((c) => c.environmentId).filter((x): x is string => x != null))];
+    const surviving = await this.survivingEnvironmentIds(targeted);
+    if (targeted.length > 0 && surviving.length === 0) {
+      throw new ConflictException(
+        "Every environment this suite run targeted has been deleted — pick environments and run the suite again",
+      );
+    }
+
+    return this.trigger(parent.suiteId, surviving, children.some((c) => c.trace), triggeredBy);
+  }
+
+  /**
+   * Delete a fan-out: every child run (through the single-run delete, so results, steps, network
+   * rows and orphaned blobs go with them, and an in-flight child is cancelled first), then the
+   * parent row. Irreversible. Baselines are untouched, and `test_schedules.lastSuiteRunId` clears
+   * itself through its ON DELETE SET NULL FK.
+   */
+  async deleteSuiteRun(suiteRunId: string): Promise<{ ok: true; deletedRuns: number }> {
+    const [parent] = await this.db
+      .select({ id: suiteRuns.id })
+      .from(suiteRuns)
+      .where(eq(suiteRuns.id, suiteRunId))
+      .limit(1);
+    if (!parent) throw new NotFoundException(`Suite run ${suiteRunId} not found`);
+
+    const children = await this.db
+      .select({ id: runs.id })
+      .from(runs)
+      .where(eq(runs.suiteRunId, suiteRunId));
+    for (const child of children) {
+      await this.runs.deleteRun(child.id);
+    }
+    await this.db.delete(suiteRuns).where(eq(suiteRuns.id, suiteRunId));
+    return { ok: true, deletedRuns: children.length };
+  }
+
   /** Suite-run history, newest first — aggregates derived on read. */
   async list(limit = 50): Promise<SuiteRunSummary[]> {
     const parents = await this.db
       .select({
         id: suiteRuns.id,
+        suiteId: suiteRuns.suiteId,
         suiteName: suiteRuns.suiteName,
         createdAt: suiteRuns.createdAt,
       })
@@ -151,9 +236,13 @@ export class SuiteRunsService {
       .select({
         runId: runs.id,
         suiteRunId: runs.suiteRunId,
+        testId: testVersions.testId,
         status: runs.status,
         error: runs.error,
         environmentId: runs.environmentId,
+        createdAt: runs.createdAt,
+        updatedAt: runs.updatedAt,
+        triggeredBy: runs.triggeredBy,
         versionRepairJobId: testVersions.repairJobId,
         versionReviewState: testVersions.reviewState,
       })
@@ -171,24 +260,14 @@ export class SuiteRunsService {
     // see WITHOUT opening it.
     const checkpoints = await this.checkpointsByRun(children.map((c) => c.runId));
 
-    return parents.map((p): SuiteRunSummary => {
-      const own = children.filter((c) => c.suiteRunId === p.id);
-      const counts = countStatuses(
-        own.map((c) => c.status),
-        own.map((c) => this.outcomeOf(c, checkpoints)),
-      );
-      const environmentNames = [
-        ...new Set(own.map((c) => this.envName(c.environmentId, envNames))),
-      ].sort();
-      return {
-        suiteRunId: p.id,
-        suiteName: p.suiteName,
-        environments: environmentNames,
-        status: deriveStatus(counts),
-        counts,
-        runTimestamp: p.createdAt.toISOString(),
-      };
-    });
+    return parents.map((p) =>
+      this.summarize(
+        p,
+        children.filter((c) => c.suiteRunId === p.id),
+        envNames,
+        checkpoints,
+      ),
+    );
   }
 
   /** The report: the aggregate plus child rows in stable test×env order. */
@@ -196,6 +275,7 @@ export class SuiteRunsService {
     const [parent] = await this.db
       .select({
         id: suiteRuns.id,
+        suiteId: suiteRuns.suiteId,
         suiteName: suiteRuns.suiteName,
         createdAt: suiteRuns.createdAt,
       })
@@ -207,9 +287,14 @@ export class SuiteRunsService {
     const rows = await this.db
       .select({
         runId: runs.id,
+        testId: testVersions.testId,
         status: runs.status,
         error: runs.error,
         environmentId: runs.environmentId,
+        createdAt: runs.createdAt,
+        updatedAt: runs.updatedAt,
+        trace: runs.trace,
+        triggeredBy: runs.triggeredBy,
         testName: tests.name,
         versionRepairJobId: testVersions.repairJobId,
         versionReviewState: testVersions.reviewState,
@@ -222,45 +307,90 @@ export class SuiteRunsService {
     const envNames = await this.environmentNames(rows.map((r) => r.environmentId));
 
     // Each child's checkpoint verdicts, grouped per run, for the shared outcome derivation
-    // (baseline vs verified, …). The parent aggregate stays on coarse `status`; of the counts,
-    // only `healed` reads the derived outcome — see countStatuses.
+    // (baseline vs verified, …) and the per-child review-debt tally. The parent aggregate stays on
+    // coarse `status`; of the counts, only `healed` reads the derived outcome — see countStatuses.
     const checkpointsByRun = await this.checkpointsByRun(rows.map((r) => r.runId));
 
     const children: SuiteRunChild[] = rows
       .map((r) => ({
         runId: r.runId,
+        testId: r.testId,
         testName: r.testName,
         environment: this.envName(r.environmentId, envNames),
+        environmentId: r.environmentId,
+        // An env-less child cannot be "missing" an environment; one that named an id we can no
+        // longer resolve had its environment deleted since the run.
+        environmentMissing: r.environmentId != null && !envNames.has(r.environmentId),
         status: r.status,
         outcome: this.outcomeOf(r, checkpointsByRun),
         error: r.error,
+        trace: r.trace,
+        runTimestamp: r.createdAt.toISOString(),
+        durationMs: inFlight(r.status)
+          ? null
+          : Math.max(0, r.updatedAt.getTime() - r.createdAt.getTime()),
+        pendingCheckpoints: (checkpointsByRun.get(r.runId) ?? []).filter(
+          (v) => v.resolution == null && (v.reviewState === "pending-baseline" || v.reviewState === "diff"),
+        ).length,
       }))
       .sort(
         (a, b) =>
           a.testName.localeCompare(b.testName) || a.environment.localeCompare(b.environment),
       );
 
+    return {
+      ...this.summarize(parent, rows, envNames, checkpointsByRun),
+      children,
+    };
+  }
+
+  /**
+   * Fold a parent + its children into the history/report aggregate. One place, so the row you
+   * scan in the list and the header you open are computed from the same rules.
+   */
+  private summarize(
+    parent: { id: string; suiteId: string | null; suiteName: string; createdAt: Date },
+    children: ChildRow[],
+    envNames: Map<string, string>,
+    checkpoints: Map<string, Verdict[]>,
+  ): SuiteRunSummary {
     const counts = countStatuses(
       children.map((c) => c.status),
-      children.map((c) => c.outcome),
+      children.map((c) => this.outcomeOf(c, checkpoints)),
     );
+    const targetedEnvIds = [
+      ...new Set(children.map((c) => c.environmentId).filter((x): x is string => x != null)),
+    ];
+    // A fan-out is finished when no child is still in flight — then its last child's `updatedAt`
+    // is the wall-clock end. An empty fan-out (every child deleted) has no end and no duration.
+    const settled = children.length > 0 && !children.some((c) => inFlight(c.status));
+    const finishedAt = settled
+      ? new Date(Math.max(...children.map((c) => c.updatedAt.getTime())))
+      : null;
+
     return {
       suiteRunId: parent.id,
       suiteName: parent.suiteName,
-      environments: [...new Set(children.map((c) => c.environment))].sort(),
+      suiteId: parent.suiteId,
+      environments: [...new Set(children.map((c) => this.envName(c.environmentId, envNames)))].sort(),
+      environmentIds: targetedEnvIds.filter((id) => envNames.has(id)),
+      environmentsMissing: targetedEnvIds.filter((id) => !envNames.has(id)).length,
+      testCount: new Set(children.map((c) => c.testId)).size,
       status: deriveStatus(counts),
       counts,
       runTimestamp: parent.createdAt.toISOString(),
-      children,
+      finishedAt: finishedAt?.toISOString() ?? null,
+      durationMs: finishedAt ? Math.max(0, finishedAt.getTime() - parent.createdAt.getTime()) : null,
+      // Every child of a fan-out carries the same launcher attribution, so the first one speaks
+      // for the parent.
+      triggeredBy: children[0]?.triggeredBy ?? null,
     };
   }
 
   /** One batched read of every listed run's checkpoint verdicts, grouped per run — the input the
    *  shared outcome derivation needs. */
-  private async checkpointsByRun(
-    runIds: string[],
-  ): Promise<Map<string, { reviewState: ReviewState; resolution: Resolution | null }[]>> {
-    const byRun = new Map<string, { reviewState: ReviewState; resolution: Resolution | null }[]>();
+  private async checkpointsByRun(runIds: string[]): Promise<Map<string, Verdict[]>> {
+    const byRun = new Map<string, Verdict[]>();
     if (runIds.length === 0) return byRun;
     const resultRows = await this.db
       .select({
@@ -291,7 +421,7 @@ export class SuiteRunsService {
       versionRepairJobId: string | null;
       versionReviewState: string | null;
     },
-    checkpoints: Map<string, { reviewState: ReviewState; resolution: Resolution | null }[]>,
+    checkpoints: Map<string, Verdict[]>,
   ): RunOutcome {
     return deriveRunOutcome(checkpoints.get(row.runId) ?? [], {
       status: row.status,
@@ -312,6 +442,12 @@ export class SuiteRunsService {
       for (const e of envs) map.set(e.id, e.name);
     }
     return map;
+  }
+
+  /** Of the given environment ids, the ones that still exist — in the order given. */
+  private async survivingEnvironmentIds(ids: string[]): Promise<string[]> {
+    const names = await this.environmentNames(ids);
+    return ids.filter((id) => names.has(id));
   }
 
   /** "default" when env-less or the environment was since deleted (graceful). */

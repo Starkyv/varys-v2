@@ -1132,12 +1132,12 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
         <span className={styles.saveHint}>
           {patch
             ? inserts.length > 0
-              ? `Saving writes a new version, adding ${inserts.length} step${inserts.length === 1 ? "" : "s"}${
+              ? `Saving updates this test, adding ${inserts.length} step${inserts.length === 1 ? "" : "s"}${
                   removed.size > 0 ? ` and removing ${removed.size}` : ""
                 } — it applies on the next run.`
               : removed.size > 0
-                ? `Saving writes a new version, removing ${removed.size} step${removed.size === 1 ? "" : "s"} — it applies on the next run.`
-                : "Saving writes a new test version — it applies on the next run."
+                ? `Saving updates this test, removing ${removed.size} step${removed.size === 1 ? "" : "s"} — it applies on the next run.`
+                : "Saving updates this test — it applies on the next run."
             : "No changes yet."}
         </span>
         <Button variant="primary" loading={save.isPending} disabled={!canSave} onClick={onSave}>

@@ -1,0 +1,31 @@
+.wrap {
+  min-width: 120px;
+}
+
+.bar {
+  display: flex;
+  height: 6px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--color-bg-subtle);
+
+  span {
+    display: block;
+    height: 100%;
+  }
+}
+
+.caption {
+  margin-top: 5px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+  white-space: nowrap;
+}
+
+.failed {
+  color: var(--color-danger-fg);
+}
+
+.review {
+  color: var(--color-warning-fg);
+}

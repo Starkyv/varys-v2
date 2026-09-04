@@ -27,6 +27,7 @@ config:
   AZURE_STORAGE_CONTAINER: varys-container
   # Headless Chromium in an unprivileged container with a small /dev/shm.
   VARYS_BROWSER_ARGS: "--no-sandbox,--disable-dev-shm-usage"
+  VARYS_RUN_CONCURRENCY: "1"
 
 # The Secret (DATABASE_URL, BETTER_AUTH_SECRET, AZURE_STORAGE_SAS_TOKEN, GOOGLE_*) is
 # created OUT OF BAND with `kubectl create secret` — it is NOT managed by this chart,

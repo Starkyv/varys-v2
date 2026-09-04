@@ -9,6 +9,7 @@ import { NeedsReview } from "../../views/NeedsReview";
 import { RepairQueue } from "../../views/RepairQueue";
 import { RunDetail } from "../../views/RunDetail";
 import { Runs } from "../../views/Runs";
+import { SuiteRunDetail } from "../../views/SuiteRunDetail";
 import { SuiteRuns } from "../../views/SuiteRuns";
 import { Suites } from "../../views/Suites";
 import { TestDetail } from "../../views/TestDetail";
@@ -44,6 +45,8 @@ export function RouteOutlet() {
       return <Configurations />;
     case "runDetail":
       return <RunDetail runId={route.runId} />;
+    case "suiteRunDetail":
+      return <SuiteRunDetail suiteRunId={route.suiteRunId} />;
     case "testDetail":
       return <TestDetail testId={route.testId} />;
   }

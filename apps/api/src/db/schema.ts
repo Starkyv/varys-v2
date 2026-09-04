@@ -10,6 +10,7 @@ export {
   repairJobs,
   repairJobTests,
   runAssertions,
+  runNetwork,
   runResults,
   runs,
   runSteps,

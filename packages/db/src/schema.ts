@@ -3,6 +3,7 @@ import {
   type AnyPgColumn,
   boolean,
   doublePrecision,
+  index,
   integer,
   jsonb,
   pgTable,
@@ -383,6 +384,61 @@ export const runSteps = pgTable(
   (t) => ({ runStepUq: uniqueIndex("run_steps_run_step_uq").on(t.runId, t.stepIndex) }),
 );
 
+/**
+ * The API traffic a run saw, attributed to the step that was executing when the request STARTED.
+ *
+ * Why this exists: a failure whose real cause is the backend reads, on the run, as a locator
+ * failure. `failureKind` is decided by the exception's TYPE — a `LocatorUnresolvedError` — and the
+ * matcher cannot tell "the button was renamed" from "the button never rendered because
+ * /api/orders returned 500". Both arrive as `locator`. These rows are the evidence that
+ * distinguishes them, so a human (or a triage drainer) reads the cause rather than inferring one.
+ *
+ * Deliberately NOT a full network log. Only `xhr` / `fetch` / `document` requests are candidates,
+ * and of those a run keeps every PROBLEM (a transport failure, a status >= 400, or a request the
+ * server never answered) plus the slowest handful of successes — see `selectNetworkEvents` in
+ * @varys/runner for the bounds. A heavy SPA fires hundreds of requests per step; keeping them all
+ * would cost more than it explains.
+ *
+ * A Playwright trace holds strictly more than this, but it is captured on demand only
+ * (`runs.trace` defaults to false), so it is absent on exactly the runs that need explaining —
+ * and a zip is not something the UI or an agent can read. These rows are always there.
+ */
+export const runNetwork = pgTable(
+  "run_network",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => runs.id),
+    /** 0-based index of the step in flight when the request STARTED, or null when it started
+     *  outside any step (context setup, or after the last step finished). Attribution is by
+     *  START, not completion: a request that begins in step 3 and fails during step 4 is
+     *  step 3's request, and reading it the other way hides the cause one step too late. */
+    stepIndex: integer("step_index"),
+    method: text("method").notNull(),
+    /** Truncated to 2000 chars, like `runs.error`. Query strings are kept — a 500 on
+     *  `/api/orders?status=open` is a different fact from a 500 on `/api/orders`. */
+    url: text("url").notNull(),
+    /** Playwright's `resourceType()`: `xhr` | `fetch` | `document`. */
+    resourceType: text("resource_type").notNull(),
+    /** HTTP status, or null when no response ever arrived (a transport failure, or a request
+     *  still unanswered when the run ended — the API-timeout case this table exists for). */
+    status: integer("status"),
+    /** Chromium's error text (`net::ERR_TIMED_OUT`, `net::ERR_CONNECTION_REFUSED`), or the
+     *  in-flight marker for a request the server never answered. Null when the request
+     *  completed, whatever its status. */
+    failureText: text("failure_text"),
+    /** Wall-clock duration to completion (or to the end of the run, for an unanswered one). */
+    durationMs: integer("duration_ms").notNull(),
+    /** Time to first byte, from Playwright's resource timing; null when unavailable. Separating
+     *  it from `durationMs` is what distinguishes a slow SERVER from a large response. */
+    ttfbMs: integer("ttfb_ms"),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+  },
+  // Read per run, ordered by start — the only access pattern the UI and the API have.
+  (t) => ({ runNetworkRunIdx: index("run_network_run_idx").on(t.runId, t.startedAt) }),
+);
+
 /** The current active baseline per (test, checkpoint, environment, viewport). */
 export const baselines = pgTable("baselines", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -666,6 +722,7 @@ export const schema = {
   runResults,
   runAssertions,
   runSteps,
+  runNetwork,
   baselines,
   environments,
   draftPreviews,
@@ -941,6 +998,20 @@ DELETE FROM run_steps a USING run_steps b
   WHERE a.run_id = b.run_id AND a.step_index = b.step_index
     AND (a.started_at < b.started_at OR (a.started_at = b.started_at AND a.id < b.id));
 CREATE UNIQUE INDEX IF NOT EXISTS run_steps_run_step_uq ON run_steps (run_id, step_index);
+CREATE TABLE IF NOT EXISTS run_network (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_id uuid NOT NULL REFERENCES runs(id),
+  step_index integer,
+  method text NOT NULL,
+  url text NOT NULL,
+  resource_type text NOT NULL,
+  status integer,
+  failure_text text,
+  duration_ms integer NOT NULL,
+  ttfb_ms integer,
+  started_at timestamptz NOT NULL
+);
+CREATE INDEX IF NOT EXISTS run_network_run_idx ON run_network (run_id, started_at);
 DELETE FROM run_results a USING run_results b
   WHERE a.run_id = b.run_id AND a.checkpoint_name = b.checkpoint_name
     AND (a.created_at < b.created_at OR (a.created_at = b.created_at AND a.id < b.id));

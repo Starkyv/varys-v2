@@ -1,20 +1,167 @@
 @use "../../styles/mixins" as *;
 
-.layout {
-  display: grid;
-  grid-template-columns: 380px 1fr;
-  gap: var(--space-20);
-  align-items: start;
+.card {
+  @include card-flush;
 }
 
-.list {
+/* "Status" header label + its InfoTip, kept on one line. */
+.statusHead {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6);
+}
+
+.loading {
+  @include card(var(--space-16));
   display: flex;
   flex-direction: column;
   gap: var(--space-12);
 }
 
-@include mq-down("lg") {
-  .layout {
-    grid-template-columns: 1fr;
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  padding: var(--space-16) var(--space-20);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+}
+
+.count {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.filterEmpty {
+  padding: var(--space-32) var(--space-20);
+  text-align: center;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-subtle);
+}
+
+.scroll {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 940px;
+
+  thead tr {
+    background: var(--color-bg-subtle);
   }
+
+  th {
+    text-align: left;
+    padding: var(--space-10) var(--space-12);
+    @include overline;
+  }
+}
+
+.thLeft {
+  padding-left: var(--space-20) !important;
+}
+.thRight {
+  text-align: right !important;
+  padding-right: var(--space-20) !important;
+}
+
+.row {
+  border-top: 1px solid var(--color-border);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-standard);
+
+  &:hover {
+    background: var(--color-bg-subtle);
+  }
+  &:focus-visible {
+    outline: none;
+    box-shadow: inset var(--shadow-focus);
+  }
+
+  td {
+    padding: var(--space-12);
+  }
+}
+
+.tdSuite {
+  padding-left: var(--space-20) !important;
+}
+
+.suiteName {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-strong);
+}
+
+/* "4 tests × 2 envs" — the SHAPE of the fan-out, under its name. */
+.shape {
+  margin-top: 2px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+
+.envs {
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+  max-width: 220px;
+  @include truncate;
+}
+
+.missing {
+  color: var(--color-text-subtle);
+}
+
+.numeric {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.actor {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.when {
+  text-align: right;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+/* Trailing per-row action column (delete). */
+.thAction {
+  width: 1%;
+}
+.tdAction {
+  text-align: right;
+  padding-right: var(--space-16) !important;
+  white-space: nowrap;
+}
+.deleteBtn {
+  color: var(--color-text-subtle);
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard);
+}
+.row:hover .deleteBtn,
+.deleteBtn:focus-visible {
+  opacity: 1;
+}
+.deleteBtn:hover:not(:disabled) {
+  color: var(--color-danger);
 }

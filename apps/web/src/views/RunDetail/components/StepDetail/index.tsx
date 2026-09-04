@@ -1,8 +1,9 @@
-import type { FingerprintSummary } from "@varys/review-contract";
+import type { FingerprintSummary, RunNetworkEvent } from "@varys/review-contract";
 import { AlertTriangle, Button, cx, ExternalLink } from "@varys/ui";
 import type { ReactNode } from "react";
 import { absoluteTime, duration } from "../../../../lib/format";
 import { LocatorDetail } from "../LocatorDetail";
+import { NetworkPanel } from "../NetworkPanel";
 import styles from "./styles.module.scss";
 
 type Outcome = "passed" | "failed" | "never";
@@ -18,6 +19,10 @@ const OUTCOME_LABEL: Record<Outcome, string> = {
  * "Step detail" card; it always offers the on-demand "what the locator looked for"
  * panel when the step has a target, and for the failing step it also surfaces the
  * full error and the Open-Playwright-trace affordance.
+ *
+ * It also carries the step's API traffic, above the locator panel — what the step's data calls
+ * did is worth seeing before what its selector looked for. The panel makes no causal claim; the
+ * run-level NetworkAlert is where a failed run's requests are raised as a possible explanation.
  */
 export function StepDetail({
   icon,
@@ -29,6 +34,7 @@ export function StepDetail({
   traceUrl,
   onOpenTrace,
   target,
+  network = [],
 }: {
   icon: ReactNode;
   label: string;
@@ -40,6 +46,8 @@ export function StepDetail({
   onOpenTrace?: () => void;
   /** The recorded element fingerprint this step's locator was matched against. */
   target?: FingerprintSummary | null;
+  /** The API requests that started while this step was running. */
+  network?: RunNetworkEvent[];
 }) {
   const failing = outcome === "failed";
   const never = outcome === "never";
@@ -82,6 +90,8 @@ export function StepDetail({
             </div>
           </div>
         )}
+
+        {!never && <NetworkPanel events={network} />}
 
         {target && <LocatorDetail target={target} unmatched={failing} />}
 
