@@ -19,6 +19,9 @@ import {
 } from "@varys/db";
 import { verify, type VerifyOutcome, type VerifyStatus } from "@varys/locator-engine";
 import {
+  captureFullElement,
+  captureFullPage,
+  captureRegion,
   type EnvCookie,
   type EnvironmentProfile,
   type EnvLocalStorageItem,
@@ -26,6 +29,8 @@ import {
   performStepAction,
   seedCookies,
   seedLocalStorage,
+  trackInFlightRequests,
+  waitForStreamIdle,
 } from "@varys/runner";
 import {
   type Coercion,
@@ -53,7 +58,6 @@ import {
   type PinnedAssertion,
   type Rect,
   type Step,
-  streamIdleExpression,
   type TestDefinition,
   type Viewport,
   type Wait,
@@ -942,6 +946,9 @@ export class AuthoringSessionService implements OnApplicationShutdown {
       reducedMotion: "reduce",
     });
     const page = await context.newPage();
+    // From the page's first moment, so a `streamIdle` wait can see a stream the PREVIOUS
+    // action opened — the same reason the Run installs this on its own page.
+    trackInFlightRequests(page);
     try {
       await page.goto(startUrl, { waitUntil: "domcontentloaded" });
     } catch (err) {
@@ -1212,6 +1219,7 @@ export class AuthoringSessionService implements OnApplicationShutdown {
       await seedCookies(context, cookies, profile);
       await seedLocalStorage(context, localStorage, profile);
       page = await context.newPage();
+      trackInFlightRequests(page);
 
       const drive = await this.driveTo(page, definition, profile, stepIndex);
       reachedStep = drive.reachedStep;
@@ -1291,6 +1299,7 @@ export class AuthoringSessionService implements OnApplicationShutdown {
 
     const old = s.page;
     const page = await s.context.newPage();
+    trackInFlightRequests(page);
     s.page = page;
     await old.close().catch(() => undefined);
     const { reachedStep, brokeAt } = await this.driveTo(page, repair.definition, repair.profile, stepIndex);
@@ -2169,9 +2178,10 @@ export class AuthoringSessionService implements OnApplicationShutdown {
       await s.page.waitForLoadState("networkidle", { timeout: input.timeoutMs ?? 15_000 }).catch(() => undefined);
       w = { kind: "networkIdle", ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}) };
     } else if (input.kind === "streamIdle") {
-      // Performed live with the SAME in-page settle logic replay uses (shared via
-      // `streamIdleExpression`), so the snapshot Claude sees next is the one replay will assert.
-      await s.page.evaluate(streamIdleExpression(input)).catch(() => undefined);
+      // Performed live with the SAME settle logic replay uses (shared via `waitForStreamIdle`:
+      // DOM quiet AND no app request still in flight), so the snapshot Claude sees next is the
+      // one replay will assert.
+      await waitForStreamIdle(s.page, input);
       w = {
         kind: "streamIdle",
         ...(input.quietMs ? { quietMs: input.quietMs } : {}),
@@ -2240,17 +2250,20 @@ export class AuthoringSessionService implements OnApplicationShutdown {
     let preview: Buffer;
     if (mode === "fullpage") {
       s.rec.checkpoint(name, { mode: "fullpage", masks: input.masks, waitBefore, ...comparison });
-      preview = await s.page.screenshot({ fullPage: true });
+      preview = await captureFullPage(s.page);
     } else if (mode === "region") {
       if (!input.rect) throw new BadRequestException("region checkpoint requires a rect (x, y, width, height)");
       s.rec.checkpoint(name, { mode: "region", rect: input.rect, masks: input.masks, waitBefore, ...comparison });
-      preview = await s.page.screenshot({ clip: input.rect });
+      preview = await captureRegion(s.page, input.rect);
     } else {
       if (!input.ref) throw new BadRequestException("element checkpoint requires a ref");
       const locator = this.resolveRef(s.page, input.ref);
       const fp = await this.captureFp(s.page, locator, false);
       s.rec.checkpoint(name, { mode: "element", target: fp, masks: input.masks, waitBefore, ...comparison });
-      preview = await locator.screenshot();
+      // The SAME capture replay performs — full height even inside a short scroll pane, pinned
+      // chrome out of the frame, settled before it is kept. A preview taken with a plain
+      // `locator.screenshot()` showed the author a picture no run could ever reproduce.
+      preview = await captureFullElement(s.page, locator, `[data-varys-ref="${input.ref}"]`);
     }
     s.previews.set(name, preview);
     await this.emitFrame(sessionId, { type: "screenshot", checkpoint: name });

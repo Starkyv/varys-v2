@@ -74,7 +74,9 @@
   padding: var(--space-32);
   background: rgba(0, 0, 0, 0.85);
   cursor: zoom-out;
-  overflow: auto;
+  /* The image pans inside its own viewport now, so the backdrop must not scroll — a
+     scrolled backdrop would move the stage out from under the pointer mid-zoom. */
+  overflow: hidden;
 }
 
 /* Positioned host for the lightbox image so the name tag and nav arrows anchor to it. */
@@ -149,6 +151,34 @@
   right: calc(-1 * var(--space-12) - 40px);
 }
 
+/* Clips the zoomable pane to the stage: at 1x the image just fits, and everything a zoom
+ * pushes past the edges is cut here rather than overflowing the lightbox. */
+.viewport {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-width: min(96vw, 100%);
+  max-height: 86vh;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  touch-action: none; /* the pointer handlers own dragging; no browser pan/zoom underneath */
+}
+
+.viewportZoomed {
+  cursor: grab;
+
+  &:active {
+    cursor: grabbing;
+  }
+}
+
+/* What the zoom transform is applied to. `transform-origin: center` matches the maths in
+ * the component (offsets are measured from the stage centre). */
+.pane {
+  transform-origin: center center;
+  will-change: transform;
+}
+
 /* Centered, viewport-bounded box for the lightbox <Image> — overrides the design
  * system wrapper's fill behaviour and centers the image (or its loading spinner). */
 .fullFrame {
@@ -207,4 +237,57 @@
   text-align: center;
   cursor: default;
   word-break: break-word;
+}
+
+/* Zoom toolbar — a pill under the image: out / level / in / fit. */
+.tools {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-8);
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(4px);
+  cursor: default;
+}
+
+.tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  height: 30px;
+  padding: 0 var(--space-8);
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: #fff;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-standard);
+
+  @include focus-ring;
+
+  &:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.2);
+  }
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+}
+
+.toolText {
+  letter-spacing: 0.02em;
+}
+
+.zoomLevel {
+  min-width: 46px;
+  color: rgba(255, 255, 255, 0.86);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  user-select: none;
 }

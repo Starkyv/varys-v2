@@ -33,7 +33,6 @@ import {
   describeStep,
   type Fingerprint,
   type Step,
-  streamIdleExpression,
   type TestDefinition,
   type Wait,
 } from "@varys/step-schema";
@@ -53,8 +52,28 @@ import {
   type Page,
 } from "playwright";
 import { classifyThrownFailure } from "@varys/repair-policy";
+import { captureFullElement, captureFullPage, captureRegion } from "./capture";
 import { collectNetwork, type NetworkCollector } from "./network";
+import { trackInFlightRequests, waitForStreamIdle } from "./stream-idle";
 import { evaluateAssertions } from "./assertions";
+
+// Screenshot hygiene (pinned chrome out of the frame, frame settled before it is kept) and the
+// two-sided stream gate. Re-exported so the Authoring Session captures and waits EXACTLY as
+// replay does — a preview taken any other way is a baseline nobody can reproduce.
+export {
+  captureFullElement,
+  captureFullPage,
+  captureRegion,
+  captureStable,
+  settleLayout,
+  withOverlaysNeutralized,
+} from "./capture";
+export {
+  type InFlightTracker,
+  trackInFlightRequests,
+  waitForStreamIdle,
+  type StreamIdleOptions,
+} from "./stream-idle";
 
 // Assertion EXTRACTION — the half of an assertion that needs a live page. Re-exported so the
 // Authoring Session can verify a pin against the page it was authored against using the SAME
@@ -291,9 +310,10 @@ export async function applyWaits(page: Page, waits: Wait[] | undefined): Promise
       // wait when you need a hard gate on a specific element.
       await page.waitForLoadState("networkidle", { timeout: w.timeoutMs }).catch(() => undefined);
     } else if (w.kind === "streamIdle") {
-      // Shared with the authoring server via `streamIdleExpression` — one definition of
-      // "settled", so what Claude authors against is what replay asserts against.
-      await page.evaluate(streamIdleExpression(w)).catch(() => undefined);
+      // Shared with the authoring server via `waitForStreamIdle` — one definition of "settled",
+      // so what Claude authors against is what replay asserts against. DOM quiet AND no app
+      // request in flight, because a streamed answer pauses without leaving a DOM trace.
+      await waitForStreamIdle(page, w);
     } else {
       await waitLocator(page, w.target).waitFor({
         state: w.state,
@@ -513,47 +533,6 @@ async function isRunCancelled(db: Db, runId: string): Promise<boolean> {
   return !row || row.status === "cancelled";
 }
 
-/**
- * Capture an element's FULL height even when it lives inside a shorter inner `overflow:auto` scroll
- * pane (Wisdom: a ~1900px answer inside a 704px `.scroll`). The element is already fully laid out —
- * only the pane hides it — so the reliable fix is to GROW THE BROWSER VIEWPORT until no scroll
- * ancestor still clips the target. In a viewport-height flex app the pane then expands and the whole
- * element becomes genuinely on-screen (so even off-screen-painted content like ECharts canvases
- * renders), and a normal `locator.screenshot()` gets everything. No DOM surgery — an earlier attempt
- * that rewrote ancestor `flex/height` reflowed the page and produced blank bands + wrong heights.
- * Viewport is restored afterwards. Capped for Chromium's screenshot-size limit.
- */
-async function captureFullElement(page: Page, locator: Locator, selector?: string): Promise<Buffer> {
-  const orig = page.viewportSize();
-  if (!orig) return locator.screenshot();
-  const CAP = 16_000; // device px; keeps the DPR-scaled bitmap under Chromium's ~32767 limit
-  // Total clip deficit across the target's scroll ancestors — how much taller the viewport must be
-  // so nothing clips it. Raw-string expression (browser context, no DOM lib / `__name` issues).
-  const deficitSrc = selector
-    ? `(function(){var el=document.querySelector(${JSON.stringify(selector)});if(!el)return 0;var d=0;for(var n=el.parentElement;n;n=n.parentElement){var cs=getComputedStyle(n);if(/(auto|scroll)/.test(cs.overflowY)&&n.scrollHeight>n.clientHeight+1)d+=n.scrollHeight-n.clientHeight;}return d;})()`
-    : null;
-  try {
-    if (deficitSrc) {
-      // Iterate: grow by the deficit, remeasure (reflow can reveal more), until nothing clips it.
-      for (let i = 0; i < 4; i += 1) {
-        const deficit = (await page.evaluate(deficitSrc).catch(() => 0)) as number;
-        const cur = page.viewportSize()?.height ?? orig.height;
-        if (!deficit || deficit <= 1 || cur >= CAP) break;
-        await page.setViewportSize({ width: orig.width, height: Math.min(CAP, cur + deficit + 120) });
-        await page.waitForTimeout(350); // reflow + any container-resize-driven chart re-render
-      }
-    } else {
-      // No stable selector to measure — grow once by a generous amount as a best-effort.
-      await page.setViewportSize({ width: orig.width, height: CAP });
-      await page.waitForTimeout(350);
-    }
-    await locator.scrollIntoViewIfNeeded().catch(() => undefined);
-    await page.waitForTimeout(150);
-    return await locator.screenshot();
-  } finally {
-    await page.setViewportSize(orig).catch(() => undefined);
-  }
-}
 
 /**
  * Replay a run server-side: launch pinned chromium, walk the recorded steps,
@@ -709,6 +688,9 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
     await seedLocalStorage(context, envLocalStorage, profile);
 
     const page = await context.newPage();
+    // Watch the app's requests from the page's first moment: a `streamIdle` wait must know a
+    // stream is open, and the request that opens it fires during the step BEFORE the wait.
+    trackInFlightRequests(page);
 
     // Test-level default waits — applied before EVERY step that supports waits, ahead
     // of the step's own `waitBefore` (a global "settle the network before each
@@ -766,10 +748,10 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
       let actual: Buffer;
       let healed = false;
       if (step.captureMode === "fullpage") {
-        actual = await page.screenshot({ fullPage: true });
+        actual = await captureFullPage(page);
       } else if (step.captureMode === "region") {
         if (!step.rect) throw new Error(`region checkpoint "${step.name}" has no rect`);
-        actual = await page.screenshot({ clip: step.rect });
+        actual = await captureRegion(page, step.rect);
       } else {
         if (!step.target) throw new Error(`element checkpoint "${step.name}" has no target`);
         const found = await resolveWithHoverReveal(page, step.target, actionResolveTimeoutMs());

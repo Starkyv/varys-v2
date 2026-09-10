@@ -29,5 +29,9 @@
     "@varys/variable-resolver": "workspace:*",
     "drizzle-orm": "^0.39.1",
     "playwright": "^1.50.1"
+  },
+  "devDependencies": {
+    "@types/pngjs": "^6.0.5",
+    "pngjs": "^7.0.0"
   }
 }

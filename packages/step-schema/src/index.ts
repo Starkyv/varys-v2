@@ -113,7 +113,9 @@ export const wait = z.discriminatedUnion("kind", [
   }),
   /** Wait until streamed/late-rendering content (Wisdom answers, late d3 layout) has SETTLED —
    *  the DOM has been mutation-free for `quietMs` AND no loading indicator (skeleton / spinner /
-   *  progressbar / `aria-busy`) remains — capped at `timeoutMs`. Best-effort: proceeds at the cap
+   *  progressbar / `aria-busy`) remains — and, in the drivers, while any app request is still in
+   *  flight (see `waitForStreamIdle`, which is what holds through a stream that pauses
+   *  mid-answer) — capped at `timeoutMs`. Best-effort: proceeds at the cap
    *  even if the page never fully quiesces. `busySelector` overrides the built-in loading-indicator
    *  selector for an app whose marker the default doesn't catch. */
   z.object({
@@ -143,9 +145,13 @@ export const STREAM_IDLE_DEFAULTS = {
    *  as activity. */
   graceMs: 6_000,
   /** Common "still working" markers. `data-testid*="skeleton"` catches answer/section
-   *  skeletons (testids survive CSS-module hashing, unlike class names). */
+   *  skeletons (testids survive CSS-module hashing, unlike class names) — but plenty of apps
+   *  ship no testids at all, so the class forms are matched too. A hashed CSS-modules class
+   *  (`Skeleton_root__a3f9`) still CONTAINS the word, which is why the substring match earns
+   *  its keep. Over-matching is safe because `busy()` ignores elements that aren't actually
+   *  rendered: a permanently-mounted, hidden spinner is not a busy signal. */
   busySelector:
-    '[aria-busy="true"],[role="progressbar"],[data-testid*="skeleton" i],[data-testid*="spinner" i],[data-testid*="loading" i],[class*="animate-pulse"]',
+    '[aria-busy="true"],[role="progressbar"],[data-loading="true"],[data-state="loading"],[data-testid*="skeleton" i],[data-testid*="spinner" i],[data-testid*="loading" i],[class*="skeleton" i],[class*="spinner" i],[class*="animate-pulse"]',
 } as const;
 
 /**
@@ -174,6 +180,10 @@ export function streamIdleExpression(opts?: {
   quietMs?: number;
   timeoutMs?: number;
   busySelector?: string;
+  /** The caller already KNOWS async work ran and finished — it watched the request, which the
+   *  page cannot see (see `waitForStreamIdle`). Skips the grace window: with the "did anything
+   *  actually happen?" question already answered, a quiet DOM means rendered, not idle-so-far. */
+  sawWork?: boolean;
 }): string {
   const quiet = opts?.quietMs ?? STREAM_IDLE_DEFAULTS.quietMs;
   const max = opts?.timeoutMs ?? STREAM_IDLE_DEFAULTS.timeoutMs;
@@ -182,9 +192,20 @@ export function streamIdleExpression(opts?: {
   return `(function () {
   return new Promise(function (resolve) {
     var quiet = ${quiet}, max = ${max}, grace = ${grace}, sel = ${JSON.stringify(sel)}, obs = null;
-    var start = Date.now(), lastActivity = Date.now(), sawBusy = false;
+    var start = Date.now(), lastActivity = Date.now(), sawBusy = ${opts?.sawWork ? "true" : "false"};
     var hard = setTimeout(finish, max);
-    function busy() { try { return !!document.querySelector(sel); } catch (e) { return false; } }
+    // Busy = a loading marker that is actually RENDERED. Presence in the DOM is not enough:
+    // apps keep spinners/skeletons mounted and hidden, and treating one as "still working"
+    // would hang the wait until its cap on every page that has one.
+    function busy() {
+      try {
+        var nodes = document.querySelectorAll(sel);
+        for (var i = 0; i < nodes.length; i++) {
+          if (nodes[i].getClientRects().length > 0) return true;
+        }
+        return false;
+      } catch (e) { return false; }
+    }
     function finish() { try { if (obs) obs.disconnect(); } catch (e) {} clearTimeout(hard); resolve(true); }
     function tick() {
       var now = Date.now();
