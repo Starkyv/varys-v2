@@ -98,4 +98,40 @@ describe("Suites API", () => {
     const other = await authed(app).get(`/suites/${s2.body.id}`).expect(200);
     expect((other.body as { tests: { id: string }[] }).tests.map((t) => t.id)).toContain(shared);
   });
+
+  /**
+   * The suite's **AI Instructions** — the outermost of the three layers (ticket #8).
+   *
+   * What is worth pinning here is the write semantics rather than the text: absent leaves it
+   * alone, so saving a membership change does not wipe instructions the author never touched;
+   * and blank clears it to NULL, so "carries no shared context" has exactly one spelling for the
+   * composition path to filter on.
+   */
+  it("keeps a suite's AI instructions across a membership-only save, and clears them on blank", async () => {
+    const a = await mkTest("ai-suite-member-a");
+    const b = await mkTest("ai-suite-member-b");
+    const created = await authed(app)
+      .post("/suites")
+      .send({ name: "acme staging", testIds: [a], agentInstructions: "  Runs against ACME staging.  " })
+      .expect(201);
+    const suiteId = created.body.id as string;
+
+    type View = { agentInstructions: string | null; tests: { id: string }[] };
+    const read = async () => (await authed(app).get(`/suites/${suiteId}`).expect(200)).body as View;
+
+    // Trimmed on the way in — leading whitespace is not shared context.
+    expect((await read()).agentInstructions).toBe("Runs against ACME staging.");
+
+    // A save that says nothing about the instructions leaves them alone. This is the one that
+    // bites: the editor sends membership on every save, and an absent field read as "clear it"
+    // would quietly delete an afternoon's writing.
+    await authed(app).put(`/suites/${suiteId}`).send({ testIds: [a, b] }).expect(200);
+    const afterMembership = await read();
+    expect(afterMembership.agentInstructions).toBe("Runs against ACME staging.");
+    expect(afterMembership.tests.map((t) => t.id).sort()).toEqual([a, b].sort());
+
+    // Blank clears it to null rather than storing an empty string — one spelling of empty.
+    await authed(app).put(`/suites/${suiteId}`).send({ agentInstructions: "   " }).expect(200);
+    expect((await read()).agentInstructions).toBeNull();
+  });
 });

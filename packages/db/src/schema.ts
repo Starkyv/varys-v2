@@ -95,6 +95,15 @@ export const suites = pgTable("suites", {
   name: text("name").notNull(),
   /** Who created the suite (email). Null for rows created before this column existed. */
   createdBy: text("created_by"),
+  /**
+   * The suite's AI Instructions — the OUTERMOST of the three layers composed for an Agent Run
+   * Session (suite, then test, then the checkpoint's own), concatenated and never overridden.
+   *
+   * Lives on the suite rather than being retyped into every test because it is shared context:
+   * which app, which account, which standing exceptions. It applies only to Agent-Driven members
+   * — a pinned test is replayed with no model call and has nothing to read it.
+   */
+  agentInstructions: text("agent_instructions"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -955,6 +964,8 @@ CREATE TABLE IF NOT EXISTS suites (
 );
 -- Attribution (Slice A): who created the suite.
 ALTER TABLE suites ADD COLUMN IF NOT EXISTS created_by text;
+-- Agent-Driven Tests: the outermost AI Instructions layer, shared across a suite's members.
+ALTER TABLE suites ADD COLUMN IF NOT EXISTS agent_instructions text;
 CREATE TABLE IF NOT EXISTS suite_tests (
   suite_id uuid NOT NULL REFERENCES suites(id) ON DELETE CASCADE,
   test_id uuid NOT NULL REFERENCES tests(id) ON DELETE CASCADE,

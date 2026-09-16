@@ -12,6 +12,8 @@ import {
   runEvidence,
   runResults,
   runs,
+  suites,
+  suiteTests,
   testVersions,
 } from "@varys/db";
 import type { AgentCheckpoint, CreatedAgentCredential } from "@varys/review-contract";
@@ -1617,6 +1619,184 @@ describe("Agent Run Session — red before the agent does anything", () => {
       expect(row.failureKind).toBeNull();
       expect(row.status).not.toBe("failed");
       expect((await runView(session.runId)).session).toMatchObject({ leaseSeconds: 3, state: "expired" });
+    });
+  });
+
+  /**
+   * The third and outermost layer of **AI Instructions** (ticket #8).
+   *
+   * Three layers, composed general → specific — suite, then test, then the checkpoint's own — and
+   * CONCATENATED, never overridden. The load-bearing assertions are about order and survival: a
+   * layer that can be silently dropped is a layer whose author cannot tell whether it took effect,
+   * and a composed document nobody kept is a run that stops being explainable the moment any of
+   * the three is edited.
+   *
+   * Membership is written straight into `suite_tests` here, and that is deliberate rather than a
+   * shortcut. `assertNoAgentTests` refuses an Agent-Driven Test at the point of JOINING a suite —
+   * nothing can run one unattended (PRD, "Not suite-eligible") — so there is no API call that
+   * produces this row today. The composition path is real and ships now; what does not exist yet
+   * is a supported way to reach it. Everything below this line is the production code path, with
+   * the single exception of how the membership row got there.
+   */
+  describe("suite-level AI Instructions", () => {
+    const SUITE_INSTRUCTIONS =
+      "Everything here runs against the ACME staging tenant. Ignore the release-notes banner.";
+    let suiteTestId: string;
+
+    /** A suite carrying instructions, with `testId` recorded as an explicit member. */
+    const suiteWith = async (name: string, instructions: string | null, member: string) => {
+      const [row] = await handle.db
+        .insert(suites)
+        .values({ name, agentInstructions: instructions })
+        .returning({ id: suites.id });
+      await handle.db.insert(suiteTests).values({ suiteId: row.id, testId: member });
+      return row.id;
+    };
+
+    beforeAll(async () => {
+      const created = await authed(app)
+        .post("/tests/agent")
+        .send({ name: "suite-layer journey", instructions: "TEST-LAYER-TEXT" })
+        .expect(201);
+      suiteTestId = created.body.id as string;
+      await authed(app)
+        .post(`/tests/${suiteTestId}/agent-checkpoints`)
+        .send({ name: "landed", instructions: "CHECKPOINT-LAYER-TEXT", comparePrompt: "It looks right." })
+        .expect(201);
+    });
+
+    afterAll(async () => {
+      await handle.db.delete(suiteTests).where(eq(suiteTests.testId, suiteTestId));
+    });
+
+    /** Drop every suite membership this test has, so each case composes from a known layer set. */
+    const clearSuites = () => handle.db.delete(suiteTests).where(eq(suiteTests.testId, suiteTestId));
+
+    it("composes the three layers general to specific — suite, then test, then the checkpoint", async () => {
+      await clearSuites();
+      await suiteWith("Checkout", SUITE_INSTRUCTIONS, suiteTestId);
+
+      const { session } = await start({ testId: suiteTestId, environmentId });
+
+      const suiteAt = session.instructions.indexOf(SUITE_INSTRUCTIONS);
+      const testAt = session.instructions.indexOf("TEST-LAYER-TEXT");
+      const checkpointAt = session.instructions.indexOf("CHECKPOINT-LAYER-TEXT");
+      expect(suiteAt).toBeGreaterThan(-1);
+      expect(suiteAt).toBeLessThan(testAt);
+      expect(testAt).toBeLessThan(checkpointAt);
+    });
+
+    /**
+     * The compensating control for instructions being unversioned. Not "the run has some text" —
+     * the run has THE text, byte for byte, so six weeks later the run still explains itself after
+     * all three layers have been rewritten underneath it.
+     */
+    it("stores the composed text on the run, identical to what the agent was handed", async () => {
+      await clearSuites();
+      await suiteWith("Checkout", SUITE_INSTRUCTIONS, suiteTestId);
+
+      const { session } = await start({ testId: suiteTestId, environmentId });
+
+      const [row] = await handle.db
+        .select({ instructions: runs.agentInstructions })
+        .from(runs)
+        .where(eq(runs.id, session.runId))
+        .limit(1);
+      expect(row.instructions).toBe(session.instructions);
+      expect(row.instructions).toContain(SUITE_INSTRUCTIONS);
+    });
+
+    /**
+     * The whole reason they are concatenated rather than merged. Two layers that contradict each
+     * other both reach the agent — because there is no per-key structure in prose to override
+     * along, and because a suite silently winning is how an author's test-level instruction
+     * disappears without anything saying so.
+     */
+    it("concatenates a suite and a test that contradict each other rather than letting one win", async () => {
+      await clearSuites();
+      await suiteWith("Contradictory", "Log in as qa@acme.io.", suiteTestId);
+      await authed(app)
+        .patch(`/tests/${suiteTestId}`)
+        .send({ brief: "Log in as admin@acme.io." })
+        .expect(200);
+
+      const { session } = await start({ testId: suiteTestId, environmentId });
+      expect(session.instructions).toContain("Log in as qa@acme.io.");
+      expect(session.instructions).toContain("Log in as admin@acme.io.");
+
+      await authed(app).patch(`/tests/${suiteTestId}`).send({ brief: "TEST-LAYER-TEXT" }).expect(200);
+    });
+
+    it("carries every suite the test belongs to, in name order, so neither outranks the other", async () => {
+      await clearSuites();
+      await suiteWith("Zulu suite", "ZULU-CONTEXT", suiteTestId);
+      await suiteWith("Alpha suite", "ALPHA-CONTEXT", suiteTestId);
+
+      const { session } = await start({ testId: suiteTestId, environmentId });
+      expect(session.instructions).toContain("ALPHA-CONTEXT");
+      expect(session.instructions).toContain("ZULU-CONTEXT");
+      expect(session.instructions.indexOf("ALPHA-CONTEXT")).toBeLessThan(
+        session.instructions.indexOf("ZULU-CONTEXT"),
+      );
+    });
+
+    it("leaves no trace of a suite that carries no instructions", async () => {
+      await clearSuites();
+      const withNone = (await start({ testId: suiteTestId, environmentId })).session.instructions;
+
+      await suiteWith("Silent suite", null, suiteTestId);
+      const withBlank = (await start({ testId: suiteTestId, environmentId })).session.instructions;
+
+      expect(withBlank).toBe(withNone);
+      expect(withBlank).not.toContain("Silent suite");
+    });
+
+    /**
+     * The preview is only worth having if it is the SAME document. An approximation assembled by
+     * a second code path would be a preview of something else, and an author would be checking
+     * the wrong text against the run that baffled them.
+     */
+    it("previews exactly the text the next session receives, without starting anything", async () => {
+      await clearSuites();
+      await suiteWith("Checkout", SUITE_INSTRUCTIONS, suiteTestId);
+
+      const before = await handle.db.select({ id: runs.id }).from(runs);
+      const preview = await authed(app)
+        .get(`/tests/${suiteTestId}/agent-instructions?environmentId=${environmentId}`)
+        .expect(200);
+      const after = await handle.db.select({ id: runs.id }).from(runs);
+      expect(after.length).toBe(before.length); // a preview starts nothing
+
+      expect(preview.body.suites).toEqual(["Checkout"]);
+      expect(preview.body.environment).toBe("staging");
+      expect(preview.body.checkpointCount).toBe(1);
+
+      const { session } = await start({ testId: suiteTestId, environmentId });
+      expect(preview.body.instructions).toBe(session.instructions);
+    });
+
+    it("names no suite in the preview when none contributed", async () => {
+      await clearSuites();
+      await suiteWith("Silent suite", "   ", suiteTestId);
+
+      const preview = await authed(app)
+        .get(`/tests/${suiteTestId}/agent-instructions`)
+        .expect(200);
+      expect(preview.body.suites).toEqual([]);
+      expect(preview.body.environment).toBe("default");
+    });
+
+    /**
+     * A pinned test is replayed from recorded steps with no model call, so there is nothing in it
+     * that could read a word of this. Refused rather than answered with an empty document: an
+     * empty preview reads as "the suite contributes nothing to this test", when the truth is that
+     * this kind of test is never given AI Instructions at all.
+     */
+    it("applies none of it to a pinned member, which has no AI Instructions to be given", async () => {
+      const suiteId = await suiteWith("Mixed", SUITE_INSTRUCTIONS, pinnedTestId);
+      const res = await authed(app).get(`/tests/${pinnedTestId}/agent-instructions`).expect(404);
+      expect(res.body.message).toMatch(/pinned/i);
+      await handle.db.delete(suiteTests).where(eq(suiteTests.suiteId, suiteId));
     });
   });
 });

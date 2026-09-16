@@ -200,3 +200,87 @@
   font-size: var(--font-size-xs);
   color: var(--color-text-subtle);
 }
+
+/* --- Suite AI instructions -------------------------------------------- *
+ * The outermost of the three AI Instructions layers. Sits between the member list and the
+ * schedule, mirroring the schedule section's framing so the editor reads as one column of
+ * sections rather than a list with two appendices. */
+.aiSection {
+  padding: var(--space-16) var(--space-20);
+  border-top: 1px solid var(--color-border);
+}
+
+.aiHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  color: var(--color-text-muted);
+}
+
+.aiTitle {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+}
+
+/* The scoping label, carried in the header rather than buried in the hint: it is the one thing
+   about this field that changes what someone writes into it. */
+.aiScope {
+  margin-left: auto;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.aiHint {
+  margin: var(--space-6) 0 var(--space-10);
+  max-width: 68ch;
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+
+.aiTextarea {
+  width: 100%;
+  padding: var(--space-8) var(--space-12);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+  resize: vertical;
+
+  &:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 1px;
+  }
+}
+
+.aiNote {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-6);
+  margin: var(--space-8) 0 0;
+  max-width: 68ch;
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+
+/* Warning-toned, not danger: writing instructions that reach nothing is a wasted afternoon, not
+   a broken suite, and the suite itself is perfectly valid. */
+.aiWarn {
+  color: var(--color-warning);
+
+  svg {
+    flex: none;
+    margin-top: 1px;
+  }
+}
+
+/* A row that is shown so its absence is not a mystery, but cannot be picked. */
+.rowOff {
+  opacity: 0.55;
+  cursor: not-allowed;
+}

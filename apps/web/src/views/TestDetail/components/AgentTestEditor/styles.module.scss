@@ -1,3 +1,5 @@
+@use "../../../../styles/mixins" as *;
+
 .card {
   display: flex;
   flex-direction: column;
@@ -162,4 +164,81 @@
 .lease .note {
   flex: 1;
   line-height: 1.5;
+}
+
+/* --- The three layers, as the agent receives them --------------------- *
+ * Collapsed by default: it is a whole document, and an author writing the layers above needs the
+ * space more often than they need the assembled result. */
+.previewToggle {
+  @include focus-ring;
+
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  text-align: left;
+}
+
+.chevron {
+  flex: none;
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.chevronOpen {
+  transform: rotate(180deg);
+}
+
+.previewHint {
+  margin-left: auto;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.preview {
+  margin-top: var(--space-14);
+}
+
+.previewBar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-10);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-12);
+}
+
+.previewEnv {
+  min-width: 180px;
+}
+
+.previewMeta {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.previewError {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-danger);
+}
+
+/* Monospaced and wrapped rather than scrolled sideways: it is prose the agent reads, and a line
+   the author cannot see the end of is a line they will not check. */
+.previewBody {
+  margin: 0;
+  padding: var(--space-14);
+  max-height: 520px;
+  overflow: auto;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-inset);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  line-height: 1.6;
+  color: var(--color-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }

@@ -43,6 +43,7 @@ import type {
   AgentCheckpoint,
   AgentCheckpointDeleteImpact,
   AgentCheckpointInput,
+  AgentInstructionsPreview,
   CreateAgentTestRequest,
   TestConfigPatch,
   TestConfigView,
@@ -377,6 +378,23 @@ export async function createAgentTest(body: CreateAgentTestRequest): Promise<{ i
   return (await res.json()) as { id: string };
 }
 
+/**
+ * The fully composed AI Instructions — suite, test and checkpoint layers assembled exactly as
+ * `start_agent_run` would assemble them, without starting anything.
+ *
+ * Read before running, because three layers composed out of sight are what produce a baffling run
+ * an hour later.
+ */
+export async function fetchAgentInstructions(
+  testId: string,
+  environmentId?: string,
+): Promise<AgentInstructionsPreview> {
+  const qs = environmentId ? `?environmentId=${encodeURIComponent(environmentId)}` : "";
+  const res = await fetch(`${API_BASE}/tests/${testId}/agent-instructions${qs}`);
+  if (!res.ok) throw new Error(await errorText(res, "Failed to compose the instructions"));
+  return (await res.json()) as AgentInstructionsPreview;
+}
+
 /** The test's Checkpoints, in journey order. */
 export async function fetchAgentCheckpoints(testId: string): Promise<AgentCheckpoint[]> {
   const res = await fetch(`${API_BASE}/tests/${testId}/agent-checkpoints`);
@@ -625,6 +643,7 @@ export async function createSuite(body: {
   name: string;
   testIds?: string[];
   folderIds?: string[];
+  agentInstructions?: string | null;
 }): Promise<{ id: string }> {
   const res = await fetch(`${API_BASE}/suites`, {
     method: "POST",
@@ -645,6 +664,7 @@ export async function updateSuite(
     name?: string;
     testIds?: string[];
     folderIds?: string[];
+    agentInstructions?: string | null;
     schedule?: TestScheduleInput | null;
   },
 ): Promise<void> {

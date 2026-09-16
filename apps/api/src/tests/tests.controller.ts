@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, Inject, Param, Patch, Post, Put } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, Inject, Param, Patch, Post, Put, Query } from "@nestjs/common";
 import type {
   AgentCheckpointInput,
   CreateAgentTestRequest,
@@ -8,6 +8,7 @@ import type {
   TestConfigPatch,
 } from "@varys/review-contract";
 import { type AuthUser, CurrentUser } from "../auth/current-user.decorator";
+import { AgentInstructionsService } from "./agent-instructions.service";
 import { AgentTestsService } from "./agent-tests.service";
 import { LocatorVerifyService } from "./locator-verify.service";
 import { TestsService, type UpdateTestInput } from "./tests.service";
@@ -19,6 +20,7 @@ export class TestsController {
     @Inject(TestsService) private readonly tests: TestsService,
     @Inject(LocatorVerifyService) private readonly locatorVerify: LocatorVerifyService,
     @Inject(AgentTestsService) private readonly agent: AgentTestsService,
+    @Inject(AgentInstructionsService) private readonly instructions: AgentInstructionsService,
   ) {}
 
   @Post()
@@ -82,6 +84,14 @@ export class TestsController {
   @Delete(":id")
   delete(@Param("id") id: string) {
     return this.tests.delete(id);
+  }
+
+  // The three layers of AI Instructions — suite, test, checkpoint — composed exactly as
+  // start_agent_run would compose them, so an author can read what the agent will be told before
+  // spending a Claude subscription to find out. Read-only: it starts nothing and writes nothing.
+  @Get(":id/agent-instructions")
+  previewInstructions(@Param("id") id: string, @Query("environmentId") environmentId?: string) {
+    return this.instructions.preview(id, environmentId);
   }
 
   /* ---- Agent-Driven Test checkpoints -------------------------------------------------- *

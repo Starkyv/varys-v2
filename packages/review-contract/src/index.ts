@@ -1368,6 +1368,15 @@ export interface SuiteView {
   folderIds: string[];
   /** The individually-selected standalone tests (raw selection). */
   testIds: string[];
+  /**
+   * The suite's AI Instructions — the outermost of the three layers, prepended to every
+   * Agent-Driven member's composed instructions. Null when the suite carries none.
+   *
+   * Environmental context, not behavioural overrides: which app, which account, what to ignore.
+   * It reaches no PINNED member, because a pinned test is replayed by the worker with no model
+   * call and has nothing to read it.
+   */
+  agentInstructions: string | null;
   /** The effective, deduped member tests (folders resolved + standalone), newest first. */
   tests: TestSummary[];
   /** The suite's cron schedule (fires a whole suite run), or null when unscheduled. `lastRunId`
@@ -2115,6 +2124,136 @@ export function rollupRunStatus(
     else if (c.reviewState === "pending-baseline" || c.reviewState === "diff") anyPending = true;
   }
   return anyMissing ? "failed" : anyPending ? "needs_review" : anyRejected ? "failed" : "passed";
+}
+
+/** One Checkpoint of the journey, as the composed instructions spell it out. */
+export interface AgentInstructionSlot {
+  /** Position in the journey, 1-based — the number a person counts the walk in. */
+  step: number;
+  /** The Manifest name, which is also the only name the slot may be reported under. */
+  name: string;
+  /** How to reach this state, carrying on from the previous slot. */
+  instructions: string;
+  /** What must be true in the capture for it to match its baseline. Already resolved against the
+   *  global default judge prompt by the caller — this layer does no falling back of its own. */
+  comparePrompt: string;
+}
+
+/** The three layers of AI Instructions, outermost first, plus what the run is being pointed at. */
+export interface AgentInstructionLayers {
+  testName: string;
+  /** The environment name the run is against — `default` when the run has no environment. */
+  environment: string;
+  /** The environment's base URL, or `""` when it has none. */
+  baseUrl: string;
+  /**
+   * The outermost layer: standing context from every suite that carries AI Instructions and
+   * selects this test. A list rather than one string because a test can belong to several suites,
+   * and silently picking one of them would be the worst of the three available answers.
+   *
+   * Order is the caller's and is preserved, so the composed text is stable between runs.
+   */
+  suites: readonly { name: string; instructions: string }[];
+  /** The middle layer: the test's own AI Instructions (`tests.intent`). */
+  testInstructions: string;
+  /** The innermost layer: each Checkpoint's own instructions and comparison prompt. */
+  slots: readonly AgentInstructionSlot[];
+}
+
+/**
+ * The document handed to the agent at the start of an Agent Run Session, and copied verbatim onto
+ * the run.
+ *
+ * Layers are **concatenated, general → specific** — suite, then test, then the checkpoint's own —
+ * and **never overridden**. These are additive context ("here is the app" / "here is this journey"
+ * / "here is this state"), not competing settings; override semantics would need per-key structure
+ * that prose does not have, and a layer that can be silently discarded is a layer whose author
+ * cannot tell whether it took effect.
+ *
+ * Pure, and shared, for the same reason `describeLease` is: this exact text is what `start_agent_run`
+ * returns to the agent, what is stored on the run, and what the author previews BEFORE running. A
+ * preview assembled by a second code path would be a preview of something else, and the whole point
+ * of the preview is that three layers assembled out of sight produce a baffling run an hour later.
+ *
+ * Written as a readable document rather than a JSON blob because a human reads it too — it is what
+ * the run detail shows when someone asks what the agent was actually told.
+ */
+export function composeAgentInstructions(input: AgentInstructionLayers): string {
+  const lines: string[] = [];
+  lines.push(`# ${input.testName}`);
+  lines.push("");
+  lines.push(`Environment: ${input.environment}${input.baseUrl ? ` (${input.baseUrl})` : ""}`);
+  lines.push("");
+
+  // Blank layers are dropped rather than headed, in both directions: a suite that carries no
+  // instructions must leave no trace at all, or the author of the NEXT layer reads a named,
+  // empty section and wonders what was supposed to be in it.
+  const suiteLayers = input.suites
+    .map((s) => ({ name: s.name, instructions: s.instructions.trim() }))
+    .filter((s) => s.instructions !== "");
+  if (suiteLayers.length > 0) {
+    lines.push("## Shared context");
+    lines.push("");
+    // Says what this layer IS, because the agent reads all three as one document and the failure
+    // mode is treating the outermost as the authoritative one. It is environmental — which app,
+    // which account, what to ignore — and everything below adds to it.
+    lines.push(
+      suiteLayers.length === 1
+        ? `Standing context from the suite this test belongs to. It describes the surroundings — which app, which account, what to ignore — and nothing below replaces it; the sections that follow are more specific and add to it.`
+        : `Standing context from the ${suiteLayers.length} suites this test belongs to. It describes the surroundings — which app, which account, what to ignore — and nothing below replaces it; the sections that follow are more specific and add to it. Where two suites say different things, both are shown, because neither outranks the other.`,
+    );
+    lines.push("");
+    for (const suite of suiteLayers) {
+      lines.push(`### Suite: ${suite.name}`);
+      lines.push("");
+      lines.push(suite.instructions);
+      lines.push("");
+    }
+  }
+
+  const testLayer = input.testInstructions.trim();
+  if (testLayer) {
+    lines.push("## AI Instructions");
+    lines.push("");
+    lines.push(testLayer);
+    lines.push("");
+  }
+
+  lines.push("## Checkpoints");
+  lines.push("");
+  lines.push(
+    "Walk these in order. Each one carries on from the last, so the page is wherever the previous checkpoint left it.",
+  );
+  lines.push("");
+  for (const slot of input.slots) {
+    lines.push(`### ${slot.step}. ${slot.name}`);
+    lines.push("");
+    lines.push("How to get here:");
+    lines.push(slot.instructions.trim() || "(not specified)");
+    lines.push("");
+    lines.push("What counts as matching its baseline:");
+    lines.push(slot.comparePrompt.trim() || "(not specified)");
+    lines.push("");
+  }
+  return lines.join("\n").trimEnd();
+}
+
+/**
+ * The fully composed AI Instructions, as an author reads them BEFORE starting a run.
+ *
+ * Returned by its own read-only endpoint rather than by starting a session, because the point is
+ * to see what the agent will be told without spending a Claude subscription to find out.
+ */
+export interface AgentInstructionsPreview {
+  /** The exact document `start_agent_run` would hand the agent right now. */
+  instructions: string;
+  /** The names of the suites that CONTRIBUTED a layer, so "why is that in there?" is answerable
+   *  from the preview itself. Empty when no suite contributed. */
+  suites: string[];
+  /** The environment the preview was composed against — `default` when none was given. */
+  environment: string;
+  /** How many Checkpoints the document walks. Zero is legal here and refused at run start. */
+  checkpointCount: number;
 }
 
 /**

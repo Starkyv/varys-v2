@@ -18,7 +18,10 @@ import { RunToolService } from "./run-tool.service";
 
 @Module({
   // TestsModule exports TestsService — the authoring session persists its result as a
-  // Draft through it (so all tests/test_versions writes stay in one place).
+  // Draft through it (so all tests/test_versions writes stay in one place) — and
+  // AgentInstructionsService, which composes the three AI Instructions layers for an Agent Run
+  // Session through the SAME path the author's preview endpoint reads, so a preview and the run
+  // it previews cannot be two different documents.
   // AgentCredentialsModule is the SECOND ISSUER on /mcp (ADR-0005); RepairJobsModule answers
   // "does this agent hold a claim on that test?", which is what scopes an agent credential.
   // RunsModule exports RunsService — `run_test` queues a run through the SAME path the web app's

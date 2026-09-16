@@ -26,6 +26,7 @@ import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
 import { viewportKeyOf } from "../runs/runs.service";
 import { SettingsService } from "../settings/settings.service";
+import { AgentInstructionsService } from "../tests/agent-instructions.service";
 import { STORAGE } from "../storage/storage.module";
 
 /** The environment name a run with no environment is keyed under — the same fallback
@@ -160,6 +161,11 @@ export class AgentRunService {
     // Supplies the global default judge prompt a blank `compare_prompt` falls back to, and the
     // team-wide ratio the pre-seeded rows carry in their NOT NULL `threshold` column.
     @Inject(SettingsService) private readonly settings: SettingsService,
+    // Composes the three AI Instructions layers — suite, test, checkpoint. Shared with the
+    // author's preview endpoint on purpose: a preview assembled by a second code path is a
+    // preview of a different document, and previewing exists precisely because three layers
+    // assembled out of sight are what produce a baffling run an hour later.
+    @Inject(AgentInstructionsService) private readonly instructions: AgentInstructionsService,
   ) {}
 
   /** Open a session on an Agent-Driven Test against an environment. */
@@ -217,7 +223,7 @@ export class AgentRunService {
       );
     }
 
-    const env = await this.resolveEnvironment(opts.environmentId);
+    const env = await this.instructions.resolveEnvironment(opts.environmentId);
 
     const [version] = await this.db
       .select({ id: testVersions.id, definition: testVersions.definition })
@@ -231,22 +237,18 @@ export class AgentRunService {
     // Varys does not perform the capture — but the two sides must agree on the key.
     const vpKey = viewportKeyOf((version.definition as TestDefinition).viewport);
 
-    const judge = await this.settings.getJudge();
     const comparison = await this.settings.getImageComparison();
 
-    const slots = checkpoints.map((c, i) => ({
-      step: i + 1,
-      name: c.name,
-      instructions: c.instructions,
-      comparePrompt: c.comparePrompt.trim() || judge.defaultPrompt,
-    }));
-
-    const instructions = composeInstructions({
+    // Suite layer, then test layer, then each checkpoint's own — concatenated, never overridden.
+    // `slots` comes back from the same call so the Manifest and the document cannot disagree
+    // about what a blank comparison prompt fell back to.
+    const { instructions, slots } = await this.instructions.compose({
+      testId: id,
       testName: test.name,
+      testInstructions: test.intent ?? "",
       environment: env.name,
       baseUrl: env.baseUrl,
-      testInstructions: test.intent ?? "",
-      slots,
+      checkpoints,
     });
 
     // Everything that makes this run red is written here, in ONE transaction, before the tool
@@ -691,19 +693,7 @@ export class AgentRunService {
    * env-less default: baselines are keyed by environment name, so quietly falling back would
    * compare a staging capture against production's golden and call the difference a regression.
    */
-  private async resolveEnvironment(
-    environmentId: string | undefined,
-  ): Promise<{ id: string | null; name: string; baseUrl: string }> {
-    const wanted = (environmentId ?? "").trim();
-    if (!wanted) return { id: null, name: NO_ENVIRONMENT, baseUrl: "" };
-    const [env] = await this.db
-      .select({ id: environments.id, name: environments.name, baseUrl: environments.baseUrl })
-      .from(environments)
-      .where(eq(environments.id, wanted))
-      .limit(1);
-    if (!env) throw new NotFoundException(`Environment ${wanted} not found`);
-    return env;
-  }
+
 
   /** The approved baseline PNG for each slot that has one, as base64, in Manifest order. */
   private async readBaselines(
@@ -743,58 +733,6 @@ export class AgentRunService {
     }
     return out;
   }
-}
-
-/**
- * The three instruction layers, flattened into the one document the agent is handed and the run
- * keeps a verbatim copy of.
- *
- * Layers are **concatenated, general → specific**, never overridden: these are additive context
- * ("here is the app" / "here is this journey" / "here is this state"), not competing settings,
- * and override semantics would need per-key structure that prose does not have. The suite layer
- * joins at the top when suite-level AI Instructions land.
- *
- * Written as a readable document rather than a JSON blob because a human reads this too — it is
- * what the run detail shows when someone asks what the agent was actually told.
- */
-function composeInstructions(input: {
-  testName: string;
-  environment: string;
-  baseUrl: string;
-  testInstructions: string;
-  slots: { step: number; name: string; instructions: string; comparePrompt: string }[];
-}): string {
-  const lines: string[] = [];
-  lines.push(`# ${input.testName}`);
-  lines.push("");
-  lines.push(`Environment: ${input.environment}${input.baseUrl ? ` (${input.baseUrl})` : ""}`);
-  lines.push("");
-
-  const testLayer = input.testInstructions.trim();
-  if (testLayer) {
-    lines.push("## AI Instructions");
-    lines.push("");
-    lines.push(testLayer);
-    lines.push("");
-  }
-
-  lines.push("## Checkpoints");
-  lines.push("");
-  lines.push(
-    "Walk these in order. Each one carries on from the last, so the page is wherever the previous checkpoint left it.",
-  );
-  lines.push("");
-  for (const slot of input.slots) {
-    lines.push(`### ${slot.step}. ${slot.name}`);
-    lines.push("");
-    lines.push("How to get here:");
-    lines.push(slot.instructions.trim() || "(not specified)");
-    lines.push("");
-    lines.push("What counts as matching its baseline:");
-    lines.push(slot.comparePrompt.trim() || "(not specified)");
-    lines.push("");
-  }
-  return lines.join("\n").trimEnd();
 }
 
 /**

@@ -18,6 +18,7 @@ import {
   createAgentTest,
   deleteAgentCheckpoint,
   fetchAgentCheckpoints,
+  fetchAgentInstructions,
   reorderAgentCheckpoints,
   updateAgentCheckpoint,
   approveAllInRun,
@@ -475,8 +476,12 @@ export function useSuite(id: string) {
 export function useCreateSuite() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { name: string; testIds?: string[]; folderIds?: string[] }) =>
-      createSuite(body),
+    mutationFn: (body: {
+      name: string;
+      testIds?: string[];
+      folderIds?: string[];
+      agentInstructions?: string | null;
+    }) => createSuite(body),
     onSuccess: () => qc.invalidateQueries({ queryKey: suitesQueryKey() }),
   });
 }
@@ -491,6 +496,7 @@ export function useUpdateSuite() {
         name?: string;
         testIds?: string[];
         folderIds?: string[];
+        agentInstructions?: string | null;
         schedule?: TestScheduleInput | null;
       };
     }) => updateSuite(vars.id, vars.body),
@@ -587,6 +593,30 @@ export function useDeleteSuiteRun() {
 /** The ordered Checkpoint Manifest's cache key. */
 export function agentCheckpointsQueryKey(testId: string) {
   return ["agent-checkpoints", testId] as const;
+}
+
+/** The composed AI Instructions' cache key — per test and per environment, because the
+ *  environment is named in the composed text. */
+export function agentInstructionsQueryKey(testId: string, environmentId: string | null) {
+  return ["agent-instructions", testId, environmentId ?? "default"] as const;
+}
+
+/**
+ * The three layers of AI Instructions, composed as the next session would receive them.
+ *
+ * Fetched on demand rather than with the editor: composing is what the author asks for when they
+ * want to check, and it is the whole document, not a field.
+ */
+export function useAgentInstructions(
+  testId: string,
+  environmentId: string | null,
+  opts?: { enabled?: boolean },
+) {
+  return useQuery({
+    queryKey: agentInstructionsQueryKey(testId, environmentId),
+    queryFn: () => fetchAgentInstructions(testId, environmentId ?? undefined),
+    enabled: opts?.enabled ?? true,
+  });
 }
 
 /** The ordered Checkpoint Manifest of an Agent-Driven Test. */

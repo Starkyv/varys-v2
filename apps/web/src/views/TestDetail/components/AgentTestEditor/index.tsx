@@ -7,11 +7,15 @@ import {
   Card,
   ChevronDown,
   Clock,
+  cx,
   EmptyState,
+  Eye,
   IconButton,
   Input,
   Plus,
+  Select,
   Sparkles,
+  Spinner,
   Trash,
 } from "@varys/ui";
 import { useState } from "react";
@@ -21,7 +25,9 @@ import { useToast } from "../../../../context/toast";
 import {
   useAddAgentCheckpoint,
   useAgentCheckpoints,
+  useAgentInstructions,
   useDeleteAgentCheckpoint,
+  useEnvironments,
   useReorderAgentCheckpoints,
   useUpdateAgentCheckpoint,
   useUpdateTest,
@@ -82,7 +88,81 @@ export function AgentTestEditor({ config }: { config: TestConfigView }) {
 
         <AddCheckpoint testId={config.id} />
       </Card>
+      <ComposedInstructionsCard config={config} />
     </>
+  );
+}
+
+/**
+ * The three layers of AI Instructions — the suite's, this test's, and each checkpoint's — laid out
+ * exactly as the next Agent Run Session will receive them.
+ *
+ * It exists because three layers assembled out of sight are what produce a baffling run an hour
+ * later: the author who wrote one of them cannot otherwise tell what the other two turned it into.
+ * Last on the page on purpose — everything above it is an input to what it shows.
+ *
+ * The text is fetched from the server rather than assembled here. A preview stitched together in
+ * the browser would be a preview of a different document the moment either side drifted, and the
+ * one thing this must be is the same document.
+ */
+function ComposedInstructionsCard({ config }: { config: TestConfigView }) {
+  const [open, setOpen] = useState(false);
+  const [environmentId, setEnvironmentId] = useState("");
+  const environments = useEnvironments({ enabled: open });
+  const preview = useAgentInstructions(config.id, environmentId || null, { enabled: open });
+
+  return (
+    <Card className={styles.card}>
+      <button
+        type="button"
+        className={styles.previewToggle}
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
+        <ChevronDown size={14} className={cx(styles.chevron, open && styles.chevronOpen)} />
+        <Eye size={15} />
+        <span className={styles.cardTitle}>Composed instructions</span>
+        <span className={styles.previewHint}>
+          what the agent is handed — suite, then this test, then each checkpoint
+        </span>
+      </button>
+
+      {open && (
+        <div className={styles.preview}>
+          <div className={styles.previewBar}>
+            <span className={styles.label}>Environment</span>
+            <Select
+              selectSize="sm"
+              className={styles.previewEnv}
+              ariaLabel="Environment to compose against"
+              value={environmentId}
+              onValueChange={setEnvironmentId}
+              options={[
+                { value: "", label: "None (default)" },
+                ...(environments.data ?? []).map((e) => ({ value: e.id, label: e.name })),
+              ]}
+            />
+            {preview.isFetching && <Spinner size={14} />}
+            {preview.data && (
+              <span className={styles.previewMeta}>
+                {preview.data.suites.length > 0
+                  ? `Includes shared context from ${preview.data.suites.join(", ")}`
+                  : "No suite contributes to this test"}
+              </span>
+            )}
+          </div>
+
+          {preview.isError && (
+            <p className={styles.previewError}>
+              {preview.error instanceof Error
+                ? preview.error.message
+                : "Couldn’t compose the instructions"}
+            </p>
+          )}
+          {preview.data && <pre className={styles.previewBody}>{preview.data.instructions}</pre>}
+        </div>
+      )}
+    </Card>
   );
 }
 
