@@ -11,6 +11,7 @@ export {
   repairJobs,
   repairJobTests,
   runAssertions,
+  runEvidence,
   runNetwork,
   runResults,
   runs,

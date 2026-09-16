@@ -901,10 +901,12 @@ function AgentCredentialsCard() {
             aria-label="Allow this credential to start agent runs"
           />
           <span className={styles.settingDesc}>
-            <strong>Let it start agent-driven runs.</strong> Off by default. An agent that can start
-            runs can keep retrying until something goes green, which is exactly the evidence the
-            review gate exists to refuse — turn it on only for a drainer whose whole job is running
-            agent-driven tests. It cannot be changed later; re-provision to change it.
+            <strong>Let it run agent-driven tests.</strong> Off by default. Grants the whole session
+            surface — starting a run, submitting checkpoints and evidence, and finishing it. An
+            agent that can drive runs can keep retrying until something goes green, which is exactly
+            the evidence the review gate exists to refuse, so turn it on only for a drainer whose
+            whole job is running agent-driven tests. It cannot be changed later; re-provision to
+            change it.
           </span>
         </label>
       </div>

@@ -9,6 +9,7 @@ import {
   baselines,
   environments,
   runAssertions,
+  runEvidence,
   runNetwork,
   runResults,
   runs,
@@ -39,7 +40,12 @@ import type {
   StepRun,
   TuningInput,
 } from "@varys/review-contract";
-import { deriveRunOutcome, isRepairInReview, type RunFailureKind } from "@varys/review-contract";
+import {
+  deriveRunOutcome,
+  isRepairInReview,
+  rollupRunStatus,
+  type RunFailureKind,
+} from "@varys/review-contract";
 import { describeStep, type TestDefinition } from "@varys/step-schema";
 import type { StorageAdapter } from "@varys/storage-adapter";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
@@ -658,6 +664,13 @@ export class RunsService {
     const keys = new Set<string>();
     if (run.trace) keys.add(run.trace);
     for (const r of results) for (const k of [r.actual, r.diff]) if (k) keys.add(k);
+    // Agent-attached evidence belongs to this run and nothing else — it keys no baseline by
+    // construction, so it is always the run's to purge.
+    const evidence = await this.db
+      .select({ key: runEvidence.artifactKey })
+      .from(runEvidence)
+      .where(eq(runEvidence.runId, runId));
+    for (const e of evidence) if (e.key) keys.add(e.key);
 
     // An approved checkpoint's `actual` becomes the live golden (approve reuses the key),
     // so never purge a blob the baselines table still references.
@@ -673,6 +686,7 @@ export class RunsService {
     // transaction.
     await this.db.transaction(async (tx) => {
       await tx.delete(runResults).where(eq(runResults.runId, runId));
+      await tx.delete(runEvidence).where(eq(runEvidence.runId, runId));
       await tx.delete(runAssertions).where(eq(runAssertions.runId, runId));
       await tx.delete(runSteps).where(eq(runSteps.runId, runId));
       await tx.delete(runNetwork).where(eq(runNetwork.runId, runId));
@@ -748,12 +762,9 @@ export class RunsService {
    * reviewing the partial checkpoints a run captured before it failed must not flip it
    * to passed — and queued/running are owned by the worker. Per-checkpoint effective
    * status mirrors the UI: approved→passed, rejected→regression, else the stored
-   * reviewState; rollup is any-missing→failed, else any-pending→needs_review, else
-   * any-rejected→failed, else passed.
-   *
-   * `missing` is checked first and hard-fails: an unfilled Checkpoint Manifest slot is neither
-   * work awaiting a human nor something a decision on a SIBLING checkpoint can resolve, so
-   * resolving the last reviewable checkpoint on such a run must not roll it up to passed.
+   * reviewState. The rollup itself is {@link rollupRunStatus} — shared with the agent-run path,
+   * which reaches the same column from the other direction (filling a Checkpoint Manifest slot
+   * rather than resolving a finished run), and must not be allowed to disagree with this one.
    */
   private async recomputeRunStatus(runId: string): Promise<void> {
     const [run] = await this.db
@@ -768,16 +779,12 @@ export class RunsService {
       .from(runResults)
       .where(eq(runResults.runId, runId));
 
-    let anyMissing = false;
-    let anyPending = false;
-    let anyRejected = false;
-    for (const r of results) {
-      if (r.reviewState === "missing") anyMissing = true; // an unfilled slot — nothing resolves it
-      else if (r.resolution === "rejected") anyRejected = true;
-      else if (r.resolution === "approved") continue; // resolved → passed
-      else if (r.reviewState === "pending-baseline" || r.reviewState === "diff") anyPending = true;
-    }
-    const next = anyMissing ? "failed" : anyPending ? "needs_review" : anyRejected ? "failed" : "passed";
+    const next = rollupRunStatus(
+      results.map((r) => ({
+        reviewState: r.reviewState as ReviewState,
+        resolution: r.resolution as Resolution | null,
+      })),
+    );
     if (next === run.status) return;
     await this.db.update(runs).set({ status: next, updatedAt: new Date() }).where(eq(runs.id, runId));
   }

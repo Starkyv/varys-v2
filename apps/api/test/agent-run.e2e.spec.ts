@@ -9,13 +9,14 @@ import {
   baselines,
   createDb,
   type DbHandle,
+  runEvidence,
   runResults,
   runs,
   testVersions,
 } from "@varys/db";
 import type { AgentCheckpoint, CreatedAgentCredential } from "@varys/review-contract";
 import { LocalFsAdapter } from "@varys/storage-adapter";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
@@ -445,5 +446,550 @@ describe("Agent Run Session — red before the agent does anything", () => {
       .from(agentCheckpoints)
       .where(eq(agentCheckpoints.testId, testId));
     expect(remaining).toHaveLength(3);
+  });
+  /**
+   * Reporting into a session: the three tools that turn a pre-seeded red run into a record of
+   * what was actually seen.
+   *
+   * The properties worth more than the happy path are all about what Varys refuses to let the
+   * agent conclude — a verdict with no argument behind it, a slot name nobody agreed on, a pass on
+   * a picture no human has ever blessed, and a run that quietly forgets the slots it never
+   * reached. Each of those is one assertion here, because each is one way a green could be
+   * manufactured by an agent that meant no harm.
+   */
+  describe("submitting, finishing, and seeding baselines", () => {
+    let submitTestId: string;
+
+    /** A PNG, as far as anything in this path is concerned: the real 8-byte signature plus a
+     *  marker, so two captures are distinguishable without pulling in an encoder. */
+    const png = (marker: string): Buffer =>
+      Buffer.concat([
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+        Buffer.from(marker),
+      ]);
+    const b64 = (marker: string): string => png(marker).toString("base64");
+
+    interface SubmitResult {
+      runId: string;
+      checkpoint: string;
+      verdict: string;
+      hadBaseline: boolean;
+      reviewState: string;
+      remaining: string[];
+      note: string;
+    }
+    interface FinishResult {
+      runId: string;
+      outcome: string;
+      status: string;
+      failureKind: string | null;
+      checkpoints: { name: string; reviewState: string }[];
+      unreached: string[];
+      note: string;
+    }
+
+    /** Call a tool and parse its JSON payload, asserting it was not an error. */
+    const ok = async <T>(token: string, name: string, args: unknown): Promise<T> => {
+      const res = await callTool(token, name, args);
+      expect(res.isError, res.content[0]?.text).toBeFalsy();
+      return JSON.parse(res.content.find((c) => c.type === "text")?.text ?? "{}") as T;
+    };
+
+    const submit = (runId: string, name: string, extra: Record<string, unknown> = {}) =>
+      ok<SubmitResult>(mcpToken(), "submit_checkpoint", {
+        runId,
+        name,
+        image: b64(name),
+        verdict: "pass",
+        reasoning: `The ${name} state matches what the instructions describe.`,
+        ...extra,
+      });
+
+    const rowsOf = (runId: string) =>
+      handle.db
+        .select({
+          name: runResults.checkpointName,
+          reviewState: runResults.reviewState,
+          actualArtifactKey: runResults.actualArtifactKey,
+          baselineArtifactKey: runResults.baselineArtifactKey,
+          judgeReasoning: runResults.judgeReasoning,
+          captureTool: runResults.captureTool,
+          captureViewport: runResults.captureViewport,
+          captureDeviceScale: runResults.captureDeviceScale,
+        })
+        .from(runResults)
+        .where(eq(runResults.runId, runId))
+        .orderBy(asc(runResults.createdAt));
+
+    const runRow = async (runId: string) => {
+      const [row] = await handle.db
+        .select({
+          status: runs.status,
+          failureKind: runs.failureKind,
+          agentSummary: runs.agentSummary,
+        })
+        .from(runs)
+        .where(eq(runs.id, runId))
+        .limit(1);
+      return row;
+    };
+
+    beforeAll(async () => {
+      const created = await authed(app)
+        .post("/tests/agent")
+        .send({ name: "reporting journey", instructions: "Sign in as qa@acme.io / hunter2." })
+        .expect(201);
+      submitTestId = created.body.id as string;
+      for (const cp of [
+        { name: "home", instructions: "Land on the home page.", comparePrompt: "The hero renders." },
+        { name: "detail", instructions: "Open the first item.", comparePrompt: "The detail panel is open." },
+      ]) {
+        await authed(app).post(`/tests/${submitTestId}/agent-checkpoints`).send(cp).expect(201);
+      }
+    });
+
+    it("fills the pre-seeded slot with the capture, the verdict and the reasoning behind it", async () => {
+      const { session } = await start({ testId: submitTestId, environmentId });
+
+      const result = await submit(session.runId, "home", {
+        reasoning: "Hero image, nav and the sign-in chip all present; the counter differs, which the prompt says to ignore.",
+        capture: { tool: "chrome-devtools", viewport: "1440x900", deviceScale: 2 },
+      });
+
+      expect(result.checkpoint).toBe("home");
+      expect(result.remaining).toEqual(["detail"]);
+
+      const rows = await rowsOf(session.runId);
+      const home = rows.find((r) => r.name === "home");
+      expect(home?.actualArtifactKey).toBeTruthy();
+      expect(home?.judgeReasoning).toContain("the counter differs");
+      // Capture metadata rides beside the artifact as EVIDENCE: nothing is enforced against it,
+      // and its whole job is to let a reviewer ask whether two images were taken the same way.
+      expect(home).toMatchObject({
+        captureTool: "chrome-devtools",
+        captureViewport: "1440x900",
+        captureDeviceScale: 2,
+      });
+
+      // The bytes really landed, under this run's own key.
+      const stored = await storage.get(home?.actualArtifactKey as string);
+      expect(stored?.equals(png("home"))).toBe(true);
+
+      // And the slot it did NOT report is untouched — still missing, still red.
+      expect(rows.find((r) => r.name === "detail")?.reviewState).toBe("missing");
+    });
+
+    it("refuses a verdict with no reasoning — and the slot stays missing", async () => {
+      const { session } = await start({ testId: submitTestId, environmentId });
+
+      const refused = await callTool(mcpToken(), "submit_checkpoint", {
+        runId: session.runId,
+        name: "home",
+        image: b64("home"),
+        verdict: "pass",
+        reasoning: "   ",
+      });
+      expect(refused.isError).toBe(true);
+      expect(refused.content[0].text).toContain("reasoning");
+
+      // A refused submission is not a partial one: nothing was written, so the run is as red as
+      // it was before the call.
+      const rows = await rowsOf(session.runId);
+      expect(rows.every((r) => r.reviewState === "missing")).toBe(true);
+      expect(rows.every((r) => r.actualArtifactKey === null)).toBe(true);
+    });
+
+    it("refuses a name outside the Manifest, and says which names it will take", async () => {
+      const { session } = await start({ testId: submitTestId, environmentId });
+
+      const refused = await callTool(mcpToken(), "submit_checkpoint", {
+        runId: session.runId,
+        name: "Home page loaded",
+        image: b64("x"),
+        verdict: "pass",
+        reasoning: "Looked right to me.",
+      });
+      expect(refused.isError).toBe(true);
+      expect(refused.content[0].text).toContain("CLOSED set");
+      // Told the real names, so the refusal is recoverable rather than a dead end.
+      expect(refused.content[0].text).toContain('"home"');
+      expect(refused.content[0].text).toContain('"detail"');
+
+      // No slot was invented: the Manifest is exactly as long as it was.
+      const rows = await rowsOf(session.runId);
+      expect(rows.map((r) => r.name)).toEqual(["home", "detail"]);
+    });
+
+    it("records a pass on a slot with no baseline as pending-baseline — a verdict about nothing is inert", async () => {
+      const { session } = await start({ testId: submitTestId, environmentId });
+
+      const result = await submit(session.runId, "home");
+      expect(result.hadBaseline).toBe(false);
+      expect(result.verdict).toBe("pass");
+      // The verdict said pass. What was STORED is a proposal awaiting a human.
+      expect(result.reviewState).toBe("pending-baseline");
+      expect(result.note).toContain("do not report this slot as passing");
+
+      const rows = await rowsOf(session.runId);
+      expect(rows.find((r) => r.name === "home")?.reviewState).toBe("pending-baseline");
+      expect(rows.find((r) => r.name === "home")?.baselineArtifactKey).toBeNull();
+    });
+
+    it("derives pending-baseline for a complete first run — never passed", async () => {
+      const { session } = await start({ testId: submitTestId, environmentId });
+      await submit(session.runId, "home");
+      await submit(session.runId, "detail");
+
+      const finished = await ok<FinishResult>(mcpToken(), "finish_agent_run", {
+        runId: session.runId,
+        summary: "Walked both states. No baselines existed, so both captures are proposals.",
+      });
+
+      // The word the agent is handed to report the run in — and it is not a pass.
+      expect(finished.outcome).toBe("pending-baseline");
+      expect(finished.unreached).toEqual([]);
+      expect(finished.note).toContain("VERIFIED NOTHING");
+
+      // The run itself agrees, in the runs list a human reads.
+      const list = await authed(app).get(`/runs?testId=${submitTestId}`).expect(200);
+      const listed = (list.body as { runId: string; outcome: string }[]).find(
+        (r) => r.runId === session.runId,
+      );
+      expect(listed?.outcome).toBe("pending-baseline");
+
+      // …and the stored status is no longer the start-time red, because the rows no longer say so.
+      const row = await runRow(session.runId);
+      expect(row.status).toBe("needs_review");
+      expect(row.failureKind).toBeNull();
+    });
+
+    it("stores the agent's written summary on the run, and closes it to further reporting", async () => {
+      const { session } = await start({ testId: submitTestId, environmentId });
+      await submit(session.runId, "home");
+
+      await ok<FinishResult>(mcpToken(), "finish_agent_run", {
+        runId: session.runId,
+        summary: "Could not reach the detail panel — the first item's link 404s on staging.",
+      });
+
+      const row = await runRow(session.runId);
+      expect(row.agentSummary).toContain("404s on staging");
+
+      // Finished means finished: a session cannot declare itself done and then keep revising
+      // what it reported.
+      const late = await callTool(mcpToken(), "submit_checkpoint", {
+        runId: session.runId,
+        name: "detail",
+        image: b64("late"),
+        verdict: "pass",
+        reasoning: "Actually I did reach it.",
+      });
+      expect(late.isError).toBe(true);
+      expect(late.content[0].text).toContain("already finished");
+      const again = await callTool(mcpToken(), "finish_agent_run", {
+        runId: session.runId,
+        summary: "Second thoughts.",
+      });
+      expect(again.isError).toBe(true);
+    });
+
+    it("leaves a half-walked run failed with reason unreached, whatever was reported", async () => {
+      const { session } = await start({ testId: submitTestId, environmentId });
+      await submit(session.runId, "home");
+
+      const finished = await ok<FinishResult>(mcpToken(), "finish_agent_run", {
+        runId: session.runId,
+        summary: "Home was fine. The detail panel never opened.",
+      });
+
+      expect(finished.outcome).toBe("failed");
+      expect(finished.unreached).toEqual(["detail"]);
+      expect(finished.note).toContain("never filled");
+
+      const row = await runRow(session.runId);
+      expect(row.status).toBe("failed");
+      expect(row.failureKind).toBe("unreached");
+
+      // One reported slot does not soften the other: this is red BECAUSE something is missing,
+      // not merely amber because something is pending.
+      const rows = await rowsOf(session.runId);
+      expect(rows.find((r) => r.name === "home")?.reviewState).toBe("pending-baseline");
+      expect(rows.find((r) => r.name === "detail")?.reviewState).toBe("missing");
+    });
+
+    it("attaches unlimited unnamed evidence that fills no slot and keys no baseline", async () => {
+      const { session } = await start({ testId: submitTestId, environmentId });
+
+      for (const [i, note] of ["the empty state", "the console errors", "the network tab"].entries()) {
+        const res = await ok<{ attached: number; note: string }>(mcpToken(), "submit_evidence", {
+          runId: session.runId,
+          image: b64(`evidence-${i}`),
+          note,
+        });
+        expect(res.attached).toBe(i + 1);
+      }
+
+      const evidence = await handle.db
+        .select({ artifactKey: runEvidence.artifactKey, note: runEvidence.note })
+        .from(runEvidence)
+        .where(eq(runEvidence.runId, session.runId))
+        .orderBy(asc(runEvidence.createdAt));
+      expect(evidence).toHaveLength(3);
+      expect(evidence.map((e) => e.note)).toEqual([
+        "the empty state",
+        "the console errors",
+        "the network tab",
+      ]);
+      expect(await storage.get(evidence[0].artifactKey)).toBeTruthy();
+
+      // Nameless by design: evidence can never be mistaken for a Manifest slot, and the run is
+      // exactly as red as it was before any of it was attached.
+      const rows = await rowsOf(session.runId);
+      expect(rows.map((r) => r.name)).toEqual(["home", "detail"]);
+      expect(rows.every((r) => r.reviewState === "missing")).toBe(true);
+      expect((await runRow(session.runId)).failureKind).toBe("unreached");
+    });
+
+    it("sends the proposals to the review queue, where approving seeds the baseline that the NEXT run is judged against", async () => {
+      const first = await start({ testId: submitTestId, environmentId });
+      await submit(first.session.runId, "home", {
+        reasoning: "First capture of the home page; nothing to compare it to yet.",
+      });
+
+      // It is in the same queue, and on the same footing, as a pinned test's first capture.
+      const queue = await authed(app).get("/runs/needs-review").expect(200);
+      const item = (queue.body as { runId: string; checkpointName: string; environment: string }[]).find(
+        (q) => q.runId === first.session.runId,
+      );
+      expect(item).toMatchObject({ checkpointName: "home", environment: "staging" });
+
+      // A human approves it — the one gate, and the same gate a pinned test passes through.
+      await authed(app)
+        .post(`/runs/${first.session.runId}/checkpoints/home/approve`)
+        .expect(201);
+
+      // Per environment: staging now has a golden, production still has none.
+      const staging = await start({ testId: submitTestId, environmentId });
+      expect(staging.session.manifest.find((m) => m.name === "home")?.hasBaseline).toBe(true);
+      const production = await start({ testId: submitTestId, environmentId: otherEnvironmentId });
+      expect(production.session.manifest.find((m) => m.name === "home")?.hasBaseline).toBe(false);
+
+      // And with a baseline behind it, a pass is finally allowed to mean something.
+      const verified = await submit(staging.session.runId, "home", {
+        reasoning: "Same layout as the golden; the counter moved, which the prompt permits.",
+      });
+      expect(verified.hadBaseline).toBe(true);
+      expect(verified.reviewState).toBe("passed");
+    });
+
+    it("fills each slot exactly once — a verdict is evidence, not a draft to revise", async () => {
+      const { session } = await start({ testId: submitTestId, environmentId });
+      await submit(session.runId, "home");
+
+      const again = await callTool(mcpToken(), "submit_checkpoint", {
+        runId: session.runId,
+        name: "home",
+        image: b64("home-take-two"),
+        verdict: "pass",
+        reasoning: "Second look, I like this capture better.",
+      });
+      expect(again.isError).toBe(true);
+      expect(again.content[0].text).toContain("filled exactly once");
+
+      // The first capture is what stands — the second did not overwrite it.
+      const rows = await rowsOf(session.runId);
+      const home = rows.find((r) => r.name === "home");
+      const stored = await storage.get(home?.actualArtifactKey as string);
+      expect(stored?.equals(png("home"))).toBe(true);
+    });
+
+    it("cannot talk a failed comparison round to a pass inside the same session", async () => {
+      // A baseline, so a `fail` is a real regression rather than a first capture.
+      const seed = await start({ testId: submitTestId, environmentId });
+      await submit(seed.session.runId, "detail");
+      await authed(app).post(`/runs/${seed.session.runId}/checkpoints/detail/approve`).expect(201);
+
+      const { session } = await start({ testId: submitTestId, environmentId });
+      const failed = await submit(session.runId, "detail", {
+        verdict: "fail",
+        reasoning: "The panel is empty where the golden shows three rows.",
+      });
+      expect(failed.reviewState).toBe("diff");
+
+      // Re-rolling a failed verdict until it agrees is how a real regression disappears. The rule
+      // lives in the server, not in the tool description that also asks for it.
+      const retry = await callTool(mcpToken(), "submit_checkpoint", {
+        runId: session.runId,
+        name: "detail",
+        image: b64("detail-retry"),
+        verdict: "pass",
+        reasoning: "Reloaded and now it looks fine.",
+      });
+      expect(retry.isError).toBe(true);
+
+      const rows = await rowsOf(session.runId);
+      expect(rows.find((r) => r.name === "detail")?.reviewState).toBe("diff");
+    });
+
+    it("cannot rewrite an approved baseline's bytes by re-submitting the slot it came from", async () => {
+      const { session } = await start({ testId: submitTestId, environmentId });
+      await submit(session.runId, "home");
+
+      // A human approves mid-session. `approve` promotes this run's actual artifact BY REFERENCE,
+      // so the live golden now points at exactly the key a re-submission would write to.
+      await authed(app).post(`/runs/${session.runId}/checkpoints/home/approve`).expect(201);
+      const [golden] = await handle.db
+        .select({ artifactKey: baselines.artifactKey })
+        .from(baselines)
+        .where(
+          and(
+            eq(baselines.testId, submitTestId),
+            eq(baselines.checkpointName, "home"),
+            eq(baselines.environment, "staging"),
+          ),
+        )
+        .limit(1);
+
+      const overwrite = await callTool(mcpToken(), "submit_checkpoint", {
+        runId: session.runId,
+        name: "home",
+        image: b64("not-the-approved-picture"),
+        verdict: "pass",
+        reasoning: "Here is a nicer one.",
+      });
+      expect(overwrite.isError).toBe(true);
+
+      // The golden is still the bytes the human actually looked at. Approving is the one human
+      // gate in the whole feature, and an agent must not be able to walk through it sideways.
+      expect((await storage.get(golden.artifactKey))?.equals(png("home"))).toBe(true);
+    });
+
+    it("never retries anything — a failed verdict is evidence, not a dice roll", async () => {
+      // Give "home" a baseline so a `fail` is a real comparison failure rather than a first capture.
+      const seed = await start({ testId: submitTestId, environmentId });
+      await submit(seed.session.runId, "home");
+      await authed(app).post(`/runs/${seed.session.runId}/checkpoints/home/approve`).expect(201);
+
+      const before = (await authed(app).get(`/runs?testId=${submitTestId}`).expect(200)).body as unknown[];
+      const { session } = await start({ testId: submitTestId, environmentId });
+      await submit(session.runId, "home", {
+        verdict: "fail",
+        reasoning: "The hero is blank where the golden shows a rendered chart.",
+      });
+
+      const rows = await rowsOf(session.runId);
+      expect(rows.find((r) => r.name === "home")?.reviewState).toBe("diff");
+
+      // Nothing re-ran it: the failure did not queue a second attempt, and the only new run is
+      // the one this test started itself.
+      const after = (await authed(app).get(`/runs?testId=${submitTestId}`).expect(200)).body as unknown[];
+      expect(after.length).toBe(before.length + 1);
+
+      // Nor is there any other way to make Varys re-walk this kind: the worker path refuses it
+      // outright, so there is no server-side replay to schedule, retry or redeliver.
+      const refused = await authed(app).post("/runs").send({ testId: submitTestId, environmentId }).expect(400);
+      expect(refused.body.message).toContain("your own local Claude");
+    });
+
+    it("deletes cleanly, taking its evidence and its blobs with it", async () => {
+      const { session } = await start({ testId: submitTestId, environmentId });
+      await submit(session.runId, "home");
+      await ok<{ attached: number }>(mcpToken(), "submit_evidence", {
+        runId: session.runId,
+        image: b64("evidence-to-delete"),
+        note: "the console, before it all went wrong",
+      });
+      const [attached] = await handle.db
+        .select({ artifactKey: runEvidence.artifactKey })
+        .from(runEvidence)
+        .where(eq(runEvidence.runId, session.runId));
+
+      // Evidence rows carry a non-cascading FK to `runs`, so a run that has any is exactly the
+      // run whose deletion would fail if the chain forgot about them.
+      await authed(app).delete(`/runs/${session.runId}`).expect(200);
+
+      expect(
+        await handle.db
+          .select({ id: runEvidence.id })
+          .from(runEvidence)
+          .where(eq(runEvidence.runId, session.runId)),
+      ).toHaveLength(0);
+      // The blob goes too: evidence keys no baseline, so nothing else can still want it.
+      expect(await storage.get(attached.artifactKey)).toBeNull();
+    });
+
+    it("refuses a pinned test's run — a submitted picture may never overwrite a captured one", async () => {
+      const pinnedRun = await handle.db
+        .insert(runs)
+        .values({
+          testVersionId: (
+            await handle.db
+              .select({ id: testVersions.id })
+              .from(testVersions)
+              .where(eq(testVersions.testId, pinnedTestId))
+              .limit(1)
+          )[0].id,
+          status: "passed",
+        })
+        .returning({ id: runs.id });
+
+      const refused = await callTool(mcpToken(), "submit_checkpoint", {
+        runId: pinnedRun[0].id,
+        name: "anything",
+        image: b64("forged"),
+        verdict: "pass",
+        reasoning: "Trust me.",
+      });
+      expect(refused.isError).toBe(true);
+      expect(refused.content[0].text).toContain("pinned test");
+
+      const evidenceRefused = await callTool(mcpToken(), "submit_evidence", {
+        runId: pinnedRun[0].id,
+        image: b64("forged"),
+      });
+      expect(evidenceRefused.isError).toBe(true);
+    });
+
+    it("refuses an image that is not a PNG, rather than storing something a reviewer cannot see", async () => {
+      const { session } = await start({ testId: submitTestId, environmentId });
+      const refused = await callTool(mcpToken(), "submit_checkpoint", {
+        runId: session.runId,
+        name: "home",
+        image: Buffer.from("/tmp/screenshots/home.png").toString("base64"),
+        verdict: "pass",
+        reasoning: "Here is the path to the file.",
+      });
+      expect(refused.isError).toBe(true);
+      expect(refused.content[0].text).toContain("not a PNG");
+    });
+
+    it("gates the whole session surface on the run capability, not just the verb that opens one", async () => {
+      const plain = await authed(app)
+        .post("/settings/agent-credentials")
+        .send({ label: "reporting-drainer", expiresInDays: 7 })
+        .expect(201);
+      const plainToken = (plain.body as CreatedAgentCredential).token;
+
+      const names = await toolNames(plainToken);
+      for (const tool of ["start_agent_run", "submit_checkpoint", "submit_evidence", "finish_agent_run"]) {
+        expect(names).not.toContain(tool);
+      }
+
+      // A credential that could report into a session a human opened would hold a capability
+      // nobody granted it, and would put the wrong actor on the record.
+      const { session } = await start({ testId: submitTestId, environmentId });
+      const refused = await callTool(plainToken, "submit_checkpoint", {
+        runId: session.runId,
+        name: "home",
+        image: b64("home"),
+        verdict: "pass",
+        reasoning: "Borrowed someone else's session.",
+      });
+      expect(refused.isError).toBe(true);
+      expect(refused.content[0].text).toContain("run capability");
+
+      const rows = await rowsOf(session.runId);
+      expect(rows.every((r) => r.reviewState === "missing")).toBe(true);
+    });
   });
 });

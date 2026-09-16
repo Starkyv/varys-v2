@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   deriveRunOutcome,
   isRepairInReview,
+  rollupRunStatus,
   type ReviewState,
   type Resolution,
   type RunOutcome,
@@ -219,5 +220,41 @@ describe("isRepairInReview", () => {
     // A human's own unreviewed-by-accident version is not a repair: no job behind it.
     expect(isRepairInReview(null, "unreviewed")).toBe(false);
     expect(isRepairInReview(null, null)).toBe(false);
+  });
+});
+
+/**
+ * The coarse `runs.status` rollup — deliberately separate from `deriveRunOutcome`, which refines
+ * how a run READS. This one decides what is stored, and two writers depend on it agreeing with
+ * itself: a human resolving a checkpoint, and an agent filling a Manifest slot.
+ */
+describe("rollupRunStatus", () => {
+  it("is passed only when every checkpoint matched or was promoted", () => {
+    expect(rollupRunStatus([cp("passed"), cp("passed")])).toBe("passed");
+    expect(rollupRunStatus([cp("pending-baseline", "approved"), cp("diff", "approved")])).toBe("passed");
+    expect(rollupRunStatus([])).toBe("passed");
+  });
+
+  it("is needs_review while anything is still undecided", () => {
+    expect(rollupRunStatus([cp("passed"), cp("pending-baseline")])).toBe("needs_review");
+    expect(rollupRunStatus([cp("diff")])).toBe("needs_review");
+  });
+
+  it("is failed when a checkpoint was rejected", () => {
+    expect(rollupRunStatus([cp("passed"), cp("diff", "rejected")])).toBe("failed");
+  });
+
+  // The rule the whole Agent-Driven story rests on: an unfilled Manifest slot is neither work
+  // awaiting a human nor something a decision on a SIBLING checkpoint can resolve.
+  it("is failed whenever a slot is missing, whatever else happened", () => {
+    expect(rollupRunStatus([cp("missing")])).toBe("failed");
+    expect(rollupRunStatus([cp("passed"), cp("missing")])).toBe("failed");
+    expect(rollupRunStatus([cp("pending-baseline", "approved"), cp("missing")])).toBe("failed");
+    // Every reviewable sibling resolved — the one thing that would otherwise roll up to passed.
+    expect(rollupRunStatus([cp("diff", "approved"), cp("missing")])).toBe("failed");
+  });
+
+  it("outranks a pending checkpoint, so a half-walked run never reads as amber", () => {
+    expect(rollupRunStatus([cp("pending-baseline"), cp("missing")])).toBe("failed");
   });
 });

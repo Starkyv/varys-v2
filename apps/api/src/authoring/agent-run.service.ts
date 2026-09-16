@@ -1,13 +1,23 @@
+import { randomUUID } from "node:crypto";
 import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import {
   agentCheckpoints,
   baselines,
   environments,
+  runEvidence,
   runResults,
   runs,
   testVersions,
   tests,
 } from "../db/schema";
+import {
+  deriveRunOutcome,
+  rollupRunStatus,
+  type Resolution,
+  type ReviewState,
+  type RunFailureKind,
+  type RunOutcome,
+} from "@varys/review-contract";
 import type { TestDefinition } from "@varys/step-schema";
 import type { StorageAdapter } from "@varys/storage-adapter";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
@@ -35,6 +45,53 @@ export interface AgentRunManifestSlot {
    *  nothing to compare against yet and the capture goes to a human for approval — so a verdict
    *  on it would be a guess about a picture nobody has blessed. */
   hasBaseline: boolean;
+}
+
+/** The agent's judgement of one slot. Only ever its own comparison of two pictures it holds —
+ *  Varys makes no model call on this path and has no second opinion to offer. */
+export type AgentVerdict = "pass" | "fail";
+
+/**
+ * How a capture was produced, as the agent describes it. Every field optional and none verified:
+ * Varys hosts no browser for this kind, so this is testimony, recorded because a reviewer
+ * comparing two baffling images needs to know whether they were even taken the same way.
+ */
+export interface AgentCaptureMeta {
+  /** e.g. `chrome-devtools`, `playwright`, `computer-use`. */
+  tool?: string;
+  /** e.g. `1440x900`. Free text — an unconstrained capture has no canonical spelling. */
+  viewport?: string;
+  /** Device pixel ratio, e.g. `2` on a Retina display. */
+  deviceScale?: number;
+}
+
+/** What filling one Manifest slot reports back — including the state Varys actually recorded,
+ *  which is not always the one the verdict asked for. */
+export interface AgentSubmitResult {
+  runId: string;
+  checkpoint: string;
+  verdict: AgentVerdict;
+  /** Was there an approved baseline to judge against? When false, the verdict is inert. */
+  hadBaseline: boolean;
+  /** What Varys STORED — `pending-baseline` whenever there was no baseline, whatever was said. */
+  reviewState: ReviewState;
+  /** Manifest slots still unfilled. While this is non-empty the run is red. */
+  remaining: string[];
+  note: string;
+}
+
+/** What closing the session reports back, in the same vocabulary the run view will show. */
+export interface AgentFinishResult {
+  runId: string;
+  /** The derived outcome — the word to report this run in, and often not `passed`. */
+  outcome: RunOutcome;
+  status: string;
+  failureKind: RunFailureKind | null;
+  checkpoints: { name: string; reviewState: ReviewState }[];
+  /** Slots that were never filled — the run's root finding when it is non-empty. */
+  unreached: string[];
+  path: string;
+  note: string;
 }
 
 /** What starting an Agent Run Session hands back: everything the run needs, in one call. */
@@ -177,6 +234,7 @@ export class AgentRunService {
 
     // Everything that makes this run red is written here, in ONE transaction, before the tool
     // returns — so there is no instant at which a run exists without its Manifest rows.
+    const seededAt = Date.now();
     const runId = await this.db.transaction(async (tx) => {
       const [run] = await tx
         .insert(runs)
@@ -195,7 +253,7 @@ export class AgentRunService {
         .returning({ id: runs.id });
 
       await tx.insert(runResults).values(
-        checkpoints.map((c) => ({
+        checkpoints.map((c, i) => ({
           runId: run.id,
           checkpointName: c.name,
           reviewState: "missing",
@@ -203,6 +261,15 @@ export class AgentRunService {
           // contextual. The team-wide default is carried rather than a magic number, so the
           // column reads as "the prevailing setting", not as a decision about this run.
           threshold: comparison.ratio,
+          // Stamped one millisecond apart, in Manifest order, rather than letting all of them
+          // take the statement's single `now()`. `created_at` is what every reader already sorts
+          // run results by — including the run view — and a batch insert would otherwise hand
+          // back the journey in whatever order the rows happened to come out of the table.
+          //
+          // It records journey order on the RUN, which is the point: the Manifest is a property
+          // of the run, so re-deriving the sequence later from `agent_checkpoints` would let an
+          // edit to the test silently reorder the history of a run that walked it.
+          createdAt: new Date(seededAt + i),
         })),
       );
       return run.id;
@@ -229,6 +296,338 @@ export class AgentRunService {
       note: noteFor(test.name, slots.length, withBaseline.size),
       images,
     };
+  }
+
+  /**
+   * Fill one Checkpoint Manifest slot: the capture, the verdict, and the reasoning behind it.
+   *
+   * The slot is looked up among the run's OWN pre-seeded rows, which is what makes the Manifest a
+   * closed set in practice rather than in principle — an agent cannot invent a slot, and equally
+   * cannot be tripped up by a checkpoint added to the test after its session began.
+   *
+   * Two things are refused, and both are refusals about honesty rather than hygiene:
+   *  - **no reasoning** — the session that drove is the session that judges, holding both images,
+   *    so the rationale is the entire audit trail. A verdict without one is an unfalsifiable
+   *    claim, and this is the compensating control the whole comparison design rests on.
+   *  - **a name outside the Manifest** — free naming is what would otherwise make a test red
+   *    forever when run 7 reports `Dashboard loaded` where run 1 reported `dashboard-empty`.
+   *
+   * And one thing is quietly overruled: a `pass` on a slot with no approved baseline lands as
+   * `pending-baseline` whatever the verdict said. There was nothing to compare against, so the
+   * verdict is inert — a first run cannot be talked into reporting success.
+   */
+  async submitCheckpoint(input: {
+    runId: string;
+    name: string;
+    /** The capture, base64 PNG. A `data:` URL prefix is tolerated and stripped. */
+    image: string;
+    verdict: AgentVerdict;
+    /** Why the verdict is what it is. Required, and stored as the checkpoint's judge reasoning. */
+    reasoning: string;
+    capture?: AgentCaptureMeta;
+  }): Promise<AgentSubmitResult> {
+    const session = await this.openRun(input.runId);
+    const name = (input.name ?? "").trim();
+    const reasoning = (input.reasoning ?? "").trim();
+    if (!reasoning) {
+      throw new BadRequestException(
+        "submit_checkpoint needs `reasoning` — say what you compared and why the verdict is what it is. Varys did not watch you drive and cannot see either image the way you can, so your rationale is the only record of how this was judged. A verdict on its own is not reviewable.",
+      );
+    }
+    if (input.verdict !== "pass" && input.verdict !== "fail") {
+      throw new BadRequestException(
+        `submit_checkpoint needs \`verdict\` to be "pass" or "fail" — got ${JSON.stringify(input.verdict)}.`,
+      );
+    }
+
+    const slot = session.slots.find((s) => s.checkpointName === name);
+    if (!slot) {
+      throw new BadRequestException(
+        `"${name}" is not a slot of this run's Checkpoint Manifest. The Manifest is a CLOSED set and this run's slots are: ${session.slots
+          .map((s) => `"${s.checkpointName}"`)
+          .join(", ")}. Submit under one of those names exactly — do not invent, rename or merge them. If none of them describes what you reached, that is a finding to report to the user, not a name to make up.`,
+      );
+    }
+
+    // A slot is filled ONCE, and this is a rule rather than a request — the tool description asks
+    // for the same thing, but ADR 0006's governing principle is that nothing which must hold is
+    // asked of the model. Two distinct things go wrong without it, and both turn a run greener
+    // than it earned:
+    //
+    //  - **A verdict becomes a draft.** A `fail` against an approved baseline lands as `diff`; a
+    //    second submission saying `pass` would flip the same row to `passed` and move the run from
+    //    `regression` to a clean green. Re-rolling a failed verdict until it agrees hides the exact
+    //    regression the checkpoint exists to catch, which the PRD rules out for assertions in the
+    //    same words.
+    //  - **An approved golden gets rewritten.** `approve` promotes this run's `actual_artifact_key`
+    //    into `baselines` BY REFERENCE, so once a human approves a slot mid-session the baseline
+    //    row points at exactly the key below. Writing it again would replace the bytes of an
+    //    approved baseline with a picture nobody approved — the agent performing, through a side
+    //    effect, the one act it is never allowed to perform.
+    //
+    // Re-walking is a new run, not an edit of this one: a fresh run is a clean record, where a
+    // revised one is a record that changed after the fact.
+    if (slot.reviewState !== "missing") {
+      throw new BadRequestException(
+        `"${name}" has already been reported on this run (it is ${slot.reviewState}${slot.resolution ? `, and a human has ${slot.resolution} it` : ""}), and a Manifest slot is filled exactly once. Your verdict on it stands as evidence and is not a draft to revise — if you believe you got it wrong, or the state has changed, start a new run with start_agent_run and walk it again. Do not re-capture this slot hoping for a different answer.`,
+      );
+    }
+
+    const bytes = decodePng(input.image, "submit_checkpoint");
+    const actualKey = `runs/${session.runId}/${artifactSegment(name)}.png`;
+    await this.storage.put(actualKey, bytes);
+
+    // The golden this capture is judged against, looked up under exactly the key `approve` writes.
+    // Its mere EXISTENCE is what decides the review state — the verdict only gets a say once
+    // there is something for it to have been a verdict about.
+    const [baseline] = await this.db
+      .select({ artifactKey: baselines.artifactKey })
+      .from(baselines)
+      .where(
+        and(
+          eq(baselines.testId, session.testId),
+          eq(baselines.checkpointName, name),
+          eq(baselines.environment, session.environment),
+          eq(baselines.viewportKey, session.viewportKey),
+        ),
+      )
+      .limit(1);
+
+    const reviewState: ReviewState = !baseline
+      ? "pending-baseline"
+      : input.verdict === "pass"
+        ? "passed"
+        : "diff";
+
+    await this.db
+      .update(runResults)
+      .set({
+        reviewState,
+        actualArtifactKey: actualKey,
+        baselineArtifactKey: baseline?.artifactKey ?? null,
+        judgeReasoning: reasoning,
+        captureTool: trimOrNull(input.capture?.tool),
+        captureViewport: trimOrNull(input.capture?.viewport),
+        captureDeviceScale:
+          typeof input.capture?.deviceScale === "number" && Number.isFinite(input.capture.deviceScale)
+            ? input.capture.deviceScale
+            : null,
+      })
+      .where(eq(runResults.id, slot.id));
+
+    const state = await this.reconcileRunStatus(session.runId);
+    const remaining = state.slots.filter((s) => s.reviewState === "missing").map((s) => s.name);
+    return {
+      runId: session.runId,
+      checkpoint: name,
+      verdict: input.verdict,
+      hadBaseline: Boolean(baseline),
+      reviewState,
+      remaining,
+      note: submitNoteFor(name, input.verdict, Boolean(baseline), remaining),
+    };
+  }
+
+  /**
+   * Attach an extra screenshot to the run — unnamed, unlimited, keying no baseline.
+   *
+   * "I could not find the filter, here is what the page looked like" is precisely what a reviewer
+   * needs in order to tell a broken app from a wrong instruction, and nothing about the closed
+   * Manifest requires forbidding it. Namelessness is what keeps the two apart: evidence cannot be
+   * mistaken for a slot, promoted to a baseline, or counted toward what the run verified.
+   */
+  async submitEvidence(input: {
+    runId: string;
+    image: string;
+    note?: string;
+  }): Promise<{ runId: string; attached: number; note: string }> {
+    const session = await this.openRun(input.runId);
+    const bytes = decodePng(input.image, "submit_evidence");
+    // Keyed by a fresh uuid rather than by position: evidence is unlimited and unordered-by-name,
+    // and a counter would collide the moment two attachments raced.
+    const key = `runs/${session.runId}/evidence/${randomUUID()}.png`;
+    await this.storage.put(key, bytes);
+    await this.db
+      .insert(runEvidence)
+      .values({ runId: session.runId, artifactKey: key, note: (input.note ?? "").trim() });
+
+    const attached = await this.db
+      .select({ id: runEvidence.id })
+      .from(runEvidence)
+      .where(eq(runEvidence.runId, session.runId));
+    return {
+      runId: session.runId,
+      attached: attached.length,
+      note: "Attached as run evidence. It keys no baseline and fills no Manifest slot — a slot is only filled by submit_checkpoint under one of the Manifest's own names.",
+    };
+  }
+
+  /**
+   * Close the session with the agent's written account of it.
+   *
+   * Finishing does NOT decide the outcome, and that separation is the point: the run's status is
+   * rolled up from its rows, which were being kept honest on every submission anyway, so an agent
+   * that never reaches this call has already left a correct run behind. What finishing adds is the
+   * narrative — the one part of the session Varys could not observe and cannot reconstruct.
+   */
+  async finish(input: { runId: string; summary: string }): Promise<AgentFinishResult> {
+    const session = await this.openRun(input.runId);
+    const summary = (input.summary ?? "").trim();
+    if (!summary) {
+      throw new BadRequestException(
+        "finish_agent_run needs a `summary` — your account of what happened, in your own words. Varys watched none of this session, so an empty summary means a run whose only story is its rows. Say what you did, what surprised you, and anything you could not reach.",
+      );
+    }
+
+    const state = await this.reconcileRunStatus(session.runId);
+    await this.db
+      .update(runs)
+      .set({ agentSummary: summary, updatedAt: new Date() })
+      .where(eq(runs.id, session.runId));
+
+    const outcome = deriveRunOutcome(
+      state.slots.map((s) => ({ reviewState: s.reviewState, resolution: s.resolution })),
+      { status: state.status },
+    );
+    this.log.log(
+      `finish_agent_run: run ${session.runId} finished — ${outcome} (${state.status}${state.failureKind ? `/${state.failureKind}` : ""})`,
+    );
+    return {
+      runId: session.runId,
+      outcome,
+      status: state.status,
+      failureKind: state.failureKind,
+      checkpoints: state.slots.map((s) => ({ name: s.name, reviewState: s.reviewState })),
+      unreached: state.slots.filter((s) => s.reviewState === "missing").map((s) => s.name),
+      path: `/runs/${session.runId}`,
+      note: finishNoteFor(outcome, state.slots),
+    };
+  }
+
+  /**
+   * Load a run this session may still write to, refusing the three ways it could be the wrong one.
+   *
+   * The kind check is the load-bearing one. Without it these tools would accept a PINNED run's id
+   * and overwrite a checkpoint Varys captured itself with a picture an agent supplied — which,
+   * once approved, becomes that test's golden. Nothing else in the feature would notice.
+   */
+  private async openRun(runId: string): Promise<{
+    runId: string;
+    testId: string;
+    environment: string;
+    viewportKey: string;
+    slots: {
+      id: string;
+      checkpointName: string;
+      reviewState: string;
+      resolution: string | null;
+    }[];
+  }> {
+    const id = (runId ?? "").trim();
+    if (!id) throw new BadRequestException("This needs the `runId` start_agent_run gave you.");
+    const [row] = await this.db
+      .select({
+        runId: runs.id,
+        environmentId: runs.environmentId,
+        agentSummary: runs.agentSummary,
+        testId: tests.id,
+        testName: tests.name,
+        kind: tests.kind,
+        definition: testVersions.definition,
+      })
+      .from(runs)
+      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
+      .innerJoin(tests, eq(tests.id, testVersions.testId))
+      .where(eq(runs.id, id))
+      .limit(1);
+    if (!row) throw new NotFoundException(`Run ${id} not found`);
+    if (row.kind !== "agent") {
+      throw new BadRequestException(
+        `Run ${id} is a run of "${row.testName}", a pinned test — Varys captured those checkpoints itself, and nothing may overwrite them with a submitted picture. These tools only address an Agent Run Session started with start_agent_run.`,
+      );
+    }
+    if (row.agentSummary != null) {
+      throw new BadRequestException(
+        `Run ${id} was already finished — its summary is written and the run is closed. A finished session cannot be revised: if there is more to say, start a new run rather than editing the record of this one.`,
+      );
+    }
+
+    const slots = await this.db
+      .select({
+        id: runResults.id,
+        checkpointName: runResults.checkpointName,
+        reviewState: runResults.reviewState,
+        resolution: runResults.resolution,
+      })
+      .from(runResults)
+      .where(eq(runResults.runId, id))
+      .orderBy(asc(runResults.createdAt));
+
+    return {
+      runId: row.runId,
+      testId: row.testId,
+      environment: (await this.environmentNameOf(row.environmentId)) ?? NO_ENVIRONMENT,
+      viewportKey: viewportKeyOf((row.definition as TestDefinition).viewport),
+      slots,
+    };
+  }
+
+  /**
+   * Re-derive `runs.status` and `failure_kind` from the run's rows.
+   *
+   * Run after EVERY submission, not only on finish, and that is deliberate. If the stored status
+   * were only corrected when the agent closed the session, a run whose every slot was reported by
+   * an agent that then crashed would sit at `failed`/`unreached` while its rows said otherwise —
+   * a red that is no longer true, which is as much a misreport as a green that never was. Doing it
+   * per submission keeps the column an answer to "what do the rows say?" at every instant, and
+   * leaves finishing free to be about the narrative.
+   *
+   * The rollup itself is {@link rollupRunStatus}, shared with the human review path.
+   */
+  private async reconcileRunStatus(runId: string): Promise<{
+    status: string;
+    failureKind: RunFailureKind | null;
+    slots: { name: string; reviewState: ReviewState; resolution: Resolution | null }[];
+  }> {
+    const rows = await this.db
+      .select({
+        name: runResults.checkpointName,
+        reviewState: runResults.reviewState,
+        resolution: runResults.resolution,
+        createdAt: runResults.createdAt,
+      })
+      .from(runResults)
+      .where(eq(runResults.runId, runId))
+      .orderBy(asc(runResults.createdAt));
+
+    const slots = rows.map((r) => ({
+      name: r.name,
+      reviewState: r.reviewState as ReviewState,
+      resolution: r.resolution as Resolution | null,
+    }));
+    const status = rollupRunStatus(slots);
+    // `unreached` belongs to unfilled slots specifically, not to every way the rollup can go red:
+    // a run failing because a human rejected a capture is a different fact with a different owner,
+    // and labelling it `unreached` would send it to the wrong place in every filter that reads it.
+    const failureKind: RunFailureKind | null = slots.some((s) => s.reviewState === "missing")
+      ? "unreached"
+      : null;
+    await this.db
+      .update(runs)
+      .set({ status, failureKind, updatedAt: new Date() })
+      .where(eq(runs.id, runId));
+    return { status, failureKind, slots };
+  }
+
+  /** An environment's name by id — `null` for an env-less run. */
+  private async environmentNameOf(environmentId: string | null): Promise<string | null> {
+    if (!environmentId) return null;
+    const [env] = await this.db
+      .select({ name: environments.name })
+      .from(environments)
+      .where(eq(environments.id, environmentId))
+      .limit(1);
+    return env?.name ?? null;
   }
 
   /**
@@ -350,9 +749,9 @@ function composeInstructions(input: {
  * failed. Saying so up front is what stops "I've begun the run" being relayed as "the run is
  * under way and looking fine".
  *
- * Deliberately names no reporting tool: the submit/finish surface is a later slice, and copy
- * that promises a tool the server does not register would send an agent at an Unknown tool
- * mid-run. Extend this when those tools exist.
+ * It names the reporting tools explicitly, because the failure this text exists to prevent is an
+ * agent that drives well and then reports nothing: a slot is only filled by the call that fills
+ * it, and there is no other way for good work to reach the run.
  */
 function noteFor(testName: string, slotCount: number, withBaseline: number): string {
   const seeded = `This run is ALREADY FAILED, with reason \`unreached\` — all ${slotCount} Checkpoint Manifest slot(s) of "${testName}" are seeded as missing, and each stays that way until it is actually reported. If you stop here, crash, or lose the connection, the run stays exactly this red; nothing infers anything from work you did but did not report.`;
@@ -364,5 +763,111 @@ function noteFor(testName: string, slotCount: number, withBaseline: number): str
       : `${withBaseline} slot(s) have an approved baseline attached below as images — compare against those, and remember the rest have none, so their captures await a human's approval rather than passing.`;
   const driving =
     "How you reach each state is yours to decide: Varys drives no browser for this kind and does not watch how you get there. Follow the instructions above.";
-  return `${seeded} ${closed} ${baseline} ${driving}`;
+  const reporting =
+    "Report each slot with submit_checkpoint (its Manifest name, your screenshot, a pass/fail verdict and your reasoning — reasoning is required), attach anything else worth seeing with submit_evidence, and close with finish_agent_run and your account of the session. Nothing you do outside those calls reaches the run.";
+  return `${seeded} ${closed} ${baseline} ${driving} ${reporting}`;
+}
+
+/** Trimmed, or null when there was nothing there — capture metadata is optional at every field. */
+function trimOrNull(value: string | undefined): string | null {
+  const trimmed = (value ?? "").trim();
+  return trimmed ? trimmed : null;
+}
+
+/**
+ * A checkpoint name, made safe to use as one path segment WITHOUT losing which name it was.
+ *
+ * Percent-escaping rather than collapsing unsafe characters to `_`, because collapsing is not
+ * injective: `"cart/empty"` and `"cart empty"` would land on the same key, and one slot would
+ * silently show the other's picture. A wrong image under a right name is the single most
+ * misleading thing this feature could produce.
+ */
+function artifactSegment(name: string): string {
+  return name.replace(
+    /[^A-Za-z0-9._-]/g,
+    (c) => `%${c.charCodeAt(0).toString(16).padStart(2, "0")}`,
+  );
+}
+
+/**
+ * Base64 (or a `data:` URL) in, PNG bytes out.
+ *
+ * The format check is not fussiness. These bytes become an artifact a human reviews and may
+ * promote to a baseline, and the two ways this call goes wrong in practice — a `data:` prefix left
+ * on, or a file PATH sent where bytes were meant — both produce something that stores perfectly
+ * and renders as nothing at all. Refusing here turns a silently blank review into a message the
+ * agent can act on, one tool call after the mistake rather than a day later.
+ */
+function decodePng(image: string, tool: string): Buffer {
+  const raw = (image ?? "").trim();
+  if (!raw) {
+    throw new BadRequestException(
+      `${tool} needs \`image\` — the screenshot itself, base64-encoded PNG bytes.`,
+    );
+  }
+  // A data URL is what several capture tools hand back, so it is tolerated rather than refused.
+  const base64 = raw.replace(/^data:image\/[a-z+]+;base64,/i, "");
+  const bytes = Buffer.from(base64, "base64");
+  if (bytes.length === 0) {
+    throw new BadRequestException(`${tool}: \`image\` decoded to no bytes — is it really base64?`);
+  }
+  // 89 50 4E 47 0D 0A 1A 0A — the PNG signature.
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  if (!bytes.subarray(0, png.length).equals(png)) {
+    throw new BadRequestException(
+      `${tool}: \`image\` is not a PNG. Send the screenshot's raw bytes, base64-encoded — not a file path, not a URL, and not JPEG. Baselines are PNG, and a reviewer has to be able to put the two side by side.`,
+    );
+  }
+  return bytes;
+}
+
+/**
+ * What was actually recorded for a slot, said plainly enough that it cannot be relayed as
+ * something better.
+ *
+ * The `pass`-with-no-baseline case is the whole reason this text exists. An agent that compared
+ * carefully, was satisfied, and said `pass` has done nothing wrong — but there was no golden to
+ * compare against, so what it produced is a proposal awaiting a human, and "I passed that
+ * checkpoint" is the one summary of it that would be false.
+ */
+function submitNoteFor(
+  name: string,
+  verdict: AgentVerdict,
+  hadBaseline: boolean,
+  remaining: string[],
+): string {
+  const recorded = !hadBaseline
+    ? `Recorded as **pending-baseline**: "${name}" has no approved baseline in this environment, so there was nothing for a verdict to be about and yours does not change the state. Your capture is now a PROPOSAL awaiting a human's approval — do not report this slot as passing, however confident the comparison felt.`
+    : verdict === "pass"
+      ? `Recorded as **passed**: it matched its approved baseline.`
+      : `Recorded as **diff**: it differs from its approved baseline. That verdict stands as evidence about the application and nothing retries it — not Varys, and not you. Do not re-capture this slot hoping for a better answer.`;
+  const left =
+    remaining.length === 0
+      ? "Every Manifest slot is now filled. Call finish_agent_run with your account of the session."
+      : `Still unfilled, so the run is still red: ${remaining.map((r) => `"${r}"`).join(", ")}.`;
+  return `${recorded} ${left}`;
+}
+
+/** How to report the finished run — in the outcome's own words, since three of them are not passes. */
+function finishNoteFor(
+  outcome: RunOutcome,
+  slots: { name: string; reviewState: ReviewState }[],
+): string {
+  const unreached = slots.filter((s) => s.reviewState === "missing").map((s) => s.name);
+  switch (outcome) {
+    case "failed":
+      return unreached.length > 0
+        ? `This run is FAILED because ${unreached.length} Manifest slot(s) were never filled: ${unreached
+            .map((u) => `"${u}"`)
+            .join(", ")}. Report it that way. If they went unfilled because you could not reach them, the honest red IS the finding — say what stopped you, and do not describe the run as partially successful.`
+        : "This run is FAILED. Report it as such, with what you saw.";
+    case "pending-baseline":
+      return "This run VERIFIED NOTHING: every capture is a first one, with no approved baseline behind it. It is not a pass, and it is not a failure — a human must approve the captures in Needs review before any future run can compare against them. Report it as captures awaiting approval.";
+    case "regression":
+      return "This run found a REGRESSION: a capture differs from its approved baseline. That is evidence about the application and a human decides what it means. Nothing retries it, and it must not be re-captured until it agrees.";
+    case "baseline":
+      return "Baselines were written by this run. It verified nothing by doing so.";
+    default:
+      return `Report this run as ${outcome}.`;
+  }
 }

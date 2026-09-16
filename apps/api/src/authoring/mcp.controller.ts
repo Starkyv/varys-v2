@@ -9,7 +9,11 @@ import {
   type CheckpointInput,
   type TestEditInput,
 } from "./authoring-session.service";
-import { AgentRunService } from "./agent-run.service";
+import {
+  AgentRunService,
+  type AgentCaptureMeta,
+  type AgentVerdict,
+} from "./agent-run.service";
 import { McpAuthService, type McpPrincipal, McpUnauthorized } from "./mcp-auth.service";
 import { McpStatusService } from "./mcp-status.service";
 import { RunToolService } from "./run-tool.service";
@@ -208,6 +212,10 @@ const REPAIR_CLAIM_TOOLS: readonly string[] = ["apply_fix", "edit_test", "report
  * Tools an AGENT principal reaches only with the run capability on its credential — off by
  * default, granted at provisioning.
  *
+ * The whole Agent Run Session surface is gated together, not just the verb that opens one. A
+ * credential able to submit and finish but not start could still walk a session a human opened,
+ * which is a capability nobody granted it and an audit trail that names the wrong actor.
+ *
  * This is a capability boundary like `AGENT_TOOLS`, but it refuses DIFFERENTLY, and the
  * difference is deliberate. The other exclusions report as "Unknown tool" because they hide
  * something that is none of that principal's business — another user's session, another test's
@@ -216,7 +224,12 @@ const REPAIR_CLAIM_TOOLS: readonly string[] = ["apply_fix", "edit_test", "report
  * tool" would mislead is the operator debugging their own drainer. They are told which switch to
  * flip instead.
  */
-const RUN_CAPABILITY_TOOLS: readonly string[] = ["start_agent_run"];
+const RUN_CAPABILITY_TOOLS: readonly string[] = [
+  "start_agent_run",
+  "submit_checkpoint",
+  "submit_evidence",
+  "finish_agent_run",
+];
 
 /**
  * For an agent principal: which arguments of a tool name the TEST it would reach, and whether one
@@ -387,7 +400,7 @@ export class McpController {
         content: [
           {
             type: "text",
-            text: `${user.name} may not start an Agent Run Session: this credential was provisioned without the run capability, which is off by default. An unattended agent that can start runs can retry until something goes green, so granting it is a deliberate act — ask an admin to re-provision the credential with it enabled.`,
+            text: `${user.name} may not use ${name}: it is part of the Agent Run Session surface, and this credential was provisioned without the run capability, which is off by default. An unattended agent that can drive runs can retry until something goes green, so granting it is a deliberate act — ask an admin to re-provision the credential with it enabled.`,
           },
         ],
         isError: true,
@@ -463,11 +476,12 @@ export class McpController {
 
     const scope = AGENT_TEST_SCOPE[name];
     // Nothing else a SCOPED tool does names a test, so the claim re-check above is the whole
-    // check for them. `start_agent_run` is the one tool that names a test and is deliberately
-    // absent from the table: it is reached by a capability, not a claim, and a repair claim is
-    // exactly what a run-only drainer never holds — requiring one would make the capability
-    // unusable. Its boundary is `RUN_CAPABILITY_TOOLS` plus the Agent-Driven-Test kind check in
-    // `AgentRunService`, not per-test scope.
+    // check for them. The Agent Run Session tools name a test (`start_agent_run`) or a run
+    // (`submit_checkpoint`, `submit_evidence`, `finish_agent_run`) and are all deliberately absent
+    // from the table: they are reached by a capability, not a claim, and a repair claim is exactly
+    // what a run-only drainer never holds — requiring one would make the capability unusable.
+    // Their boundary is `RUN_CAPABILITY_TOOLS` plus the Agent-Driven-Test kind check in
+    // `AgentRunService`, which refuses a pinned test's run outright, not per-test scope.
     if (!scope) return;
 
     const ids: string[] = [];
@@ -997,6 +1011,101 @@ export class McpController {
             environmentId: args.environmentId ? String(args.environmentId) : undefined,
             actor: user.email,
             actorKind: user.kind,
+          }),
+      },
+      {
+        name: "submit_checkpoint",
+        description:
+          "Fill ONE slot of the Checkpoint Manifest of a run you started with start_agent_run: the screenshot you captured, your verdict on it, and your reasoning.\n\n`name` must be one of the Manifest's own names, spelled exactly. The Manifest is a closed set and anything else is refused — not to be awkward, but because a name that drifts between runs (`Dashboard loaded` this week, `dashboard-empty` last week) makes a test red forever for reasons that have nothing to do with the application.\n\n`reasoning` is REQUIRED and there is no polite default. You drove, and you are also the judge — Varys watched none of it, makes no model call of its own here, and holds no second opinion. Your rationale is the entire audit trail a human will read next to the two pictures, so write what you compared, what matched, and what you decided to overlook. \"Looks right\" is not reviewable.\n\nRead back what Varys actually RECORDED, because it is not always what your verdict asked for. A `pass` on a slot with no approved baseline is stored as `pending-baseline`: there was no golden to compare against, so the verdict is inert and your capture is a proposal awaiting a human's approval. Do not report such a slot as passing, however carefully you looked. A `fail` against a real baseline is stored as `diff` and stands — nothing retries it, and you must not re-capture the slot hoping for a kinder answer.\n\nCapture however you like; say how you did it in `capture` so a reviewer puzzling over two very different pictures can see whether they were even taken the same way.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            runId: { type: "string", description: "The run start_agent_run gave you." },
+            name: {
+              type: "string",
+              description:
+                "The Manifest slot this capture is for — exactly as start_agent_run named it.",
+            },
+            image: {
+              type: "string",
+              description: "The screenshot: base64-encoded PNG bytes (a data: URL is fine too).",
+            },
+            verdict: {
+              type: "string",
+              enum: ["pass", "fail"],
+              description:
+                "Your comparison against the baseline you were given. Say `fail` when it genuinely differs — a false pass is far worse than a red a human can look at.",
+            },
+            reasoning: {
+              type: "string",
+              description:
+                "Why. What you compared, what matched, what you judged to be legitimate variation. Required.",
+            },
+            capture: {
+              type: "object",
+              description: "How this screenshot was taken. Recorded as evidence; nothing is enforced against it.",
+              properties: {
+                tool: { type: "string", description: "e.g. chrome-devtools, playwright, computer-use." },
+                viewport: { type: "string", description: "e.g. 1440x900." },
+                deviceScale: { type: "number", description: "Device pixel ratio, e.g. 2 on a Retina display." },
+              },
+            },
+          },
+          required: ["runId", "name", "image", "verdict", "reasoning"],
+        },
+        handler: (args) =>
+          this.agentRun.submitCheckpoint({
+            runId: String(args.runId ?? ""),
+            name: String(args.name ?? ""),
+            image: String(args.image ?? ""),
+            verdict: args.verdict as AgentVerdict,
+            reasoning: String(args.reasoning ?? ""),
+            capture: (args.capture ?? undefined) as AgentCaptureMeta | undefined,
+          }),
+      },
+      {
+        name: "submit_evidence",
+        description:
+          "Attach an extra screenshot to the run — as many as you like, and none of them fills a Manifest slot or keys a baseline.\n\nThis is where \"I could not find the filter, here is what the page actually looked like\" belongs. A reviewer trying to tell a broken application from a wrong instruction usually cannot, from the checkpoints alone; a picture of what you were staring at is often the only thing that settles it. Use it freely when something surprises you, when a state will not come up, and when you are about to report a slot you could not reach.\n\nIt changes nothing about the run's outcome, by design: evidence is context, never a claim.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            runId: { type: "string", description: "The run start_agent_run gave you." },
+            image: { type: "string", description: "The screenshot: base64-encoded PNG bytes." },
+            note: {
+              type: "string",
+              description: "What this shows and why you kept it — the caption a reviewer reads first.",
+            },
+          },
+          required: ["runId", "image"],
+        },
+        handler: (args) =>
+          this.agentRun.submitEvidence({
+            runId: String(args.runId ?? ""),
+            image: String(args.image ?? ""),
+            note: args.note === undefined ? undefined : String(args.note),
+          }),
+      },
+      {
+        name: "finish_agent_run",
+        description:
+          "Close the session with your written account of it, and read back what the run actually came to.\n\nThe summary is the part of the session nobody else can reconstruct. Varys has the pictures, the verdicts and your per-slot reasoning; what it does not have is what you tried, what surprised you, what you worked around, and what you could not reach. Write that.\n\nFinishing does NOT decide the outcome — the run's state was kept honest by every submission you made, so a session that crashes before reaching this call has already left a correct run behind. What comes back is `outcome`, and it is the word to report the run in. Three of them are not passes: `pending-baseline` means every capture was a first one and NOTHING was verified (a human must approve them before any future run can compare); `regression` means something differs from its baseline; `failed` with unreached slots means the journey broke. Report the outcome you are given, not the impression you formed.\n\nOnce finished, the run is closed and accepts no further submissions.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            runId: { type: "string", description: "The run start_agent_run gave you." },
+            summary: {
+              type: "string",
+              description:
+                "Your account of the session: what you did, what surprised you, what you could not reach and why. Required.",
+            },
+          },
+          required: ["runId", "summary"],
+        },
+        handler: (args) =>
+          this.agentRun.finish({
+            runId: String(args.runId ?? ""),
+            summary: String(args.summary ?? ""),
           }),
       },
       {

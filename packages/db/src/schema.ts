@@ -264,6 +264,16 @@ export const runs = pgTable("runs", {
    * that choice — the only record of what the agent was actually told.
    */
   agentInstructions: text("agent_instructions"),
+  /**
+   * The agent's own written account of the session, stored when it finishes the run
+   * (Agent-Driven Tests). Null for every pinned run, and null on an agent run nobody ever
+   * finished — which is exactly what distinguishes "the session ended and said this" from "the
+   * session stopped and never said anything".
+   *
+   * Doubles as the CLOSED flag: a run with a summary accepts no further submissions, so an agent
+   * cannot declare itself done and then keep revising what it reported.
+   */
+  agentSummary: text("agent_summary"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -296,11 +306,53 @@ export const runResults = pgTable(
     /** The LLM judge's one-line rationale for a `context`-compared checkpoint (shown to the
      *  reviewer beside the two images). Null for pixel-compared checkpoints. */
     judgeReasoning: text("judge_reasoning"),
+    /**
+     * How the ACTUAL capture was produced, when an Agent-Driven Test's agent said so — the tool
+     * it used, the viewport it captured at, and the device scale factor. Null for every pinned
+     * run, where Varys performed the capture itself and the answer is never in doubt.
+     *
+     * **Evidence, not a constraint.** Varys hosts no browser for this kind (ADR 0007) and cannot
+     * verify any of it, so nothing here is enforced and nothing is compared against it. Its whole
+     * job is to let a reviewer staring at a baffling comparison ask the first useful question —
+     * were these two pictures even taken the same way? — instead of guessing. A baseline shot
+     * headless at 1280×800 and an actual shot via computer use on a Retina display are genuinely
+     * different pictures, and this is where that shows.
+     */
+    captureTool: text("capture_tool"),
+    captureViewport: text("capture_viewport"),
+    captureDeviceScale: doublePrecision("capture_device_scale"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   // One result per checkpoint per run — lets the worker upsert so a redelivered run
   // can't accumulate duplicate checkpoints.
   (t) => ({ runCheckpointUq: uniqueIndex("run_results_run_checkpoint_uq").on(t.runId, t.checkpointName) }),
+);
+
+/**
+ * An extra screenshot an agent attached to a run — UNNAMED, unlimited, and keying no baseline
+ * (Agent-Driven Tests).
+ *
+ * The deliberate opposite of a `run_results` row: that one is a Checkpoint Manifest slot, and its
+ * name is the closed set the Manifest exists to enforce. This one is "here is what the page looked
+ * like when I could not find the filter" — material a reviewer diagnosing a red run actually
+ * wants, and which nothing about the Manifest requires forbidding. Being nameless is what keeps
+ * the two apart: evidence can never be mistaken for a slot, promoted to a baseline, or counted
+ * toward what the run verified.
+ */
+export const runEvidence = pgTable(
+  "run_evidence",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => runs.id),
+    artifactKey: text("artifact_key").notNull(),
+    /** The agent's caption — why it thought this was worth keeping. Empty when it said nothing. */
+    note: text("note").notNull().default(""),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  // Read per run in attachment order — the sequence is the story, so it is the only access pattern.
+  (t) => ({ runEvidenceRunIdx: index("run_evidence_run_idx").on(t.runId, t.createdAt) }),
 );
 
 /**
@@ -779,6 +831,7 @@ export const schema = {
   testVersions,
   runs,
   runResults,
+  runEvidence,
   runAssertions,
   runSteps,
   runNetwork,
@@ -938,6 +991,9 @@ ALTER TABLE runs ADD COLUMN IF NOT EXISTS notes text;
 -- layers are unversioned by design: without it, editing a checkpoint's wording would quietly
 -- rewrite the history of every run that ever walked it.
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS agent_instructions text;
+-- The agent's written account of the session, stored when it finishes the run. Also the CLOSED
+-- flag: a run carrying one accepts no further submissions, so "done" cannot be walked back.
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS agent_summary text;
 -- Which CLASS of failure ended a failed run (Slice 19): 'locator' = an unresolvable
 -- fingerprint (the only repairable class), 'unreached' = an Agent-Driven Test left a Checkpoint
 -- Manifest slot unfilled, NULL for everything else. Recorded by the runner, never inferred from
@@ -969,6 +1025,23 @@ ALTER TABLE run_results ADD COLUMN IF NOT EXISTS resolved_by text;
 ALTER TABLE run_results ADD COLUMN IF NOT EXISTS resolved_at timestamptz;
 -- Dynamic-content testing: the LLM judge's rationale for a context-compared checkpoint.
 ALTER TABLE run_results ADD COLUMN IF NOT EXISTS judge_reasoning text;
+-- How the ACTUAL capture was produced, when an Agent-Driven Test's agent said so. Evidence, not a
+-- constraint: Varys performs no capture for that kind and verifies none of this, so nothing is
+-- enforced against it. It exists so a reviewer can ask whether two baffling images were even taken
+-- the same way. Null for every pinned run.
+ALTER TABLE run_results ADD COLUMN IF NOT EXISTS capture_tool text;
+ALTER TABLE run_results ADD COLUMN IF NOT EXISTS capture_viewport text;
+ALTER TABLE run_results ADD COLUMN IF NOT EXISTS capture_device_scale double precision;
+-- Extra screenshots an agent attached to a run: unnamed, unlimited, keying no baseline. Nameless
+-- by design — evidence must never be mistakable for a Manifest slot or promotable to a baseline.
+CREATE TABLE IF NOT EXISTS run_evidence (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_id uuid NOT NULL REFERENCES runs(id),
+  artifact_key text NOT NULL,
+  note text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS run_evidence_run_idx ON run_evidence (run_id, created_at);
 CREATE TABLE IF NOT EXISTS run_assertions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   run_id uuid NOT NULL REFERENCES runs(id),

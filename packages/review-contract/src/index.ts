@@ -1989,6 +1989,48 @@ export function isRepairInReview(
 }
 
 /**
+ * Roll a run's checkpoints up into the coarse `runs.status` column — the STORED status, as
+ * distinct from {@link deriveRunOutcome}, which refines how that run is displayed.
+ *
+ * Pure, and shared on purpose. Two very different writers depend on this answer: a human
+ * approving or rejecting a checkpoint, and an agent filling a Checkpoint Manifest slot. They
+ * arrive from opposite directions — one is resolving a finished run downwards, the other is
+ * building an unfinished one upwards — and if their rollups ever disagreed, a run's stored status
+ * would depend on which of them touched it last.
+ *
+ * Precedence, top → down:
+ *  1. any `missing` slot  → `failed`
+ *  2. anything undecided  → `needs_review`
+ *  3. any rejection       → `failed`
+ *  4. otherwise           → `passed`
+ *
+ * `missing` is checked first and hard-fails. An unfilled slot is neither work awaiting a human nor
+ * something a decision on a SIBLING checkpoint can resolve, so resolving the last reviewable
+ * checkpoint on such a run must not roll it up to passed — which is the one path by which an
+ * agent that simply stopped could have ended up green.
+ *
+ * A rejection sits BELOW an undecided checkpoint, which reads backwards until you remember what
+ * this column drives: a run with review work outstanding belongs in the review queue, and a
+ * rejection already taken is not a reason to hide the decisions still owed. The run reads red
+ * either way — {@link deriveRunOutcome} calls a rejection `regression` regardless of what is
+ * stored here.
+ */
+export function rollupRunStatus(
+  checkpoints: readonly RunOutcomeCheckpoint[],
+): "passed" | "needs_review" | "failed" {
+  let anyMissing = false;
+  let anyPending = false;
+  let anyRejected = false;
+  for (const c of checkpoints) {
+    if (c.reviewState === "missing") anyMissing = true; // an unfilled slot — nothing resolves it
+    else if (c.resolution === "rejected") anyRejected = true;
+    else if (c.resolution === "approved") continue; // resolved → promoted to baseline
+    else if (c.reviewState === "pending-baseline" || c.reviewState === "diff") anyPending = true;
+  }
+  return anyMissing ? "failed" : anyPending ? "needs_review" : anyRejected ? "failed" : "passed";
+}
+
+/**
  * Map a run's checkpoints + coarse `status` into a {@link RunOutcome}. Pure (no IO) — the single
  * definition every surface shares (run detail, runs list, dashboard matrix, suite report) so they
  * can't drift. `status` and the stored status column are unchanged; this only refines display.
