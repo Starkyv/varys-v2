@@ -59,10 +59,11 @@ carries rules.** Nothing that must hold is asked of the model.
 - What this design guarantees is narrower than "the verdicts are correct" and harder: **an
   agent-driven run cannot report a green for work it did not do.** Verdict *quality* rests on the
   comparison prompt, on required per-checkpoint reasoning, and on human baseline approval.
-- A companion ADR is **owed but not yet written**: Varys hosts no browser for this kind, departing
-  from [ADR 0001](./0001-mcp-authoring-server-side-shared-core.md)'s server-side-Playwright
-  posture. That decision belongs with the Agent Run Session, which does not exist yet; this ADR
-  covers only the existence of the kind and the authoring surface.
+- The companion decision is
+  [ADR 0007](./0007-no-server-side-browser-for-agent-driven-runs.md): Varys hosts no browser for
+  this kind, departing from [ADR 0001](./0001-mcp-authoring-server-side-shared-core.md)'s
+  server-side-Playwright posture. It landed with the Agent Run Session; this ADR covers only the
+  existence of the kind and the authoring surface.
 - **Revisit if** the machinery above proves sufficient in practice and someone wants these
   unattended. That would need a queue a remote Claude can drain, which is designed and deliberately
   deferred — not a relaxation of the Manifest or the pre-seeded rows, which are what make the

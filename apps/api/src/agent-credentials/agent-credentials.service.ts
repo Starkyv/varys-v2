@@ -26,6 +26,9 @@ const MAX_EXPIRY_DAYS = 365;
 export interface ResolvedAgentCredential {
   id: string;
   label: string;
+  /** Whether this credential may start an Agent Run Session. Carried onto the principal so the
+   *  MCP layer gates on the CREDENTIAL that was presented, not on a lookup it might forget. */
+  canStartAgentRuns: boolean;
 }
 
 function hash(token: string): string {
@@ -72,6 +75,9 @@ export class AgentCredentialsService {
         tokenHash: hash(token),
         tokenHint: token.slice(-4),
         expiresAt: new Date(Date.now() + days * 24 * 60 * 60 * 1000),
+        // Explicitly false unless asked for: the capability is granted at provisioning time and
+        // never toggled afterwards, so an omitted field can only ever mean "no".
+        canStartAgentRuns: body?.canStartAgentRuns === true,
         createdBy,
       })
       .returning();
@@ -137,7 +143,7 @@ export class AgentCredentialsService {
       .set({ lastUsedAt: new Date() })
       .where(eq(agentCredentials.id, row.id));
 
-    return { id: row.id, label: row.label };
+    return { id: row.id, label: row.label, canStartAgentRuns: row.canStartAgentRuns };
   }
 
   private toSummary(row: typeof agentCredentials.$inferSelect): AgentCredentialSummary {
@@ -152,6 +158,7 @@ export class AgentCredentialsService {
       revokedAt: row.revokedAt ? row.revokedAt.toISOString() : null,
       lastUsedAt: row.lastUsedAt ? row.lastUsedAt.toISOString() : null,
       status,
+      canStartAgentRuns: row.canStartAgentRuns,
       createdBy: row.createdBy,
       createdAt: row.createdAt.toISOString(),
     };

@@ -2,9 +2,11 @@ import { Module } from "@nestjs/common";
 import { AgentCredentialsModule } from "../agent-credentials/agent-credentials.module";
 import { RepairJobsModule } from "../repair-jobs/repair-jobs.module";
 import { RunsModule } from "../runs/runs.module";
+import { SettingsModule } from "../settings/settings.module";
 import { TestsModule } from "../tests/tests.module";
 import { AuthoringInstructionsController } from "./authoring-instructions.controller";
 import { AuthoringInstructionsService } from "./authoring-instructions.service";
+import { AgentRunService } from "./agent-run.service";
 import { AuthoringSessionService } from "./authoring-session.service";
 import { BridgeController } from "./bridge.controller";
 import { BridgeService } from "./bridge.service";
@@ -21,7 +23,9 @@ import { RunToolService } from "./run-tool.service";
   // "does this agent hold a claim on that test?", which is what scopes an agent credential.
   // RunsModule exports RunsService — `run_test` queues a run through the SAME path the web app's
   // Run button uses (version pin + enqueue), rather than a second way to start a run.
-  imports: [TestsModule, AgentCredentialsModule, RepairJobsModule, RunsModule],
+  // SettingsModule supplies the global default judge prompt an Agent-Driven Test's blank
+  // compare_prompt falls back to, and the team-wide comparison default its seeded rows carry.
+  imports: [TestsModule, AgentCredentialsModule, RepairJobsModule, RunsModule, SettingsModule],
   // McpController is the Claude-Code transport (OAuth-bearer authenticated, Slice 16); LivePreviewController is the
   // authenticated in-product live-preview surface (Slice 15); BridgeController is the
   // in-product relay that links a user's Bridge Helper to their chat (Slice 15);
@@ -34,6 +38,7 @@ import { RunToolService } from "./run-tool.service";
     McpStatusService,
     AuthoringInstructionsService,
     RunToolService,
+    AgentRunService,
   ],
 })
 export class AuthoringModule {}

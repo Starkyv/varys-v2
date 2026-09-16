@@ -1,5 +1,13 @@
 # MCP test authoring: server-side Playwright session, steps built through a shared recorder core
 
+> **Departed from in part by
+> [ADR 0007](./0007-no-server-side-browser-for-agent-driven-runs.md)** (agent-driven runs). The
+> server-side session below still governs **authoring** and **repair**, which is everything this
+> ADR reasons about: a step is only worth recording if Varys's own recorder core captured its
+> fingerprint. An **Agent Run Session** records no steps, so that argument does not reach it — it
+> is driven on the author's own machine, with Varys supplying no browser and observing no driving.
+
+
 Claude authors tests via a hosted MCP server that drives a **server-side Playwright
 session** (reusing the runner's pinned-chromium browser infra) with `@varys/recorder`'s
 logic available to it. Each MCP action **explicitly** resolves Claude's chosen target

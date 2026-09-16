@@ -20,6 +20,17 @@ export interface McpPrincipal {
    *  agent principal, which has no OAuth client. */
   clientId: string;
   kind: McpPrincipalKind;
+  /**
+   * May this principal start an Agent Run Session?
+   *
+   * Always true for a HUMAN: an agent-driven test runs on the author's own machine, under their
+   * own subscription, because they asked for it — that is the entire execution model, so gating a
+   * person out of it would gate them out of the feature.
+   *
+   * For an AGENT it is whatever the presented credential was provisioned with, and that is off by
+   * default (ADR 0005 / the run capability).
+   */
+  canStartAgentRuns: boolean;
 }
 
 /** Thrown when a `/mcp` request carries no usable bearer token. The controller turns this
@@ -84,6 +95,7 @@ export class McpAuthService {
       name: user.name ?? user.email,
       clientId: String(token.clientId ?? ""),
       kind: "user",
+      canStartAgentRuns: true,
     };
   }
 
@@ -108,6 +120,7 @@ export class McpAuthService {
       name: label,
       clientId: "",
       kind: "agent",
+      canStartAgentRuns: credential.canStartAgentRuns,
     };
   }
 

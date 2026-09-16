@@ -933,11 +933,12 @@ export class TestsService {
     // it holds no steps, waits or thresholds to configure, and its real behaviour (instructions
     // and checkpoints) is edited in place precisely so wording changes are not audit events.
     //
-    // This is the only door an agent test can currently REACH. The run-review mask/threshold save
-    // and the repair-review write also create versions, but both require an existing run, and
-    // Varys refuses to run this kind at all (see RunsService.create). That reachability argument
-    // is what holds the invariant today, and it stops holding the moment agent runs exist — so
-    // those two paths need their own guard when the Agent Run Session lands.
+    // Two other doors also write versions, and agent-driven runs now exist, so the invariant no
+    // longer rests on nothing being able to reach them. The run-review mask/threshold save is
+    // guarded in its own right (`RunsService.persistMasks`). The repair-review write is not, and
+    // is held instead by a REAL structural argument rather than an accident of ordering: it needs
+    // a Repair Job, jobs are enqueued only by the worker off a `locator` failure, and the worker
+    // never executes this kind.
     const [kindRow] = await this.db
       .select({ kind: tests.kind })
       .from(tests)

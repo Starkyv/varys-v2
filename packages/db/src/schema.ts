@@ -254,12 +254,23 @@ export const runs = pgTable("runs", {
   triggerSource: text("trigger_source"),
   /** Optional free-form note on the run (annotation only). Edited inline on the run-detail page. */
   notes: text("notes"),
+  /**
+   * The fully composed AI Instructions this Agent Run Session was handed, copied VERBATIM at
+   * session start (Agent-Driven Tests). Null for every pinned run.
+   *
+   * A copy rather than a reference, and that is the whole point of the column: instructions and
+   * checkpoints are deliberately unversioned, so without it a run from six weeks ago becomes
+   * unexplainable the moment any of its layers is reworded. This is the compensating control for
+   * that choice — the only record of what the agent was actually told.
+   */
+  agentInstructions: text("agent_instructions"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
-/** Per-checkpoint review state. Matches the UI read-model literals. */
-export type ReviewState = "pending-baseline" | "diff" | "passed";
+/** Per-checkpoint review state. Mirrors `@varys/review-contract`'s `ReviewState` — `missing` is a
+ *  Checkpoint Manifest slot pre-seeded before an agent starts and never filled. */
+export type ReviewState = "pending-baseline" | "diff" | "passed" | "missing";
 export type Resolution = "approved" | "rejected";
 
 export const runResults = pgTable(
@@ -741,6 +752,17 @@ export const agentCredentials = pgTable("agent_credentials", {
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   revokedAt: timestamp("revoked_at", { withTimezone: true }),
   lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+  /**
+   * May this credential START an Agent Run Session? **Off by default, and re-provisioned rather
+   * than toggled** — a capability an admin grants deliberately, per credential.
+   *
+   * Default-off for the same reason `run_test` is absent from the repair toolset altogether: a
+   * drainer that can start runs can sit in a fix-and-retry loop until something goes green, and
+   * "went green eventually" is precisely the evidence the review gate exists to refuse. The
+   * capability exists because an operator may genuinely want a machine-driven agent run; it is
+   * off so that nobody gets one by accident.
+   */
+  canStartAgentRuns: boolean("can_start_agent_runs").notNull().default(false),
   /** The admin who provisioned it (email) — provisioning is an audited human act. */
   createdBy: text("created_by").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -769,6 +791,7 @@ export const schema = {
   repairJobTests,
   suppressedFailures,
   agentCredentials,
+  agentCheckpoints,
 };
 
 /**
@@ -910,6 +933,11 @@ ALTER TABLE runs ADD COLUMN IF NOT EXISTS trace_artifact_key text;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS triggered_by text;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS trigger_source text;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS notes text;
+-- The fully composed AI Instructions an Agent Run Session was handed, copied verbatim at start
+-- (Agent-Driven Tests). Null for every pinned run. It is a COPY because the three instruction
+-- layers are unversioned by design: without it, editing a checkpoint's wording would quietly
+-- rewrite the history of every run that ever walked it.
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS agent_instructions text;
 -- Which CLASS of failure ended a failed run (Slice 19): 'locator' = an unresolvable
 -- fingerprint (the only repairable class), 'unreached' = an Agent-Driven Test left a Checkpoint
 -- Manifest slot unfilled, NULL for everything else. Recorded by the runner, never inferred from
@@ -1157,6 +1185,11 @@ CREATE TABLE IF NOT EXISTS agent_credentials (
   created_by text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+-- Whether this credential may START an Agent Run Session. DEFAULT false is load-bearing, not a
+-- convenience: every credential that existed before this column keeps exactly the reach it was
+-- provisioned with, and a drainer able to trigger runs could otherwise loop fix-and-retry until
+-- something went green.
+ALTER TABLE agent_credentials ADD COLUMN IF NOT EXISTS can_start_agent_runs boolean NOT NULL DEFAULT false;
 -- Generic key/value store for runtime-editable app settings (no redeploy). First user:
 -- the AI authoring instructions, edited from the Author page.
 CREATE TABLE IF NOT EXISTS app_settings (

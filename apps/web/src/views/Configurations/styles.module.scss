@@ -251,6 +251,15 @@
   gap: var(--space-8);
   margin-top: var(--space-12);
 }
+/* The run-capability toggle sits under the provisioning row: a full-width line rather than a
+   fourth grid column, because its consequence needs a sentence and not a label. */
+.credCapability {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-12);
+  margin-top: var(--space-12);
+  cursor: pointer;
+}
 .credRow {
   display: flex;
   align-items: center;

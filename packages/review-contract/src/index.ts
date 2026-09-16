@@ -578,6 +578,10 @@ export interface AgentCredentialSummary {
   lastUsedAt: string | null;
   /** `active`, or why it would be refused right now. */
   status: AgentCredentialStatus;
+  /** Whether this credential may start an Agent Run Session. Off unless it was provisioned with
+   *  the capability, and not editable afterwards — widening a live machine secret is a decision
+   *  to re-provision for, so the audit trail says which credential was ever allowed to do it. */
+  canStartAgentRuns: boolean;
   createdBy: string;
   createdAt: string;
 }
@@ -590,6 +594,16 @@ export type AgentCredentialStatus = "active" | "expired" | "revoked";
 export interface CreateAgentCredentialRequest {
   label: string;
   expiresInDays?: number;
+  /**
+   * Grant this credential the ability to start an Agent Run Session. **Defaults to false.**
+   *
+   * Left off, the drainer sees the repair toolset and nothing else — which is the posture
+   * [ADR 0005](../../../docs/adr/0005-scoped-repair-agent-credential.md) argues for, and the
+   * reason `run_test` is absent from that toolset: an unattended agent that can trigger runs can
+   * grind fix-and-retry until something goes green. Turn it on only for a drainer whose whole
+   * job IS running agent-driven tests.
+   */
+  canStartAgentRuns?: boolean;
 }
 
 /** The provisioning response — the ONLY time the token is readable. */

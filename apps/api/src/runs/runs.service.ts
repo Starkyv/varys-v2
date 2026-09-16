@@ -52,7 +52,14 @@ import { STORAGE } from "../storage/storage.module";
 
 const ENVIRONMENT = "default";
 
-function viewportKey(vp: TestDefinition["viewport"]): string {
+/**
+ * The `baselines.viewport_key` a definition's viewport produces.
+ *
+ * Exported because an Agent Run Session has to look baselines up under exactly the key this
+ * service's `approve` writes them under. Two spellings of the same rule is how a golden becomes
+ * unfindable by the only path that wants it.
+ */
+export function viewportKeyOf(vp: TestDefinition["viewport"]): string {
   return `${vp.width}x${vp.height}@${vp.deviceScaleFactor}`;
 }
 
@@ -323,7 +330,7 @@ export class RunsService {
 
     // Baseline audit trail per checkpoint: who approved the current golden for this
     // (test, checkpoint, env, viewport) and when. Surfaces the real approver (Slice 10).
-    const vpKey = viewportKey((row.definition as TestDefinition).viewport);
+    const vpKey = viewportKeyOf((row.definition as TestDefinition).viewport);
     const baselineRows = await this.db
       .select({
         checkpointName: baselines.checkpointName,
@@ -808,7 +815,7 @@ export class RunsService {
       .where(eq(runs.id, runId))
       .limit(1);
     if (!ctx) throw new NotFoundException(`Run ${runId} not found`);
-    const vpKey = viewportKey((ctx.definition as TestDefinition).viewport);
+    const vpKey = viewportKeyOf((ctx.definition as TestDefinition).viewport);
     // Seed/replace under the run's OWN environment, not a hardcoded "default" — else
     // the next run against that environment never finds the baseline. (Slice 2 fix.)
     // reEvaluate/persistMasks touch no baselines, so they're unaffected by env.
@@ -995,6 +1002,7 @@ export class RunsService {
     const [ctx] = await this.db
       .select({
         testId: testVersions.testId,
+        testKind: tests.kind,
         runResultId: runResults.id,
         baselineArtifactKey: runResults.baselineArtifactKey,
         actualArtifactKey: runResults.actualArtifactKey,
@@ -1003,10 +1011,22 @@ export class RunsService {
       .from(runResults)
       .innerJoin(runs, eq(runs.id, runResults.runId))
       .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
+      .innerJoin(tests, eq(tests.id, testVersions.testId))
       .where(and(eq(runResults.runId, runId), eq(runResults.checkpointName, checkpointName)))
       .limit(1);
     if (!ctx) {
       throw new NotFoundException(`Checkpoint ${checkpointName} not found for run ${runId}`);
+    }
+    // An Agent-Driven Test has ONE version row, written at creation and never again — every join,
+    // dashboard and report that hangs off `runs.test_version_id` depends on that. It also has no
+    // masks and no pixel threshold to tune: its comparison is always contextual, and this is the
+    // one remaining door that would write a second version for it. Guarded here rather than left
+    // to a reachability argument, because agent-driven runs now exist and the argument was only
+    // ever "nothing can reach a checkpoint of one yet".
+    if (ctx.testKind === "agent") {
+      throw new BadRequestException(
+        "This checkpoint belongs to an Agent-Driven Test. It is compared contextually, never pixel by pixel, so there are no masks or thresholds to save — edit its comparison prompt on the test instead.",
+      );
     }
 
     // 1. New audited test_version with the updated masks/threshold on this step.

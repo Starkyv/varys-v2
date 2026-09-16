@@ -9,6 +9,7 @@ import {
   type CheckpointInput,
   type TestEditInput,
 } from "./authoring-session.service";
+import { AgentRunService } from "./agent-run.service";
 import { McpAuthService, type McpPrincipal, McpUnauthorized } from "./mcp-auth.service";
 import { McpStatusService } from "./mcp-status.service";
 import { RunToolService } from "./run-tool.service";
@@ -204,6 +205,20 @@ const AGENT_ONLY_TOOLS: readonly string[] = [
 const REPAIR_CLAIM_TOOLS: readonly string[] = ["apply_fix", "edit_test", "report_repair"];
 
 /**
+ * Tools an AGENT principal reaches only with the run capability on its credential — off by
+ * default, granted at provisioning.
+ *
+ * This is a capability boundary like `AGENT_TOOLS`, but it refuses DIFFERENTLY, and the
+ * difference is deliberate. The other exclusions report as "Unknown tool" because they hide
+ * something that is none of that principal's business — another user's session, another test's
+ * failures — and a distinguishable refusal would let an agent probe for what exists. Nothing is
+ * hidden here: any human's `tools/list` names this tool, so the only person a silent "Unknown
+ * tool" would mislead is the operator debugging their own drainer. They are told which switch to
+ * flip instead.
+ */
+const RUN_CAPABILITY_TOOLS: readonly string[] = ["start_agent_run"];
+
+/**
  * For an agent principal: which arguments of a tool name the TEST it would reach, and whether one
  * is mandatory. Declared per tool rather than sniffed off the argument names, because `testId` on
  * `try_locator`/`apply_fix` is the target's *data-testid* — treating that as a Varys test id would
@@ -236,6 +251,9 @@ export class McpController {
     // Running a test and reading the verdict back (slice 14) — the half of "fix it" that proves
     // the fix. Human principals only; see `RunToolService` for why an agent may not reach it.
     @Inject(RunToolService) private readonly runTool: RunToolService,
+    // Starting an Agent Run Session (Agent-Driven Tests) — the one MCP surface that hands work
+    // OUT to the caller's own machine rather than driving anything here.
+    @Inject(AgentRunService) private readonly agentRun: AgentRunService,
   ) {}
 
   // Streamable HTTP: this server doesn't push, so the optional server→client SSE stream
@@ -358,6 +376,23 @@ export class McpController {
    *  error), per the MCP spec, so Claude sees the message and can recover. */
   private async callTool(params: Record<string, unknown>, user: McpPrincipal): Promise<unknown> {
     const name = params.name as string | undefined;
+    // Checked BEFORE the lookup, so a credential without the run capability is told what it is
+    // missing instead of being handed the "Unknown tool" that hides another user's resources.
+    if (
+      user.kind === "agent" &&
+      RUN_CAPABILITY_TOOLS.includes(name ?? "") &&
+      !grantedByCapability(user, name ?? "")
+    ) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${user.name} may not start an Agent Run Session: this credential was provisioned without the run capability, which is off by default. An unattended agent that can start runs can retry until something goes green, so granting it is a deliberate act — ask an admin to re-provision the credential with it enabled.`,
+          },
+        ],
+        isError: true,
+      };
+    }
     const tool = this.tools(user).find((t) => t.name === name);
     if (!tool) {
       // For an agent principal, a tool outside its scope is reported exactly like a tool that
@@ -378,23 +413,13 @@ export class McpController {
         await this.assertAgentScope(name ?? "", args, user);
       }
       const result = await tool.handler(args);
-      // Surface a screenshot (`observe` with screenshot=true) as a viewable MCP image block
-      // so Claude can SEE the page — e.g. to compare it against a reference design you gave
-      // it — with the rest of the snapshot as JSON text. Other results are a text block.
-      if (
-        result &&
-        typeof result === "object" &&
-        typeof (result as { screenshot?: unknown }).screenshot === "string"
-      ) {
-        const { screenshot, ...rest } = result as { screenshot: string } & Record<string, unknown>;
-        return {
-          content: [
-            { type: "text", text: JSON.stringify(rest) },
-            { type: "image", data: screenshot, mimeType: "image/png" },
-          ],
-        };
-      }
-      return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      const { json, pngs } = splitImages(result);
+      return {
+        content: [
+          { type: "text", text: JSON.stringify(json) },
+          ...pngs.map((data) => ({ type: "image", data, mimeType: "image/png" })),
+        ],
+      };
     } catch (err) {
       return { content: [{ type: "text", text: (err as Error).message }], isError: true };
     }
@@ -437,7 +462,13 @@ export class McpController {
     }
 
     const scope = AGENT_TEST_SCOPE[name];
-    if (!scope) return; // nothing else names a test: the claim re-check above is the whole check
+    // Nothing else a SCOPED tool does names a test, so the claim re-check above is the whole
+    // check for them. `start_agent_run` is the one tool that names a test and is deliberately
+    // absent from the table: it is reached by a capability, not a claim, and a repair claim is
+    // exactly what a run-only drainer never holds — requiring one would make the capability
+    // unusable. Its boundary is `RUN_CAPABILITY_TOOLS` plus the Agent-Driven-Test kind check in
+    // `AgentRunService`, not per-test scope.
+    if (!scope) return;
 
     const ids: string[] = [];
     for (const arg of scope.args) {
@@ -496,9 +527,8 @@ export class McpController {
    *  self-promote — ADR 0001 / PRD safety). */
   private tools(user: McpPrincipal): McpTool[] {
     const all = this.allTools(user);
-    return user.kind === "agent"
-      ? all.filter((t) => AGENT_TOOLS.includes(t.name))
-      : all.filter((t) => !AGENT_ONLY_TOOLS.includes(t.name));
+    if (user.kind !== "agent") return all.filter((t) => !AGENT_ONLY_TOOLS.includes(t.name));
+    return all.filter((t) => AGENT_TOOLS.includes(t.name) || grantedByCapability(user, t.name));
   }
 
   private allTools(user: McpPrincipal): McpTool[] {
@@ -944,6 +974,32 @@ export class McpController {
         handler: (args) => a.discard(String(args.sessionId ?? "")),
       },
       {
+        name: "start_agent_run",
+        description:
+          "Start an **Agent Run Session** on an Agent-Driven Test — a test with no recorded steps, which YOU walk yourself. This is the opposite of run_test: nothing is queued, Varys drives no browser, and no worker replays anything. You do the work, on this machine, right now.\n\nThe call returns everything the run needs in one go: the fully composed AI Instructions, the ordered **Checkpoint Manifest**, and the approved baseline images for that environment (attached as images, named in `baselineImages` in the order they follow the JSON). Each Manifest slot says whether it HAS a baseline — one that does not has nothing to compare against, so its capture goes to a human for approval and cannot pass on its own however good it looks.\n\nHow you reach each state is entirely yours to choose — Chrome DevTools, Playwright, computer use, whatever actually works on the app in front of you. Varys does not watch you drive and has no opinion about it. Read the instructions and follow them; they are written by the test's author and carry the credentials, the things to ignore and the things never to touch.\n\nUnderstand what starting it does, because it is the point of the tool: the run is created **already failed**, with reason `unreached`, and one row per Manifest slot is written as `missing` BEFORE this call returns. That is not a placeholder — it is the honest answer to \"what did this run verify?\" until a slot is actually reported. If you stop, crash or lose the connection, the run stays exactly that red, and nothing will infer anything from work you did but did not report. So do not describe a started session as a run that is going well; it is a run that is currently failing, and every slot you fill is what changes that.\n\nThe Manifest is a CLOSED set. Those names are the only ones this run can ever be reported under: do not invent a slot, rename one, merge two, or skip ahead. If the instructions cannot be followed as written, say so to the user — the honest red is the finding.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            testId: {
+              type: "string",
+              description: "The Agent-Driven Test to run (the id in the test's web-app URL).",
+            },
+            environmentId: {
+              type: "string",
+              description:
+                "Run against this environment — it decides which approved baselines you are compared against, and supplies the base URL. Omit only for a test with no environment.",
+            },
+          },
+          required: ["testId"],
+        },
+        handler: (args) =>
+          this.agentRun.start(String(args.testId ?? ""), {
+            environmentId: args.environmentId ? String(args.environmentId) : undefined,
+            actor: user.email,
+            actorKind: user.kind,
+          }),
+      },
+      {
         name: "run_test",
         description:
           "Run a test for real and wait for the verdict — the ONLY thing that proves a repair worked.\n\nUse it to close your own loop: after apply_fix or edit_test, run the test and read what came back, then tell the user what you changed AND whether it now works. A locator that resolves against a parked page is not the same claim as a test that replays end to end.\n\nIt queues a run of the test's LATEST version — so the fix you just wrote is what executes — against the same worker a human's Run button uses, and waits up to `waitSeconds`. If the wait elapses the answer says `finished: false`; call run_status with the runId rather than reporting anything.\n\nRead `outcome`, not `status`, and report it in those terms — three of them are NOT passes and are easy to misreport:\n · `passed` — verified against its baseline. This is the evidence a repair worked.\n · `pending-baseline` — there was no baseline, so NOTHING was compared. A human must approve the capture in Needs review. You cannot approve it and must not call this passing.\n · `baseline` — this run set the golden. It verified nothing.\n · `regression` — the capture differs from the baseline. A human decides; this is not something to fix by re-pinning a locator.\n · `healed` — it verified, but on a repair nobody has accepted yet.\n · `failed` — read `failureKind`: `locator` is the one class a re-pin fixes (open a repair session on this run), anything else is a crash, a timeout, a failed judge or an assertion that does not hold, and re-pinning must not be used to make it go away.\n\n`failingAssertions` lists only the checks that did not hold, with both values that were read — often the fastest way to see what is actually wrong.\n\nBe honest about cost and effect: this drives a real browser against the real app, and every run is visible to the user in Varys. Run it when you need the answer, not as a reflex after every edit.",
@@ -1291,4 +1347,41 @@ export class McpController {
       },
     ];
   }
+}
+
+/** Does this AGENT principal's credential grant the tool? Written once so `tools/list` and
+ *  `tools/call` cannot drift into disagreeing about what the credential may reach. */
+function grantedByCapability(user: McpPrincipal, name: string): boolean {
+  return user.canStartAgentRuns && RUN_CAPABILITY_TOOLS.includes(name);
+}
+
+/**
+ * Split a tool result into the JSON a model reads and the PNGs it LOOKS at.
+ *
+ * Two shapes feed it, both meaning "these bytes are for your eyes, not your parser": a single
+ * `screenshot` (what `observe` returns, so Claude can see the page it is driving) and an ordered
+ * `images` array (the approved baselines `start_agent_run` hands over). Neither field survives
+ * into the JSON — base64 in a text block is noise a model cannot use.
+ *
+ * MCP image blocks carry no label, so a result with several must name them in its own payload —
+ * `start_agent_run` does that with `baselineImages`. "Which baseline is this?" is not a question
+ * to leave to positional luck.
+ */
+function splitImages(result: unknown): { json: unknown; pngs: string[] } {
+  if (!result || typeof result !== "object") return { json: result, pngs: [] };
+  const { screenshot, images, ...rest } = result as {
+    screenshot?: unknown;
+    images?: unknown;
+  } & Record<string, unknown>;
+  const pngs: string[] = [];
+  if (typeof screenshot === "string") pngs.push(screenshot);
+  if (Array.isArray(images)) {
+    for (const img of images) {
+      const data = (img as { data?: unknown })?.data;
+      if (typeof data === "string") pngs.push(data);
+    }
+  }
+  // Nothing to split: hand back the ORIGINAL object, so a result that happens to carry an
+  // unrelated `images` or `screenshot` key of another type keeps it.
+  return pngs.length === 0 ? { json: result, pngs } : { json: rest, pngs };
 }

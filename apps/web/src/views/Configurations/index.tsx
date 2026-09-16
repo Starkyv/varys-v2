@@ -780,6 +780,10 @@ function AgentCredentialsCard() {
 
   const [label, setLabel] = useState("");
   const [days, setDays] = useState("30");
+  // Off by default and deliberately not editable after provisioning: widening what a live machine
+  // secret can do is a decision to re-issue for, so the list stays an honest record of which
+  // credential was ever allowed to start runs.
+  const [canStartAgentRuns, setCanStartAgentRuns] = useState(false);
   // The provisioning response is the ONLY time the token is readable, so it is held here until
   // the admin dismisses it — a reload loses it for good, which the callout says out loud.
   const [issued, setIssued] = useState<{ label: string; token: string } | null>(null);
@@ -790,9 +794,11 @@ function AgentCredentialsCard() {
       const result = await create.mutateAsync({
         label: label.trim(),
         expiresInDays: Number.isFinite(parsed) && parsed > 0 ? parsed : undefined,
+        canStartAgentRuns,
       });
       setIssued({ label: result.credential.label, token: result.token });
       setLabel("");
+      setCanStartAgentRuns(false);
     } catch (e) {
       toast(e instanceof Error ? e.message : "Could not provision the credential");
     }
@@ -888,6 +894,19 @@ function AgentCredentialsCard() {
             Provision
           </Button>
         </div>
+        <label className={styles.credCapability}>
+          <Switch
+            checked={canStartAgentRuns}
+            onCheckedChange={setCanStartAgentRuns}
+            aria-label="Allow this credential to start agent runs"
+          />
+          <span className={styles.settingDesc}>
+            <strong>Let it start agent-driven runs.</strong> Off by default. An agent that can start
+            runs can keep retrying until something goes green, which is exactly the evidence the
+            review gate exists to refuse — turn it on only for a drainer whose whole job is running
+            agent-driven tests. It cannot be changed later; re-provision to change it.
+          </span>
+        </label>
       </div>
 
       <div className={styles.setting}>
@@ -920,6 +939,11 @@ function AgentCredentialsCard() {
                 · last used {formatWhen(c.lastUsedAt)} · created by {c.createdBy}
               </span>
             </div>
+            {c.canStartAgentRuns && (
+              <Badge tone="warning" size="sm">
+                starts agent runs
+              </Badge>
+            )}
             <Badge tone={CREDENTIAL_TONE[c.status]} size="sm">
               {c.status}
             </Badge>
