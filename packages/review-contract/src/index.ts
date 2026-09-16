@@ -1037,8 +1037,12 @@ export interface DraftSummary {
   name: string;
   origin: TestOrigin;
   createdAt: string;
-  /** Number of checkpoints (screenshot steps) the draft asserts — 0 ⇒ flagged (a test
-   *  that asserts nothing). */
+  /** Which kind of test this Draft is. The queue branches on it: a pinned Draft's checkpoints
+   *  are recorded screenshot steps, an Agent-Driven one's are Checkpoint rows, and reading the
+   *  wrong source reports a test that asserts eight things as asserting nothing. */
+  kind: TestKind;
+  /** How many checkpoints the draft asserts — 0 ⇒ flagged (a test that asserts nothing).
+   *  Counted from whichever source this Draft's {@link kind} keeps them in. */
   checkpointCount: number;
   /** The steering instruction that produced the draft, if any (review-queue context). */
   intent: string | null;
@@ -1052,9 +1056,16 @@ export interface DraftSummary {
  *  authoring, shown in the promote dialog so the reviewer sees what the test will assert. */
 export interface DraftCheckpointPreview {
   name: string;
-  captureMode: CaptureMode;
+  /** How the shot was framed. Null on an Agent-Driven Draft: Varys did not take the picture and
+   *  has no opinion about how it was framed — the agent captured it with its own tooling. */
+  captureMode: CaptureMode | null;
   /** Authenticated artifact-route URL of the preview PNG; null if none was captured. */
   previewUrl: string | null;
+  /** Agent-Driven only: how a run reaches this state, and what counts as matching its baseline —
+   *  the prose a reviewer is actually judging. Null on a pinned Draft, whose checkpoint is a
+   *  recorded step and carries no instructions of its own. */
+  instructions: string | null;
+  comparePrompt: string | null;
 }
 
 /** The full Draft detail (`GET /drafts/:id`) — the summary plus every checkpoint's
@@ -1064,6 +1075,15 @@ export interface DraftView {
   name: string;
   origin: TestOrigin;
   createdAt: string;
+  kind: TestKind;
+  /**
+   * The Brief, whose meaning depends on {@link kind} and is not the same thing twice.
+   *
+   * On a pinned Draft it is the **steering instruction** — the sentence that asked for the test,
+   * recorded as review-queue context. On an Agent-Driven one it is the **AI Instructions** Claude
+   * authored: the artifact itself, composed into every future run. The steering prompt is
+   * deliberately not persisted for that kind, precisely so this slot can hold the artifact.
+   */
   intent: string | null;
   checkpoints: DraftCheckpointPreview[];
 }

@@ -28,6 +28,7 @@ import {
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { API_BASE } from "../../api";
 import { ZoomableImage } from "../../components/ZoomableImage";
+import { AgentDrivenAuthoring } from "./components/AgentDriven";
 import { useRouter } from "../../context/router";
 import { useToast } from "../../context/toast";
 import {
@@ -473,6 +474,107 @@ function InstructionsEditor({ open, onClose }: { open: boolean; onClose: () => v
   );
 }
 
+/** Which kind of test this Author session is meant to produce. Remembered across reloads so a
+ *  refresh mid-conversation does not silently put the page back on the other path. */
+const KIND_STORAGE_KEY = "varys.author.kind";
+
+type AuthoringKind = "pinned" | "agent";
+
+function readStoredKind(): AuthoringKind {
+  try {
+    return window.localStorage.getItem(KIND_STORAGE_KEY) === "agent" ? "agent" : "pinned";
+  } catch {
+    return "pinned";
+  }
+}
+
+/**
+ * The kind choice, made BEFORE the conversation starts — and locked once one is under way,
+ * because Claude picks its tools on the first tool call and there is no coherent midpoint.
+ *
+ * Knowing a conversation IS under way works differently per kind, and has to. A pinned one opens
+ * an Authoring Session Varys can see, so the picker simply disappears behind the live view. An
+ * Agent-Driven one opens nothing — no session, no browser, no state Varys holds — so the only
+ * evidence available is the Draft moving, which the panel below watches for.
+ *
+ * It has to come first because the two paths share no mechanism: a pinned test is recorded by a
+ * browser Varys drives, an Agent-Driven one is explored by Claude on the author's own machine and
+ * written down as prose. Claude picks its tools on the first call, so this is a decision with no
+ * sensible midpoint.
+ *
+ * It is a **steer, not an enforcement**, and the copy says so rather than implying a guarantee
+ * Varys does not make: `/mcp` filters tools by who is asking, not by what this page is set to, and
+ * authoring has no session object to hang a mode on. What this changes is the guidance below and
+ * what you are told to say to Claude. Getting it wrong produces a Draft you delete, not a
+ * corrupted test.
+ *
+ * The cost difference is stated because it is the author's money and it is not recoverable later:
+ * a pinned test replays on Varys's own worker for free, while every single run of an Agent-Driven
+ * Test spends their Claude subscription quota.
+ */
+function KindChoice({
+  kind,
+  onChange,
+  locked,
+}: {
+  kind: AuthoringKind;
+  onChange: (k: AuthoringKind) => void;
+  /** A conversation is already under way, so the question is settled for the rest of it. */
+  locked: boolean;
+}) {
+  const options: { id: AuthoringKind; title: string; tag: string; desc: string; cost: string }[] = [
+    {
+      id: "pinned",
+      title: "Pinned test",
+      tag: "recorded",
+      desc: "Claude drives a browser on Varys's server and records the steps. Replayed exactly, every run. Needs a DOM stable enough to pin to.",
+      cost: "Runs free on Varys's worker.",
+    },
+    {
+      id: "agent",
+      title: "Agent-Driven Test",
+      tag: "re-walked",
+      desc: "Claude explores your app with its own local tooling and writes AI Instructions and Checkpoints. For flows that will not sit still — charts that redraw, figures that move.",
+      cost: "Every run spends your Claude subscription quota.",
+    },
+  ];
+
+  return (
+    <section className={styles.kindPicker}>
+      <div className={styles.kindHead}>
+        <span className={styles.kindLabel}>What should Claude author?</span>
+        <span className={styles.kindHint}>
+          {locked
+            ? "Claude is already authoring — this is settled for the rest of the conversation."
+            : "Pick before you start. Claude chooses its tools on the first call, so there is no switching part-way."}
+        </span>
+      </div>
+      <div className={styles.kindOptions}>
+        {options.map((o) => (
+          <button
+            type="button"
+            key={o.id}
+            className={cx(styles.kindCard, kind === o.id && styles.kindCardOn)}
+            aria-pressed={kind === o.id}
+            disabled={locked}
+            onClick={() => onChange(o.id)}
+          >
+            <span className={styles.kindCardHead}>
+              <span className={styles.kindCardTitle}>{o.title}</span>
+              <span className={styles.kindCardTag}>{o.tag}</span>
+              {kind === o.id && <Check size={15} className={styles.kindCardTick} />}
+            </span>
+            <span className={styles.kindCardDesc}>{o.desc}</span>
+            <span className={cx(styles.kindCardCost, o.id === "agent" && styles.kindCardCostWarn)}>
+              {o.cost}
+            </span>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 /**
  * Author with AI (Slice 15) — drive authoring from your own Claude Code (your subscription,
  * first-party) and watch it here step by step. Each action Claude takes against Varys's MCP
@@ -487,6 +589,20 @@ export function Author() {
   const [pickedSeq, setPickedSeq] = useState<number | null>(null);
   const [draft, setDraft] = useState<AuthoringDraftEvent | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
+  const [kind, setKind] = useState<AuthoringKind>(readStoredKind);
+  // Set once this page sees an Agent-Driven Draft actually moving — see `KindChoice`. Never
+  // cleared: within one visit, a conversation that started does not un-start.
+  const [agentWriting, setAgentWriting] = useState(false);
+  const onAgentWriting = useCallback(() => setAgentWriting(true), []);
+
+  const chooseKind = useCallback((k: AuthoringKind) => {
+    setKind(k);
+    try {
+      window.localStorage.setItem(KIND_STORAGE_KEY, k);
+    } catch {
+      /* a browser refusing storage is not worth failing the page over */
+    }
+  }, []);
 
   const all = sessions.data ?? [];
   // Just the live one: the most recent active session (no multi-session history).
@@ -519,7 +635,15 @@ export function Author() {
       />
     );
   } else if (!session) {
-    content = <ConnectState />;
+    // No Varys-hosted session. Which of the two paths this page is for is the author's choice,
+    // and the agent-driven one never opens a session at all — Varys hosts no browser for it, so
+    // there is nothing to wait for and nothing to preview.
+    content =
+      kind === "agent" ? (
+        <AgentDrivenAuthoring connectCmd={CONNECT_CMD} onWriting={onAgentWriting} />
+      ) : (
+        <ConnectState />
+      );
   } else {
     content = (
       <div className={styles.grid}>
@@ -695,6 +819,11 @@ export function Author() {
         </Button>
         <ConnectionPill status={mcp.data} />
       </div>
+
+      {/* The kind choice sits above everything, and disappears once a Varys-hosted session is
+          live: at that point the question is settled by a conversation already under way. The
+          agent-driven path never opens one, so it is locked in place rather than hidden. */}
+      {!session && <KindChoice kind={kind} onChange={chooseKind} locked={agentWriting} />}
 
       {draft && (
         <div className={styles.banner}>

@@ -26,6 +26,7 @@ import type {
   TestSchedule,
   TestScheduleInput,
   TestScheduleSummary,
+  TestKind,
   TestStatus,
   TestSummary,
 } from "@varys/review-contract";
@@ -46,6 +47,7 @@ import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
 import { AgentTestsService } from "./agent-tests.service";
 import {
+  agentCheckpoints,
   baselines,
   draftPreviews,
   environments,
@@ -485,13 +487,22 @@ export class TestsService {
       });
   }
 
-  /** The AI-authored Draft review queue, newest first — each draft's checkpoint count
-   *  (from its latest definition) and steering intent, so a reviewer can triage and open it. */
+  /**
+   * The AI-authored Draft review queue, newest first — each draft's checkpoint count and Brief,
+   * so a reviewer can triage and open it.
+   *
+   * **The count branches on kind, and must.** A pinned Draft keeps its checkpoints as screenshot
+   * steps in its definition; an Agent-Driven one keeps them in `agent_checkpoints` and carries a
+   * stub definition with no steps at all. Counting the definition for both would report every
+   * authored journey as zero — which is this queue's own flag for a test that asserts nothing,
+   * shown against a test that asserts several things.
+   */
   async listDrafts(): Promise<DraftSummary[]> {
     const rows = await this.db
       .select({
         id: tests.id,
         name: tests.name,
+        kind: tests.kind,
         origin: tests.origin,
         intent: tests.intent,
         createdAt: tests.createdAt,
@@ -523,28 +534,58 @@ export class TestsService {
       keyByTestCheckpoint.set(p.testId, m);
     }
 
+    // The Checkpoint names of every agent-driven draft in this queue, in journey order — read
+    // in one pass rather than per row, since the queue is a list view.
+    const agentIds = rows.filter((r) => r.kind === "agent").map((r) => r.id);
+    const agentRows = agentIds.length
+      ? await this.db
+          .select({ testId: agentCheckpoints.testId, name: agentCheckpoints.name })
+          .from(agentCheckpoints)
+          .where(inArray(agentCheckpoints.testId, agentIds))
+          .orderBy(asc(agentCheckpoints.testId), asc(agentCheckpoints.position))
+      : [];
+    const agentNames = new Map<string, string[]>();
+    for (const c of agentRows) {
+      const list = agentNames.get(c.testId) ?? [];
+      list.push(c.name);
+      agentNames.set(c.testId, list);
+    }
+
     return rows.map((r) => {
       const def = r.definition as TestDefinition;
-      const firstCp = screenshotSteps(def)[0]?.name;
-      const key = firstCp ? keyByTestCheckpoint.get(r.id)?.get(firstCp) : undefined;
+      // Whichever source this kind keeps its checkpoints in — the names in order, from which
+      // both the count and the representative thumbnail follow.
+      const names =
+        r.kind === "agent" ? (agentNames.get(r.id) ?? []) : screenshotSteps(def).map((s) => s.name);
+      const key = names[0] ? keyByTestCheckpoint.get(r.id)?.get(names[0]) : undefined;
       return {
         id: r.id,
         name: r.name,
+        kind: r.kind as TestKind,
         origin: r.origin as TestOrigin,
         createdAt: r.createdAt.toISOString(),
-        checkpointCount: checkpointCount(def),
+        checkpointCount: r.kind === "agent" ? names.length : checkpointCount(def),
         intent: r.intent,
         previewUrl: key ? this.storage.getUrl(key) : null,
       };
     });
   }
 
-  /** Full draft detail — the summary plus every checkpoint's authoring-preview screenshot,
-   *  for the promote dialog's "what this test asserts" gallery. */
+  /**
+   * Full draft detail — the summary plus every checkpoint's authoring-preview screenshot, for the
+   * inspector's "what this test asserts" gallery.
+   *
+   * Two shapes come back under one type, and the difference is what the reviewer is judging. A
+   * pinned Draft's checkpoint is a recorded step: its name and how the shot was framed, next to
+   * the picture. An Agent-Driven one's is prose a future run acts on — how to reach the state and
+   * what counts as matching — so that prose travels with the capture, because reviewing the
+   * picture without it tells you nothing about whether the test will do the right thing.
+   */
   async getDraft(id: string): Promise<DraftView> {
     const [row] = await this.db
       .select({
         name: tests.name,
+        kind: tests.kind,
         origin: tests.origin,
         intent: tests.intent,
         createdAt: tests.createdAt,
@@ -562,21 +603,46 @@ export class TestsService {
       .from(draftPreviews)
       .where(eq(draftPreviews.testId, id));
     const keyByName = new Map(previewRows.map((p) => [p.checkpointName, p.artifactKey]));
+    const urlFor = (name: string): string | null => {
+      const key = keyByName.get(name);
+      return key ? this.storage.getUrl(key) : null;
+    };
 
-    const checkpoints: DraftCheckpointPreview[] = screenshotSteps(row.definition as TestDefinition).map(
-      (s) => {
-        const key = keyByName.get(s.name);
-        return {
-          name: s.name,
-          captureMode: (s.captureMode ?? "element") as CaptureMode,
-          previewUrl: key ? this.storage.getUrl(key) : null,
-        };
-      },
-    );
+    let checkpoints: DraftCheckpointPreview[];
+    if (row.kind === "agent") {
+      const cps = await this.db
+        .select({
+          name: agentCheckpoints.name,
+          instructions: agentCheckpoints.instructions,
+          comparePrompt: agentCheckpoints.comparePrompt,
+        })
+        .from(agentCheckpoints)
+        .where(eq(agentCheckpoints.testId, id))
+        .orderBy(asc(agentCheckpoints.position));
+      checkpoints = cps.map((c) => ({
+        name: c.name,
+        // Varys neither took this picture nor chose how to frame it — the agent captured it with
+        // its own tooling. Claiming a capture mode here would be inventing one.
+        captureMode: null,
+        previewUrl: urlFor(c.name),
+        instructions: c.instructions,
+        comparePrompt: c.comparePrompt,
+      }));
+    } else {
+      checkpoints = screenshotSteps(row.definition as TestDefinition).map((s) => ({
+        name: s.name,
+        captureMode: (s.captureMode ?? "element") as CaptureMode,
+        previewUrl: urlFor(s.name),
+        // A recorded step carries no prose of its own: what it asserts is the picture.
+        instructions: null,
+        comparePrompt: null,
+      }));
+    }
 
     return {
       id,
       name: row.name,
+      kind: row.kind as TestKind,
       origin: row.origin as TestOrigin,
       createdAt: row.createdAt.toISOString(),
       intent: row.intent,

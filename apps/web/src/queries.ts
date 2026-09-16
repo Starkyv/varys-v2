@@ -353,12 +353,18 @@ export function draftQueryKey(id: string) {
 }
 
 /** One draft's detail (per-checkpoint authoring previews) — fetched when its promote
- *  dialog opens. */
-export function useDraft(id: string, opts?: { enabled?: boolean }) {
+ *  dialog opens.
+ *
+ *  `pollMs` is for watching an Agent-Driven Draft being WRITTEN. That kind has no session and no
+ *  event stream — Varys hosts no browser for it, so there is nothing to stream — and the Draft
+ *  itself is the accumulator. Re-reading it on an interval is how its Checkpoints appear as
+ *  Claude adds them. Off by default: every other caller is looking at a finished draft. */
+export function useDraft(id: string, opts?: { enabled?: boolean; pollMs?: number }) {
   return useQuery({
     queryKey: draftQueryKey(id),
     queryFn: () => fetchDraft(id),
     enabled: opts?.enabled ?? true,
+    refetchInterval: opts?.pollMs ?? false,
   });
 }
 

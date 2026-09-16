@@ -269,3 +269,34 @@
     background: var(--color-danger-soft);
   }
 }
+
+/* ── Agent-Driven Draft: the authored prose, with the capture as evidence beside it ──
+   A different shape from `.previewGrid` on purpose. A pinned Draft's checkpoints are
+   pictures and tile happily; these are paragraphs a reviewer reads in order, so they
+   stack full-width with the capture held to a fixed thumbnail on the left. */
+
+.instructions {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-relaxed);
+  color: var(--color-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+
+
+
+
+
+
+
+
+
+.cpNote {
+  margin: var(--space-10) 0 0;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-relaxed);
+  color: var(--color-text-subtle);
+}

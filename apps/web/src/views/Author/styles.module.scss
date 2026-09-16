@@ -1198,3 +1198,137 @@
     transform: translateY(0);
   }
 }
+
+/* ── the kind choice ──────────────────────────────────────────────────────
+   Shown before a conversation starts and hidden once one is live. Two cards
+   rather than a select: the difference between them is a paragraph each and a
+   cost consequence, none of which fits in a dropdown option. */
+
+.kindPicker {
+  padding: var(--space-16);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  background: var(--color-bg-surface);
+}
+
+.kindHead {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-10);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-12);
+}
+
+.kindLabel {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+}
+
+.kindHint {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+
+.kindOptions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--space-12);
+}
+
+.kindCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  text-align: left;
+  padding: var(--space-12);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-surface);
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease-standard),
+    background var(--duration-fast) var(--ease-standard);
+
+  &:hover {
+    border-color: var(--color-border-strong);
+    background: var(--color-bg-subtle);
+  }
+
+  &:focus-visible {
+    @include focus-ring;
+  }
+}
+
+.kindCardOn {
+  border-color: var(--color-primary);
+  background: var(--color-bg-subtle);
+}
+
+.kindCardHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.kindCardTitle {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+}
+
+.kindCardTag {
+  padding: 0 var(--space-6);
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--radius-full);
+  background: var(--color-bg-inset);
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.kindCardTick {
+  margin-left: auto;
+  color: var(--color-primary);
+}
+
+.kindCardDesc {
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-relaxed);
+  color: var(--color-text-muted);
+}
+
+/* The cost line is the part people regret not reading, so it is set apart rather
+   than folded into the description. */
+.kindCardCost {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-subtle);
+}
+
+.kindCardCostWarn {
+  color: var(--color-warning-fg);
+}
+
+/* Locked: a conversation is under way and the question is already answered. Kept
+   visible rather than hidden, so the answer stays readable. */
+.kindCard:disabled {
+  cursor: default;
+  opacity: 0.62;
+
+  &:hover {
+    border-color: var(--color-border);
+    background: var(--color-bg-surface);
+  }
+}
+
+.kindCardOn:disabled {
+  opacity: 1;
+  border-color: var(--color-primary);
+
+  &:hover {
+    border-color: var(--color-primary);
+    background: var(--color-bg-subtle);
+  }
+}

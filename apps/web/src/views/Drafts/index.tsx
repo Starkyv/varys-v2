@@ -219,9 +219,13 @@ export function Drafts() {
                         {isNew && <span className={styles.newBadge}>NEW</span>}
                       </span>
                       <span className={styles.rowMeta}>
+                        {d.kind === "agent" && <span className={styles.kindPill}>agent-driven</span>}
                         {zero ? (
+                          // The warning differs by kind for the same reason the inspector's does:
+                          // a pinned test with no checkpoints runs and catches nothing, while an
+                          // Agent-Driven one is refused at run start outright.
                           <Badge tone="warning" appearance="soft" size="sm" icon={<AlertTriangle size={11} />}>
-                            Asserts nothing
+                            {d.kind === "agent" ? "Can’t be run" : "Asserts nothing"}
                           </Badge>
                         ) : (
                           <span className={styles.cpPill}>

@@ -1,6 +1,7 @@
 import type { DraftSummary } from "@varys/review-contract";
 import { AlertTriangle, Badge, Button, Check, Eye, IconButton, Pencil, Play, Skeleton, Trash } from "@varys/ui";
 import { useEffect, useState } from "react";
+import { AgentCheckpointList } from "../../../../components/AgentCheckpointList";
 import { ZoomableImage } from "../../../../components/ZoomableImage";
 import { useToast } from "../../../../context/toast";
 import { relativeTime } from "../../../../lib/format";
@@ -9,10 +10,18 @@ import styles from "./styles.module.scss";
 
 /**
  * The review-queue inspector — the right pane of the master-detail. Shows the selected
- * draft in enough depth to judge it without leaving the queue: steering intent, a
- * zero-checkpoint warning, what it visually asserts (the authoring-preview screenshots
- * Claude captured, via GET /drafts/:id), and the review actions. Recreated from the
- * Claude Design review-queue mock.
+ * draft in enough depth to judge it without leaving the queue: the Brief, a
+ * zero-checkpoint warning, what it asserts (the authoring-preview screenshots Claude
+ * captured, via GET /drafts/:id), and the review actions. Recreated from the Claude Design
+ * review-queue mock.
+ *
+ * **It reads two kinds, and they are judged differently.** A pinned Draft is judged on its
+ * pictures: the steering sentence that asked for it, then a screenshot per recorded checkpoint.
+ * An **Agent-Driven** one is judged on its *prose* — the AI Instructions a future run is driven
+ * by, and per Checkpoint how a run reaches the state and what counts as matching. The picture is
+ * evidence the state was reachable, not the assertion itself, so it sits beside the words rather
+ * than standing in for them. Panels that mean nothing for a kind are absent, not empty: an empty
+ * panel reads as missing data and sends a reviewer looking for something that was never there.
  */
 export function DraftInspector({
   draft,
@@ -31,6 +40,7 @@ export function DraftInspector({
   const detail = useDraft(draft.id);
   const checkpoints = detail.data?.checkpoints ?? [];
   const zero = draft.checkpointCount === 0;
+  const agent = draft.kind === "agent";
 
   const { toast } = useToast();
   const rename = useRenameDraft();
@@ -90,6 +100,11 @@ export function DraftInspector({
           </h2>
         )}
         <div className={styles.tags}>
+          {agent && (
+            <Badge tone="neutral" appearance="soft" size="sm">
+              Agent-driven
+            </Badge>
+          )}
           <Badge tone="primary" appearance="soft" size="sm">
             AI-authored
           </Badge>
@@ -97,7 +112,23 @@ export function DraftInspector({
       </header>
 
       <div className={styles.body}>
-        {draft.intent ? (
+        {/* The Brief. Same column, two different things: a pinned Draft records the sentence
+            that ASKED for the test; an Agent-Driven one holds the instructions Claude WROTE,
+            which every future run is composed from — so for that kind this panel is the artifact
+            under review, not context for it. */}
+        {agent ? (
+          detail.data?.intent ? (
+            <div className={styles.intent}>
+              <span className={styles.intentLabel}>AI Instructions</span>
+              <pre className={styles.instructions}>{detail.data.intent}</pre>
+            </div>
+          ) : (
+            <div className={styles.noIntent}>
+              No AI Instructions were written. Every run of this test is driven by them, so it has
+              nothing to go on — add them in the editor before promoting.
+            </div>
+          )
+        ) : draft.intent ? (
           <div className={styles.intent}>
             <span className={styles.intentLabel}>Steering intent</span>
             <p className={styles.intentText}>{draft.intent}</p>
@@ -113,10 +144,16 @@ export function DraftInspector({
           <div className={styles.zeroWarn}>
             <AlertTriangle size={18} />
             <div>
-              <div className={styles.zeroTitle}>This test asserts nothing</div>
+              <div className={styles.zeroTitle}>
+                {agent ? "This test cannot be run" : "This test asserts nothing"}
+              </div>
               <p className={styles.zeroText}>
-                Zero visual checkpoints — it will run but never catch a regression. You can still
-                promote it, but add a checkpoint in the editor first.
+                {agent
+                  ? // Not the pinned wording: an Agent-Driven Test with no Checkpoints is refused
+                    // outright at run start, so "it will run but never catch a regression" would be
+                    // false — and would send a reviewer off to run it and find out.
+                    "Zero Checkpoints — starting a run on it is refused, because there is nothing for the run to reach or compare. Add at least one in the editor; promoting it as it stands produces a test nobody can run."
+                  : "Zero visual checkpoints — it will run but never catch a regression. You can still promote it, but add a checkpoint in the editor first."}
               </p>
             </div>
           </div>
@@ -137,7 +174,7 @@ export function DraftInspector({
 
         {!zero && (
           <section className={styles.previews}>
-            <div className={styles.sectionLabel}>What it asserts</div>
+            <div className={styles.sectionLabel}>{agent ? "The journey" : "What it asserts"}</div>
             {detail.isLoading ? (
               <div className={styles.previewGrid}>
                 <Skeleton height={132} radius="var(--radius-lg)" />
@@ -145,6 +182,10 @@ export function DraftInspector({
               </div>
             ) : checkpoints.length === 0 ? (
               <div className={styles.previewEmpty}>No checkpoint previews were captured.</div>
+            ) : agent ? (
+              // The same component the Author page shows while Claude writes these, so a reviewer
+              // who watched the journey being authored reads the identical layout here.
+              <AgentCheckpointList checkpoints={checkpoints} />
             ) : (
               <div className={styles.previewGrid}>
                 {checkpoints.map((cp) => (
@@ -163,12 +204,19 @@ export function DraftInspector({
                           no preview
                         </span>
                       )}
-                      <span className={styles.previewMode}>{cp.captureMode}</span>
+                      {cp.captureMode && <span className={styles.previewMode}>{cp.captureMode}</span>}
                     </div>
                     <figcaption className={styles.previewName}>{cp.name}</figcaption>
                   </figure>
                 ))}
               </div>
+            )}
+            {agent && (
+              <p className={styles.cpNote}>
+                The captures are what Claude saw when it reached each state — evidence the journey
+                is walkable, not baselines. The first run against an environment proposes those,
+                and you approve them there.
+              </p>
             )}
           </section>
         )}

@@ -184,6 +184,21 @@
   font-weight: var(--font-weight-medium);
 }
 
+/* Which kind the Draft is. Quiet on purpose — it is a fact about the test, not a warning,
+   and the row already carries one badge that IS a warning. */
+.kindPill {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 var(--space-8);
+  border-radius: var(--radius-full);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+}
+
 .rowTime {
   font-size: var(--font-size-xs);
   color: var(--color-text-subtle);
