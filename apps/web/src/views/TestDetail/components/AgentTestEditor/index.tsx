@@ -6,6 +6,7 @@ import {
   Camera,
   Card,
   ChevronDown,
+  Clock,
   EmptyState,
   IconButton,
   Input,
@@ -42,6 +43,7 @@ export function AgentTestEditor({ config }: { config: TestConfigView }) {
   return (
     <>
       <InstructionsCard config={config} />
+      <LeaseCard config={config} />
       <Card className={styles.card}>
         <header className={styles.cardHead}>
           <div>
@@ -136,6 +138,79 @@ function InstructionsCard({ config }: { config: TestConfigView }) {
           }
         >
           Save instructions
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+/**
+ * The wall-clock lease — how long a run of this test may take before Varys closes the session.
+ *
+ * The one setting on this page that is a RULE rather than intent. Everything else here is prose
+ * handed to an agent that may or may not act on it; this is enforced server-side, because the
+ * thing it bounds is an agent that has decided to keep trying and would not read a request to stop.
+ *
+ * Whole minutes, which is not the API's own granularity (it takes seconds) but is the only unit
+ * anyone thinks about a run in. A lease set to something finer through the API is shown rounded.
+ */
+function LeaseCard({ config }: { config: TestConfigView }) {
+  const update = useUpdateTest();
+  const { toast } = useToast();
+  const stored = Math.max(1, Math.round(config.agentLeaseSeconds / 60));
+  const [minutes, setMinutes] = useState(String(stored));
+  const parsed = Number(minutes);
+  const valid = Number.isInteger(parsed) && parsed >= 1 && parsed <= 1440;
+  const dirty = valid && parsed !== stored;
+
+  return (
+    <Card className={styles.card}>
+      <header className={styles.cardHead}>
+        <div>
+          <h2 className={styles.cardTitle}>
+            <Clock size={15} /> Wall-clock lease
+          </h2>
+          <p className={styles.cardHint}>
+            How long a run of this test may take before Varys closes the session. Retrying a state
+            it could not reach is the agent’s own call — but an agent retrying one that will never
+            appear has no reason to stop, and it is your Claude subscription it is spending.
+          </p>
+        </div>
+      </header>
+      <div className={styles.lease}>
+        <label className={styles.field}>
+          <span className={styles.label}>Minutes</span>
+          <Input
+            type="number"
+            min={1}
+            max={1440}
+            step={1}
+            inputSize="sm"
+            invalid={!valid}
+            className={styles.leaseInput}
+            value={minutes}
+            onChange={(e) => setMinutes(e.target.value)}
+          />
+        </label>
+        <p className={styles.note}>
+          When it runs out the session is closed and nothing more can be reported to it. The run is
+          left <strong>red</strong>, not cancelled: an agent that drove for the whole lease and
+          could not get there has found something out about the app or about these instructions.
+        </p>
+        <Button
+          size="sm"
+          disabled={!dirty || update.isPending}
+          onClick={() =>
+            update.mutate(
+              { id: config.id, body: { agentLeaseSeconds: parsed * 60 } },
+              {
+                onSuccess: () => toast(`Runs now stop after ${parsed} minute${parsed === 1 ? "" : "s"}`),
+                onError: (e) => toast(e instanceof Error ? e.message : "Couldn’t save the lease"),
+              },
+            )
+          }
+        >
+          Save lease
         </Button>
       </div>
     </Card>

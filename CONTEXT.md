@@ -153,6 +153,19 @@ Distinct from an Authoring Session (which records into a Draft) and a Repair Ses
 edits an existing test) — both of which are Varys-hosted browsers.
 _Avoid_: agent session, run session, execution session
 
+**Wall-Clock Lease**:
+The bound on an Agent Run Session: how long it may run before Varys closes it, set per test with
+a modest default and enforced **server-side**, so it is a rule rather than something the AI
+Instructions ask for. Wall-clock rather than a tool-call budget, because twenty cheap actions and
+twenty expensive ones cost wildly different amounts and it is the author's own Claude
+subscription being spent. Retrying a state it could not reach stays the agent's own business —
+this only stops an agent retrying one that will **never** appear. On expiry the session is closed
+and every further submission refused; whatever slots are still unfilled have been `unreached`
+since they were seeded, so the Run is **failed**, not **cancelled** — an agent that drove for ten
+minutes and could not get there has found something out. Distinct from a **Claim**'s expiry,
+which returns work to a queue for someone else to try.
+_Avoid_: timeout, budget, deadline, TTL
+
 **Repair Policy**:
 Per-test setting for what happens when a run fails on a locator it cannot resolve: `manual`
 (surface it for a human to open a Repair Session, today's behaviour) or `auto` (enqueue a
@@ -180,8 +193,9 @@ which binds it to that job's Repair Session. The queue is project-wide and first
 any member's cloud Claude may drain it, and the job records who claimed it, so a repaired
 version is attributed to that member. A claim is a lease — it expires if the claimer stops
 reporting, and the job returns to the queue with one more attempt spent. A job that spends every
-attempt without a repair is abandoned rather than re-offered forever.
-_Avoid_: lease, pick up, assign
+attempt without a repair is abandoned rather than re-offered forever. It expires to give the work
+to somebody else, where a **Wall-Clock Lease** expires to stop the work — do not call a Claim one.
+_Avoid_: lease (that names the Wall-Clock Lease), pick up, assign
 
 **Healed**:
 A run outcome: everything the test checks verified cleanly, but reaching it required re-pinning

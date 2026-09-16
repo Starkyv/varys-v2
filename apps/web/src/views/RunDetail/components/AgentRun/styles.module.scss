@@ -50,6 +50,52 @@
   color: var(--color-text-muted);
 }
 
+/* --- The session ran out of time ----------------------------------- */
+
+/* Shares the root cause's shape so the two read as one stack of findings, but takes the WARNING
+   rail rather than the danger one: the lease running out is a fact about the session, and the red
+   belongs to the unfilled slots it left behind — which state their own case directly below. */
+.lease {
+  padding: var(--space-14) var(--space-16);
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-warning);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-inset);
+}
+
+.leaseHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  color: var(--color-warning);
+}
+
+.leaseTitle {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+}
+
+.leaseMeta {
+  margin-left: auto;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.leaseBody {
+  margin: var(--space-8) 0 0;
+  font-size: var(--font-size-sm);
+  line-height: 1.55;
+  color: var(--color-text);
+}
+
+.leaseFoot {
+  margin: var(--space-8) 0 0;
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+
 /* --- The agent's account ------------------------------------------- */
 
 .summary {

@@ -873,6 +873,13 @@ export interface TestConfigView {
   /** The test's Repair Policy (Slice 19). Shown and edited on test detail; written via the
    *  structural `PATCH /tests/:id`, so changing it never writes a new test_version. */
   repairPolicy: RepairPolicy;
+  /**
+   * The wall-clock lease an Agent Run Session on this test is given, in seconds — the bound on an
+   * agent that will not stop. Meaningful only for `kind: "agent"`; a pinned test carries the
+   * default and ignores it. Written via the structural `PATCH /tests/:id`, so changing it writes
+   * no test_version — the lease is operational metadata, like the Repair Policy.
+   */
+  agentLeaseSeconds: number;
   /** The test's declared Assertions (slice 09), with their pinned form spelled out — which
    *  elements each side reads and what is compared. Empty for a test that declares none. */
   assertions: TestConfigAssertion[];
@@ -2001,6 +2008,15 @@ export interface RunView {
    * presenting each consequence as its own failure.
    */
   unreached: UnreachedRootCause | null;
+  /**
+   * The Agent Run Session's wall-clock lease and where it stands against it — null for a pinned
+   * run, and for an agent run started before leases existed.
+   *
+   * What it buys the view is the distinction it could not otherwise draw: an agent that finished
+   * and reported, an agent whose time ran out, and an agent that may still be walking are three
+   * different things, and before the lease the last two were indistinguishable.
+   */
+  session: AgentSessionView | null;
 }
 
 /**
@@ -2099,6 +2115,99 @@ export function rollupRunStatus(
     else if (c.reviewState === "pending-baseline" || c.reviewState === "diff") anyPending = true;
   }
   return anyMissing ? "failed" : anyPending ? "needs_review" : anyRejected ? "failed" : "passed";
+}
+
+/**
+ * The longest lease a test may be given — twenty-four hours.
+ *
+ * A ceiling and no floor (beyond "a positive number of seconds"), which is not an oversight. Too
+ * LONG is the failure the lease exists to prevent, and it is silent: nobody notices the quota
+ * draining. Too SHORT fails loudly and immediately — the run goes red saying it hit its bound — so
+ * it corrects itself the first time it happens, and Varys has no basis for deciding how long
+ * someone else's journey ought to take.
+ *
+ * The DEFAULT is deliberately not here: it lives in exactly one place, the `tests.agent_lease_seconds`
+ * column default, so a test's lease is always a value read off the row rather than a constant two
+ * packages might disagree about.
+ */
+export const AGENT_LEASE_MAX_SECONDS = 86_400;
+
+/**
+ * A lease in the units a person would say it in — "15 minutes", "1 hour", "90 seconds".
+ *
+ * Shared, and for a reason a formatter does not usually earn: the same number is said to the AGENT
+ * (in the tool response that grants the lease, and in the refusal when it runs out) and to the
+ * PERSON (in the run view that reports it), and those two must not disagree about how long the run
+ * was allowed to take.
+ *
+ * Exact rather than approximate — it steps down to the finer unit instead of rounding. A 90-second
+ * lease rendered as "2 minutes" would overstate a bound by a third, and a bound is the one number
+ * here that has to be literally true.
+ */
+export function describeLease(seconds: number): string {
+  const unit = (n: number, name: string): string => `${n} ${name}${n === 1 ? "" : "s"}`;
+  if (seconds >= 3600 && seconds % 3600 === 0) return unit(seconds / 3600, "hour");
+  if (seconds >= 60 && seconds % 60 === 0) return unit(seconds / 60, "minute");
+  return unit(seconds, "second");
+}
+
+/**
+ * What an Agent Run Session is doing now, as far as Varys can tell.
+ *
+ * - `open` — inside its lease, and Varys has no idea whether an agent is still walking it. This is
+ *   the honestly ambiguous state; every run had it before leases existed.
+ * - `expired` — the wall clock passed the lease. The session is closed: nothing more may be
+ *   submitted to it, and whatever it left unfilled is what this run verified.
+ * - `finished` — the agent closed it itself with a written summary.
+ *
+ * `expired` and `finished` are the pair the run view must never blur. Both end the session, but one
+ * is an agent that reached the end of the journey and said so, and the other is an agent that ran
+ * out of time — a finding about the app or about the instructions, not about the agent.
+ */
+export type AgentSessionState = "open" | "expired" | "finished";
+
+/** The Agent Run Session behind a run — its bound, and where it stands against it. */
+export interface AgentSessionView {
+  /** The wall-clock lease it was granted at start, in seconds. Copied onto the run, so editing
+   *  the test's lease afterwards does not rewrite what this session was actually given. */
+  leaseSeconds: number;
+  /** When that lease runs out (ISO). Computed once at start: the deadline is absolute, so it does
+   *  not move if the run row is touched later. */
+  leaseExpiresAt: string;
+  /** Which of the three states it is in, as of the moment the read-model was built. */
+  state: AgentSessionState;
+}
+
+/**
+ * Which of the three states an Agent Run Session is in. Pure (no IO, no ambient clock — `now` is
+ * passed), and shared because both callers ACT on it: the API refuses a submission on an expired
+ * session, and the run view says the session hit its bound. Deciding it twice would let a run read
+ * as still running while its own tools tell the agent it is over.
+ *
+ * A summary outranks the clock. A session that finished stays finished however long afterwards the
+ * run is read — otherwise every completed agent run would quietly become an expired one an hour
+ * later, which is the most misleading thing this could possibly do.
+ */
+export function deriveAgentSessionState(
+  session: {
+    /** Whether `finish_agent_run` wrote its account of the session (`runs.agent_summary`). */
+    summaryWritten: boolean;
+    /** The deadline, or null for a run started before leases existed — which is left `open`
+     *  rather than having a deadline invented for it retrospectively. */
+    leaseExpiresAt: string | Date | null;
+  },
+  now: number | Date,
+): AgentSessionState {
+  if (session.summaryWritten) return "finished";
+  if (session.leaseExpiresAt == null) return "open";
+  const deadline =
+    session.leaseExpiresAt instanceof Date
+      ? session.leaseExpiresAt.getTime()
+      : Date.parse(session.leaseExpiresAt);
+  if (!Number.isFinite(deadline)) return "open";
+  // `>=`, because a lease "until 10:00" is over AT 10:00 — the boundary instant belongs to the
+  // bound, not to the last moment of the session.
+  return (now instanceof Date ? now.getTime() : now) >= deadline ? "expired" : "open";
 }
 
 /** The minimal per-slot shape {@link deriveUnreachedRootCause} reads — `CheckpointView` satisfies it. */

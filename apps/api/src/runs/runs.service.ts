@@ -43,10 +43,12 @@ import type {
   TuningInput,
 } from "@varys/review-contract";
 import {
+  deriveAgentSessionState,
   deriveRunOutcome,
   deriveUnreachedRootCause,
   isRepairInReview,
   rollupRunStatus,
+  type AgentSessionView,
   type RunFailureKind,
 } from "@varys/review-contract";
 import { describeStep, type TestDefinition } from "@varys/step-schema";
@@ -260,6 +262,8 @@ export class RunsService {
         triageAt: runs.triageAt,
         agentSummary: runs.agentSummary,
         agentInstructions: runs.agentInstructions,
+        agentLeaseSeconds: runs.agentLeaseSeconds,
+        agentLeaseExpiresAt: runs.agentLeaseExpiresAt,
         testId: testVersions.testId,
         testName: tests.name,
         kind: tests.kind,
@@ -557,6 +561,23 @@ export class RunsService {
       // Computed here rather than in the client for the same reason `outcome` is: a summary of a
       // failure that two surfaces could word differently is a summary nobody can quote.
       unreached: deriveUnreachedRootCause(checkpoints),
+      // The Agent Run Session's bound and where it stands against it. Evaluated against the clock
+      // AT READ TIME, and nothing writes the answer down — an expired session needs no sweeper to
+      // be over, because the run has been `failed`/`unreached` since its rows were seeded. What
+      // this adds is the ability to SAY so: before the lease, a run with unfilled slots and no
+      // summary could equally have been an agent still walking it, and the view had to word itself
+      // around not knowing.
+      session:
+        row.agentLeaseExpiresAt && row.agentLeaseSeconds != null
+          ? ({
+              leaseSeconds: row.agentLeaseSeconds,
+              leaseExpiresAt: row.agentLeaseExpiresAt.toISOString(),
+              state: deriveAgentSessionState(
+                { summaryWritten: row.agentSummary != null, leaseExpiresAt: row.agentLeaseExpiresAt },
+                Date.now(),
+              ),
+            } satisfies AgentSessionView)
+          : null,
     };
   }
 

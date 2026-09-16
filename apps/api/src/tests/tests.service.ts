@@ -29,6 +29,7 @@ import type {
   TestStatus,
   TestSummary,
 } from "@varys/review-contract";
+import { AGENT_LEASE_MAX_SECONDS } from "@varys/review-contract";
 import { isRepairPolicy, REPAIR_POLICIES } from "@varys/repair-policy";
 import { summarizeAssertion } from "../assertion-view";
 import {
@@ -87,6 +88,16 @@ export interface UpdateTestInput {
    *  makes it safe to sharpen a Brief in response to a repair that was refused against it
    *  (Slice 19, slice 05). */
   brief?: string | null;
+  /**
+   * Set the wall-clock lease an Agent Run Session on this test is bounded by, in seconds
+   * (Agent-Driven Tests). Omit to leave unchanged. Operational metadata, like the Repair Policy
+   * and the schedule: never writes a new test_version.
+   *
+   * Refused on a pinned test. Varys runs those itself and bounds them with the worker's own
+   * timeouts; accepting a setting that would silently do nothing is how a person ends up believing
+   * they capped something they did not.
+   */
+  agentLeaseSeconds?: number;
 }
 
 /**
@@ -114,6 +125,24 @@ function nextCronRun(cron: string, timezone: string, enabled: boolean): Date | n
  */
 function asRepairPolicy(value: string | null | undefined): RepairPolicy {
   return isRepairPolicy(value) ? value : "manual";
+}
+
+/**
+ * Validate a wall-clock lease, in seconds (Agent-Driven Tests).
+ *
+ * A ceiling and no floor beyond "a positive whole number", which is the asymmetry the lease exists
+ * for: too LONG is the silent failure — an agent grinding at an unreachable state, on the author's
+ * own subscription quota, with nobody watching — while too short fails loudly on the very next run,
+ * which says in so many words that it hit its bound. Varys has no basis for deciding how long
+ * someone else's journey ought to take, so it only refuses the value that stops being a bound.
+ */
+function assertLeaseSeconds(value: number): number {
+  if (!Number.isInteger(value) || value < 1 || value > AGENT_LEASE_MAX_SECONDS) {
+    throw new BadRequestException(
+      `agentLeaseSeconds must be a whole number of seconds between 1 and ${AGENT_LEASE_MAX_SECONDS} (24 hours) — got ${JSON.stringify(value)}.`,
+    );
+  }
+  return value;
 }
 
 /** Trim, drop empties, dedupe — a tag attaches at most once per test. */
@@ -607,6 +636,9 @@ export class TestsService {
       }
       patch.repairPolicy = input.repairPolicy;
     }
+    if (input.agentLeaseSeconds !== undefined) {
+      patch.agentLeaseSeconds = assertLeaseSeconds(input.agentLeaseSeconds);
+    }
     const tags = input.tags !== undefined ? normalizeTags(input.tags) : undefined;
     const hasSchedule = input.schedule !== undefined;
     if (Object.keys(patch).length === 0 && tags === undefined && !hasSchedule) return { ok: true };
@@ -616,6 +648,12 @@ export class TestsService {
     // schedule that silently never fires is worse than no schedule at all. Clearing one (null)
     // stays allowed — that can only ever make things more true.
     if (input.schedule) await this.agent.assertNoAgentTests([id], "schedule");
+
+    // The mirror of the line above, and for the same reason: a setting that applies to a kind this
+    // test is not would be accepted, stored, and never once consulted. Refusing is the only way
+    // "I capped that test at five minutes" and "that test is capped at five minutes" stay the same
+    // statement.
+    if (input.agentLeaseSeconds !== undefined) await this.assertAgentKind(id);
 
     // Validate + assemble the schedule BEFORE any write (fail fast): an unparseable cron
     // is a 400, an unknown environment a 404 — neither leaves a half-applied update.
@@ -806,6 +844,7 @@ export class TestsService {
         brief: tests.intent,
         repairPolicy: tests.repairPolicy,
         kind: tests.kind,
+        agentLeaseSeconds: tests.agentLeaseSeconds,
       })
       .from(tests)
       .where(eq(tests.id, id))
@@ -838,6 +877,9 @@ export class TestsService {
       notes: meta?.notes ?? null,
       brief: meta?.brief ?? null,
       repairPolicy: asRepairPolicy(meta?.repairPolicy),
+      // NOT NULL on the row, and the row is the one `getById` above already required — the
+      // fallback is unreachable and exists only because `meta` destructures as optional.
+      agentLeaseSeconds: meta?.agentLeaseSeconds ?? 0,
       needsEnvironment: usesBaseUrl(def),
       // The pinned form spelled out: which elements each side reads, how each is coerced, what is
       // compared. An author cannot review a check they cannot see.
@@ -867,6 +909,25 @@ export class TestsService {
         baselineUrl: s.type === "screenshot" ? baselineUrl(s.name) : null,
       })),
     };
+  }
+
+  /**
+   * Refuse unless this test is agent-driven. The counterpart to `assertNoAgentTests` — that one
+   * keeps agent tests out of places nothing can run them, this one keeps agent-only settings off
+   * tests that would ignore them.
+   */
+  private async assertAgentKind(id: string): Promise<void> {
+    const [row] = await this.db
+      .select({ kind: tests.kind, name: tests.name })
+      .from(tests)
+      .where(eq(tests.id, id))
+      .limit(1);
+    if (!row) throw new NotFoundException(`Test ${id} not found`);
+    if (row.kind !== "agent") {
+      throw new BadRequestException(
+        `"${row.name}" is a pinned test, so a wall-clock lease means nothing to it: Varys replays it here and bounds it with the worker's own timeouts. The lease bounds an Agent Run Session, which only an Agent-Driven Test has.`,
+      );
+    }
   }
 
   /** A test's cron schedule (with its environment name resolved) for the config view;

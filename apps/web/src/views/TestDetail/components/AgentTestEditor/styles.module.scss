@@ -145,3 +145,21 @@
   font-size: var(--font-size-sm);
   line-height: 1.5;
 }
+
+/* The lease control: a narrow number field, its consequence, and the save. The explanation sits
+   BETWEEN the field and the button rather than under both — it is what the number means, and a
+   person setting a bound for the first time should read it before committing to one. */
+.lease {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-16);
+}
+
+.leaseInput {
+  width: 6rem;
+}
+
+.lease .note {
+  flex: 1;
+  line-height: 1.5;
+}

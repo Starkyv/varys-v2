@@ -147,6 +147,8 @@ describe("Agent Run Session — red before the agent does anything", () => {
     instructions: string;
     manifest: { step: number; name: string; instructions: string; comparePrompt: string; hasBaseline: boolean }[];
     baselineImages: string[];
+    leaseSeconds: number;
+    leaseExpiresAt: string;
     path: string;
     note: string;
   }
@@ -235,6 +237,8 @@ describe("Agent Run Session — red before the agent does anything", () => {
         status: runs.status,
         failureKind: runs.failureKind,
         agentSummary: runs.agentSummary,
+        leaseSeconds: runs.agentLeaseSeconds,
+        leaseExpiresAt: runs.agentLeaseExpiresAt,
       })
       .from(runs)
       .where(eq(runs.id, runId))
@@ -1353,6 +1357,266 @@ describe("Agent Run Session — red before the agent does anything", () => {
 
       const rows = await rowsOf(session.runId);
       expect(rows.find((r) => r.name === "chart")?.reviewState).toBe("diff");
+    });
+  });
+
+  /**
+   * The **wall-clock lease** (ticket #7) — the bound on an agent that will not stop.
+   *
+   * Retrying is deliberately the agent's own business: it knows why it failed and can vary its
+   * approach, where a blind replay only re-rolls the dice. But an agent retrying a state that will
+   * NEVER appear — the page was removed, the instructions are wrong — has no reason ever to stop,
+   * and it is the author's own Claude subscription it is spending.
+   *
+   * The property worth more than any of the refusals: expiry needs NOTHING to run. The run has
+   * been `failed`/`unreached` since its rows were seeded, so a session whose time simply ran out
+   * is already correctly red — no sweeper, no reconciliation, and no cooperation from the agent,
+   * which by definition is the one thing an abandoned session cannot supply. The refusals below
+   * only stop a late arrival from writing over that answer.
+   *
+   * Leases here are one second and waited out for real, rather than backdating the deadline in the
+   * database. Reaching around the API to expire a run would test the column and not the bound.
+   */
+  describe("the wall-clock lease", () => {
+    let leaseTestId: string;
+
+    /**
+     * Wall-clock, since that is the thing under test — a shade over the lease, so a slow box
+     * crossing the deadline late still crosses it.
+     *
+     * A test that has to report something BEFORE the deadline passes a longer lease: the submit
+     * writes a PNG, looks up a baseline and rolls the run's status up, and on a loaded machine
+     * that is not reliably under a second. Cutting it fine there would make this suite fail for
+     * the one reason it is not testing.
+     */
+    const waitOutLease = (seconds = 1) =>
+      new Promise((resolve) => setTimeout(resolve, seconds * 1_000 + 400));
+
+    interface RunViewSession {
+      session: { leaseSeconds: number; leaseExpiresAt: string; state: string } | null;
+      agentSummary: string | null;
+      status: string;
+      failureKind: string | null;
+    }
+    const runView = async (runId: string): Promise<RunViewSession> =>
+      (await authed(app).get(`/runs/${runId}`).expect(200)).body as RunViewSession;
+
+    const leaseOf = async (id: string): Promise<number> =>
+      ((await authed(app).get(`/tests/${id}/config`).expect(200)).body as { agentLeaseSeconds: number })
+        .agentLeaseSeconds;
+
+    beforeAll(async () => {
+      const created = await authed(app)
+        .post("/tests/agent")
+        .send({ name: "lease journey", instructions: "Sign in as qa@acme.io / hunter2." })
+        .expect(201);
+      leaseTestId = created.body.id as string;
+      for (const cp of [
+        { name: "arrive", instructions: "Open the app.", comparePrompt: "The shell is rendered." },
+        { name: "search", instructions: "Search for a term.", comparePrompt: "Results are listed." },
+        { name: "detail", instructions: "Open the first result.", comparePrompt: "The detail panel is open." },
+      ]) {
+        await authed(app).post(`/tests/${leaseTestId}/agent-checkpoints`).send(cp).expect(201);
+      }
+    }, 60_000);
+
+    // Nothing opts in to being bounded. A test nobody has thought about is the one most likely to
+    // be left grinding, so the default has to apply to every existing row and every new one.
+    it("bounds a session on a test nobody configured, with a modest default", async () => {
+      expect(await leaseOf(testId)).toBe(900);
+
+      const before = Date.now();
+      const { session } = await start({ testId, environmentId });
+      expect(session.leaseSeconds).toBe(900);
+
+      const deadline = Date.parse(session.leaseExpiresAt);
+      expect(deadline).toBeGreaterThanOrEqual(before + 900_000);
+      expect(deadline).toBeLessThanOrEqual(Date.now() + 900_000);
+
+      // Said out loud to the agent, rather than left to be discovered by a refusal: one that knows
+      // its remaining time can spend it on the checkpoint most likely to be reachable.
+      expect(session.note).toContain("wall-clock lease of 15 minutes");
+
+      const row = await runRow(session.runId);
+      expect(row.leaseSeconds).toBe(900);
+      expect(row.leaseExpiresAt?.toISOString()).toBe(session.leaseExpiresAt);
+    });
+
+    it("takes the bound from the test, so a slow journey can be given longer", async () => {
+      await authed(app).patch(`/tests/${leaseTestId}`).send({ agentLeaseSeconds: 3600 }).expect(200);
+      expect(await leaseOf(leaseTestId)).toBe(3600);
+
+      const { session } = await start({ testId: leaseTestId, environmentId });
+      expect(session.leaseSeconds).toBe(3600);
+      expect(session.note).toContain("wall-clock lease of 1 hour");
+    });
+
+    /**
+     * The lease is COPIED onto the run, for the same reason the composed instructions are: the
+     * setting is editable and unversioned, so without the copy "was this run given a minute or an
+     * hour?" stops being answerable the moment somebody changes it.
+     */
+    it("keeps the lease the session was granted when the test's is changed afterwards", async () => {
+      await authed(app).patch(`/tests/${leaseTestId}`).send({ agentLeaseSeconds: 600 }).expect(200);
+      const { session } = await start({ testId: leaseTestId, environmentId });
+      const granted = session.leaseExpiresAt;
+
+      await authed(app).patch(`/tests/${leaseTestId}`).send({ agentLeaseSeconds: 7200 }).expect(200);
+
+      const row = await runRow(session.runId);
+      expect(row.leaseSeconds).toBe(600);
+      expect(row.leaseExpiresAt?.toISOString()).toBe(granted);
+      expect((await runView(session.runId)).session).toMatchObject({ leaseSeconds: 600 });
+    });
+
+    it("refuses a lease on a pinned test, which has no session to bound", async () => {
+      const refused = await authed(app)
+        .patch(`/tests/${pinnedTestId}`)
+        .send({ agentLeaseSeconds: 300 });
+      expect(refused.status).toBe(400);
+      expect(refused.body.message).toContain("pinned test");
+    });
+
+    // A ceiling and no floor: too long is the silent failure the lease exists for, too short says
+    // so on the very next run. Only the value that stops being a bound is refused.
+    it("refuses a lease that is not a bound, and leaves the old one in place", async () => {
+      await authed(app).patch(`/tests/${leaseTestId}`).send({ agentLeaseSeconds: 60 }).expect(200);
+      for (const bad of [0, -30, 1.5, 86_401]) {
+        expect((await authed(app).patch(`/tests/${leaseTestId}`).send({ agentLeaseSeconds: bad })).status).toBe(400);
+      }
+      expect(await leaseOf(leaseTestId)).toBe(60);
+    });
+
+    /**
+     * The load-bearing test of this ticket. A session is started, ONE slot is reported, and then
+     * the agent simply stops — no finish, no error, nothing. The lease runs out on the wall clock.
+     *
+     * Everything asserted afterwards holds without the agent having cooperated with anything: the
+     * run is red with reason `unreached` because its rows were seeded that way and two of them were
+     * never filled, and the one slot that WAS reported keeps its verdict, its image and its
+     * reasoning — expiry closes a session, it does not discard what the session achieved.
+     */
+    it("closes the session when the clock runs out, leaving a red run nobody had to report", async () => {
+      await authed(app).patch(`/tests/${leaseTestId}`).send({ agentLeaseSeconds: 3 }).expect(200);
+      const { session } = await start({ testId: leaseTestId, environmentId });
+
+      const first = await submit(session.runId, "arrive", {
+        image: b64("arrive-before-expiry"),
+        reasoning: "The shell rendered with the nav in place.",
+      });
+      expect(first.reviewState).toBe("pending-baseline");
+
+      await waitOutLease(3);
+
+      const rows = await rowsOf(session.runId);
+      expect(rows.map((r) => [r.name, r.reviewState])).toEqual([
+        ["arrive", "pending-baseline"],
+        ["search", "missing"],
+        ["detail", "missing"],
+      ]);
+      // Kept whole: the capture, the verdict it was given and the reasoning behind it.
+      expect(rows[0].actualArtifactKey).toBeTruthy();
+      expect(rows[0].judgeReasoning).toBe("The shell rendered with the nav in place.");
+      expect(await storage.get(rows[0].actualArtifactKey as string)).toEqual(png("arrive-before-expiry"));
+
+      const row = await runRow(session.runId);
+      expect(row.status).toBe("failed");
+      expect(row.failureKind).toBe("unreached");
+      // And nothing wrote a summary, because nothing closed the session — which is exactly what
+      // makes it distinguishable from an agent that got to the end and reported.
+      expect(row.agentSummary).toBeNull();
+    });
+
+    /** Every door a late agent could still write through. `finish_agent_run` is refused along with
+     *  the two submissions: a summary written after the bound would make the run read as a session
+     *  that reached the end and reported, which is the one thing the view has to keep distinct. */
+    it("refuses every further submission once the lease has run out", async () => {
+      await authed(app).patch(`/tests/${leaseTestId}`).send({ agentLeaseSeconds: 1 }).expect(200);
+      const { session } = await start({ testId: leaseTestId, environmentId });
+      await waitOutLease();
+
+      const late = await callTool(mcpToken(), "submit_checkpoint", {
+        runId: session.runId,
+        name: "arrive",
+        image: b64("too-late"),
+        verdict: "pass",
+        reasoning: "I got there in the end.",
+      });
+      expect(late.isError).toBe(true);
+      expect(late.content[0]?.text).toContain("wall-clock lease");
+
+      const evidence = await callTool(mcpToken(), "submit_evidence", {
+        runId: session.runId,
+        image: b64("too-late-evidence"),
+      });
+      expect(evidence.isError).toBe(true);
+
+      const finished = await callTool(mcpToken(), "finish_agent_run", {
+        runId: session.runId,
+        summary: "Walked it all, honest.",
+      });
+      expect(finished.isError).toBe(true);
+
+      // None of the three left a trace: the slot is still unfilled, no evidence was attached, and
+      // the run still carries no summary.
+      const rows = await rowsOf(session.runId);
+      expect(rows.every((r) => r.reviewState === "missing")).toBe(true);
+      const attached = await handle.db
+        .select({ id: runEvidence.id })
+        .from(runEvidence)
+        .where(eq(runEvidence.runId, session.runId));
+      expect(attached).toHaveLength(0);
+      expect((await runRow(session.runId)).agentSummary).toBeNull();
+    });
+
+    /**
+     * AC6, and the reason the lease is worth having beyond stopping the grinding: three states
+     * that a run with unfilled slots used to collapse into one. Before this, "still walking" and
+     * "gave up hours ago" were the same row.
+     */
+    it("reads as expired, open or finished — never the wrong one of the three", async () => {
+      await authed(app).patch(`/tests/${leaseTestId}`).send({ agentLeaseSeconds: 3600 }).expect(200);
+      const open = await start({ testId: leaseTestId, environmentId });
+      expect((await runView(open.session.runId)).session).toMatchObject({
+        leaseSeconds: 3600,
+        state: "open",
+      });
+
+      // Finished INSIDE its lease, and it stays finished — the deadline must never overtake a
+      // summary and turn every completed agent run into an expired one an hour later.
+      for (const name of ["arrive", "search", "detail"]) await submit(open.session.runId, name);
+      await ok<FinishResult>(mcpToken(), "finish_agent_run", {
+        runId: open.session.runId,
+        summary: "Walked all three and captured each one.",
+      });
+      expect((await runView(open.session.runId)).session).toMatchObject({ state: "finished" });
+
+      await authed(app).patch(`/tests/${leaseTestId}`).send({ agentLeaseSeconds: 1 }).expect(200);
+      const lapsed = await start({ testId: leaseTestId, environmentId });
+      await waitOutLease();
+      const view = await runView(lapsed.session.runId);
+      expect(view.session).toMatchObject({ leaseSeconds: 1, state: "expired" });
+      expect(view.agentSummary).toBeNull();
+      expect(view.failureKind).toBe("unreached");
+    });
+
+    /**
+     * The bound closes a session; it does not invent a failure. A run whose every slot was filled
+     * before the clock ran out is exactly as red or as green as its rows say — expiry adds nothing
+     * to it, which is the difference between a lease and a timeout that fails the thing it bounds.
+     */
+    it("does not turn an expired run red when every slot was actually filled", async () => {
+      await authed(app).patch(`/tests/${leaseTestId}`).send({ agentLeaseSeconds: 3 }).expect(200);
+      const { session } = await start({ testId: leaseTestId, environmentId });
+      for (const name of ["arrive", "search", "detail"]) await submit(session.runId, name);
+      await waitOutLease(3);
+
+      const rows = await rowsOf(session.runId);
+      expect(rows.some((r) => r.reviewState === "missing")).toBe(false);
+      const row = await runRow(session.runId);
+      expect(row.failureKind).toBeNull();
+      expect(row.status).not.toBe("failed");
+      expect((await runView(session.runId)).session).toMatchObject({ leaseSeconds: 3, state: "expired" });
     });
   });
 });

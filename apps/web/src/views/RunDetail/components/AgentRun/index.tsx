@@ -1,5 +1,13 @@
-import type { CheckpointView, RunEvidenceView, RunView, UnreachedRootCause } from "@varys/review-contract";
-import { AlertTriangle, Badge, Camera, ChevronDown, cx, Sparkles } from "@varys/ui";
+import type {
+  AgentSessionState,
+  AgentSessionView,
+  CheckpointView,
+  RunEvidenceView,
+  RunView,
+  UnreachedRootCause,
+} from "@varys/review-contract";
+import { describeLease } from "@varys/review-contract";
+import { AlertTriangle, Badge, Camera, ChevronDown, Clock, cx, Sparkles } from "@varys/ui";
 import { useState } from "react";
 import { type GalleryImage, ZoomableImage } from "../../../../components/ZoomableImage";
 import { absoluteTime } from "../../../../lib/format";
@@ -40,19 +48,16 @@ export function AgentRun({
   // can subordinate them without re-deriving which is which — the cause is the server's call, and
   // two surfaces disagreeing about it is exactly what `deriveUnreachedRootCause` exists to stop.
   const consequences = new Set(run.unreached?.alsoUnreached ?? []);
+  // Which of the three states the session is in. A run started before leases existed has no
+  // session at all, and reads `open` — the honestly ambiguous state, kept for the runs that
+  // genuinely have it rather than backdated onto them.
+  const state: AgentSessionState = run.session?.state ?? "open";
 
   return (
     <div className={styles.body}>
+      {run.session?.state === "expired" && <LeaseExpired session={run.session} />}
       {run.unreached && (
-        <RootCause
-          cause={run.unreached}
-          total={run.checkpoints.length}
-          // A session that never called `finish_agent_run` has not necessarily stopped — it may
-          // still be walking. Varys cannot tell the two apart (that is what a wall-clock lease is
-          // for), so the summary's presence is the only honest signal it has about which one to
-          // say, and the wording changes accordingly rather than guessing.
-          finished={run.agentSummary != null}
-        />
+        <RootCause cause={run.unreached} total={run.checkpoints.length} state={state} />
       )}
       {run.agentSummary && <SessionSummary summary={run.agentSummary} />}
 
@@ -91,17 +96,25 @@ export function AgentRun({
 function RootCause({
   cause,
   total,
-  finished,
+  state,
 }: {
   cause: UnreachedRootCause;
   total: number;
-  /** Whether the session closed itself with a summary. Absent means "still open OR abandoned" —
-   *  two states Varys genuinely cannot distinguish, so the wording commits to neither. */
-  finished: boolean;
+  /**
+   * Which of the three session states this run is in — the thing that decides whether "the journey
+   * stopped here" is a claim the view is entitled to make.
+   *
+   * `open` is the only one it is not: a session inside its lease may still be walking, so an
+   * unfilled slot is exactly an unfilled slot and nothing more. `expired` and `finished` both mean
+   * the session is over, and the slot will not now be filled — but they are over for different
+   * reasons and must not be worded the same.
+   */
+  state: AgentSessionState;
 }) {
   const blocked = cause.alsoUnreached.length;
+  const over = state !== "open";
 
-  const headline = !finished
+  const headline = !over
     ? `“${cause.checkpointName}” has not been reported`
     : cause.resumed
       ? `“${cause.checkpointName}” was never reported, and the session carried on past it`
@@ -109,8 +122,8 @@ function RootCause({
         ? `The journey stopped at “${cause.checkpointName}”`
         : `The journey never got started — “${cause.checkpointName}” was never reached`;
 
-  const body = !finished
-    ? "This session never closed itself, so it is either still walking the Manifest or it stopped without saying so. Until it does, an unfilled slot is exactly that and nothing more."
+  const body = !over
+    ? "This session is still inside its lease and has not closed itself, so it may still be walking the Manifest. Until it is over, an unfilled slot is exactly that and nothing more."
     : cause.resumed
       ? `${cause.lastReached ? `The session reached “${cause.lastReached}”, skipped this one, ` : "The session skipped this one, "}and then went on to report later checkpoints.`
       : cause.lastReached
@@ -140,6 +153,46 @@ function RootCause({
           checkpoint still missing is a separate failure, and is shown as one below.
         </p>
       )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ *  The session ran out of time                                        *
+ * ------------------------------------------------------------------ */
+
+/**
+ * The session hit its wall-clock lease — stated at the top, and stated as a FINDING.
+ *
+ * The distinction this exists to draw is against the run below it, which closed itself with a
+ * summary. Both are over; only one of them got to the end. Without saying which, a reader has to
+ * infer "the agent ran out of time" from the absence of a narrative, and absence is exactly what
+ * people do not notice.
+ *
+ * Worded away from "cancelled" on purpose. Cancelled means nothing was attempted and nothing was
+ * learned. Here an agent drove the app for the whole lease and could not reach a state it was
+ * supposed to reach — that is a real thing to know about the app or about the instructions, and
+ * filing it under "nobody ran it" would throw it away.
+ */
+function LeaseExpired({ session }: { session: AgentSessionView }) {
+  return (
+    <div className={styles.lease} role="note">
+      <div className={styles.leaseHead}>
+        <Clock size={16} />
+        <span className={styles.leaseTitle}>The session ran out of time</span>
+        <span className={styles.leaseMeta}>lease: {describeLease(session.leaseSeconds)}</span>
+      </div>
+      <p className={styles.leaseBody}>
+        This run was bounded by a wall-clock lease and reached the end of it without the agent
+        closing the session, so Varys closed it — nothing further can be reported against this run.
+        The bound is enforced here rather than asked for in the instructions, because the thing it
+        stops is an agent that has decided to keep trying.
+      </p>
+      <p className={styles.leaseFoot}>
+        Red rather than cancelled, and deliberately: an agent drove the app for{" "}
+        {describeLease(session.leaseSeconds)} and could not get where it was going. That is a
+        finding about the app or about these instructions, not an absence of one.
+      </p>
     </div>
   );
 }

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  deriveAgentSessionState,
   deriveRunOutcome,
+  describeLease,
   deriveUnreachedRootCause,
   isRepairInReview,
   rollupRunStatus,
@@ -373,5 +375,107 @@ describe("deriveUnreachedRootCause", () => {
     expect(
       deriveUnreachedRootCause([slot("home", "diff"), slot("detail", "pending-baseline")]),
     ).toBeNull();
+  });
+});
+
+/**
+ * The wall-clock lease (Agent-Driven Tests, ticket #7).
+ *
+ * Three states, and the whole reason the function exists is that two of them look identical from
+ * the outside. An agent that closed its laptop and an agent still patiently retrying both leave a
+ * run with unfilled slots and no summary — before the lease there was nothing that could tell them
+ * apart, so the run view had to word itself around the ambiguity. The deadline resolves it: past
+ * it, "still walking" is no longer one of the possibilities.
+ *
+ * Shared rather than decided twice because both callers act on it — the API REFUSES a submission
+ * on an expired session, and the run view SAYS the session hit its bound. Those two disagreeing
+ * would mean a run that reads as still running while the tools tell its agent it is over.
+ */
+const HOUR = 3_600_000;
+const startedAt = Date.parse("2026-09-16T10:00:00.000Z");
+const deadline = new Date(startedAt + HOUR).toISOString();
+
+describe("deriveAgentSessionState", () => {
+  it("is open while the clock is still inside the lease", () => {
+    expect(
+      deriveAgentSessionState({ summaryWritten: false, leaseExpiresAt: deadline }, startedAt + 60_000),
+    ).toBe("open");
+  });
+
+  it("is expired once the deadline has passed", () => {
+    expect(
+      deriveAgentSessionState({ summaryWritten: false, leaseExpiresAt: deadline }, startedAt + HOUR + 1),
+    ).toBe("expired");
+  });
+
+  // The boundary belongs to the bound, not to the session: a lease "until 10:00" is over at 10:00.
+  it("treats the instant of the deadline as expired, not as the last moment of the lease", () => {
+    expect(
+      deriveAgentSessionState({ summaryWritten: false, leaseExpiresAt: deadline }, startedAt + HOUR),
+    ).toBe("expired");
+  });
+
+  /**
+   * A finished session stays finished however long the clock runs afterwards. The alternative —
+   * letting a deadline overtake a summary — would turn every completed agent run into an expired
+   * one an hour later, which is the single most misleading thing this could do.
+   */
+  it("keeps a finished session finished long after its deadline", () => {
+    expect(
+      deriveAgentSessionState({ summaryWritten: true, leaseExpiresAt: deadline }, startedAt + 500 * HOUR),
+    ).toBe("finished");
+  });
+
+  it("is finished the moment a summary exists, even well inside the lease", () => {
+    expect(
+      deriveAgentSessionState({ summaryWritten: true, leaseExpiresAt: deadline }, startedAt + 60_000),
+    ).toBe("finished");
+  });
+
+  /**
+   * A run started before leases existed carries no deadline, and nothing may invent one for it.
+   * It reads `open` forever — the honestly ambiguous state the lease was introduced to retire,
+   * kept for the runs that genuinely have it rather than backdated onto them.
+   */
+  it("leaves a run with no lease open rather than guessing a deadline for it", () => {
+    expect(
+      deriveAgentSessionState({ summaryWritten: false, leaseExpiresAt: null }, startedAt + 500 * HOUR),
+    ).toBe("open");
+  });
+
+  it("still reports a finished pre-lease session as finished", () => {
+    expect(deriveAgentSessionState({ summaryWritten: true, leaseExpiresAt: null }, startedAt)).toBe(
+      "finished",
+    );
+  });
+
+  // The API passes a `Date` straight off the row; the web passes the ISO string the read-model
+  // serialised. One rule, so the two cannot drift over a parsing detail.
+  it("reads a Date and its ISO string identically", () => {
+    const at = startedAt + HOUR + 1;
+    expect(
+      deriveAgentSessionState({ summaryWritten: false, leaseExpiresAt: new Date(deadline) }, at),
+    ).toBe(deriveAgentSessionState({ summaryWritten: false, leaseExpiresAt: deadline }, at));
+  });
+});
+
+/**
+ * The lease is said twice — once to the agent that is bounded by it, once to the person reading
+ * the run afterwards — so the wording is shared rather than written at each end. What the tests
+ * below protect is exactness: a bound is the one number here that has to be literally true, and a
+ * formatter that rounds "90 seconds" up to "2 minutes" overstates it by a third.
+ */
+describe("describeLease", () => {
+  it("says a whole number of minutes or hours in those units", () => {
+    expect(describeLease(900)).toBe("15 minutes");
+    expect(describeLease(60)).toBe("1 minute");
+    expect(describeLease(3600)).toBe("1 hour");
+    expect(describeLease(7200)).toBe("2 hours");
+  });
+
+  it("steps down to the finer unit rather than rounding a bound it cannot say exactly", () => {
+    expect(describeLease(90)).toBe("90 seconds");
+    expect(describeLease(5400)).toBe("90 minutes");
+    expect(describeLease(1)).toBe("1 second");
   });
 });

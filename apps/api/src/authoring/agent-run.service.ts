@@ -11,7 +11,9 @@ import {
   tests,
 } from "../db/schema";
 import {
+  deriveAgentSessionState,
   deriveRunOutcome,
+  describeLease,
   rollupRunStatus,
   type Resolution,
   type ReviewState,
@@ -110,6 +112,15 @@ export interface AgentRunSession {
   /** Slot names, in the order their baseline images follow this text block. Empty when no slot
    *  has an approved baseline yet. */
   baselineImages: string[];
+  /**
+   * The wall-clock lease this session is bounded by, in seconds, and the instant it runs out
+   * (ISO). Server-side and not negotiable: past the deadline Varys closes the session and refuses
+   * every further submission, whatever the instructions say. It exists because retrying is the
+   * agent's own business — and an agent retrying a state that will never appear has no reason
+   * ever to stop, on someone else's subscription quota.
+   */
+  leaseSeconds: number;
+  leaseExpiresAt: string;
   /** Where a human opens this run in Varys, relative to the app's origin. */
   path: string;
   /** What this run's state MEANS right now, in the terms it has to be reported in. */
@@ -172,7 +183,13 @@ export class AgentRunService {
     }
 
     const [test] = await this.db
-      .select({ id: tests.id, name: tests.name, kind: tests.kind, intent: tests.intent })
+      .select({
+        id: tests.id,
+        name: tests.name,
+        kind: tests.kind,
+        intent: tests.intent,
+        leaseSeconds: tests.agentLeaseSeconds,
+      })
       .from(tests)
       .where(eq(tests.id, id))
       .limit(1);
@@ -235,6 +252,11 @@ export class AgentRunService {
     // Everything that makes this run red is written here, in ONE transaction, before the tool
     // returns — so there is no instant at which a run exists without its Manifest rows.
     const seededAt = Date.now();
+    // The bound, stamped once and absolutely. Taken off the test at THIS instant and copied onto
+    // the run, so editing the test's lease afterwards changes what the next session gets and never
+    // what this one was given.
+    const leaseSeconds = test.leaseSeconds;
+    const leaseExpiresAt = new Date(seededAt + leaseSeconds * 1000);
     const runId = await this.db.transaction(async (tx) => {
       const [run] = await tx
         .insert(runs)
@@ -249,6 +271,8 @@ export class AgentRunService {
           triggeredBy: opts.actor,
           triggerSource: opts.actorKind === "agent" ? "api" : "manual",
           agentInstructions: instructions,
+          agentLeaseSeconds: leaseSeconds,
+          agentLeaseExpiresAt: leaseExpiresAt,
         })
         .returning({ id: runs.id });
 
@@ -292,8 +316,10 @@ export class AgentRunService {
       instructions,
       manifest: slots.map((s) => ({ ...s, hasBaseline: withBaseline.has(s.name) })),
       baselineImages: images.map((b) => b.name),
+      leaseSeconds,
+      leaseExpiresAt: leaseExpiresAt.toISOString(),
       path: `/runs/${runId}`,
-      note: noteFor(test.name, slots.length, withBaseline.size),
+      note: noteFor(test.name, slots.length, withBaseline.size, leaseSeconds),
       images,
     };
   }
@@ -505,11 +531,18 @@ export class AgentRunService {
   }
 
   /**
-   * Load a run this session may still write to, refusing the three ways it could be the wrong one.
+   * Load a run this session may still write to, refusing the four ways it could be the wrong one.
    *
    * The kind check is the load-bearing one. Without it these tools would accept a PINNED run's id
    * and overwrite a checkpoint Varys captured itself with a picture an agent supplied — which,
    * once approved, becomes that test's golden. Nothing else in the feature would notice.
+   *
+   * The LEASE check is the one that closes a session nobody closed. Every writing tool goes
+   * through here, so expiry is enforced at the one place a write can enter rather than at three,
+   * and it is checked lazily on that write rather than swept for: the run has been
+   * `failed`/`unreached` since its rows were seeded, so an expired session needs no reconciliation
+   * pass to already be correctly red. Nothing has to run for the bound to hold — which is the same
+   * property the pre-seeded rows have, and for the same reason.
    */
   private async openRun(runId: string): Promise<{
     runId: string;
@@ -530,6 +563,8 @@ export class AgentRunService {
         runId: runs.id,
         environmentId: runs.environmentId,
         agentSummary: runs.agentSummary,
+        leaseSeconds: runs.agentLeaseSeconds,
+        leaseExpiresAt: runs.agentLeaseExpiresAt,
         testId: tests.id,
         testName: tests.name,
         kind: tests.kind,
@@ -549,6 +584,27 @@ export class AgentRunService {
     if (row.agentSummary != null) {
       throw new BadRequestException(
         `Run ${id} was already finished — its summary is written and the run is closed. A finished session cannot be revised: if there is more to say, start a new run rather than editing the record of this one.`,
+      );
+    }
+
+    // The wall-clock lease. `finish_agent_run` is refused along with the two submissions, and that
+    // is deliberate rather than strict: a summary written after the bound would make the run read
+    // as a session that got to the end and reported, which is precisely the state the run view has
+    // to keep distinct from one that ran out of time. The agent still has somewhere to put its
+    // account of it — the reply below is what it reports to the person who asked for the run.
+    //
+    // What this bounds is one SESSION. Nothing here stops an agent calling `start_agent_run` again
+    // and drawing a fresh lease, and the closing sentence of the message below is advice rather
+    // than a rule — which, by ADR 0006, means it is not load-bearing and must not be treated as
+    // though it were. A bound on the sequence of sessions is a different decision (how many, over
+    // what window, and how not to refuse the legitimate re-run of someone who just fixed their
+    // instructions) and is deliberately not taken here.
+    if (deriveAgentSessionState(
+      { summaryWritten: false, leaseExpiresAt: row.leaseExpiresAt },
+      Date.now(),
+    ) === "expired") {
+      throw new BadRequestException(
+        `Run ${id} is over: its Agent Run Session was bounded by a wall-clock lease of ${describeLease(row.leaseSeconds ?? 0)}, which ran out at ${row.leaseExpiresAt?.toISOString()}. The session is closed and nothing further can be recorded against it — whatever was reported before then stands, and whatever was not is what this run verified. This is a finding, not an error: an agent that drove for the whole lease and could not reach a state has learned something real about the app or about the instructions. Take it back to the person who asked for this run — what you got to, what you could not reach, and what you think is in the way — and let them decide whether to widen the lease, fix the instructions, or look at the app. Starting another run immediately would spend their quota again on the state you already know you cannot reach.`,
       );
     }
 
@@ -753,7 +809,12 @@ function composeInstructions(input: {
  * agent that drives well and then reports nothing: a slot is only filled by the call that fills
  * it, and there is no other way for good work to reach the run.
  */
-function noteFor(testName: string, slotCount: number, withBaseline: number): string {
+function noteFor(
+  testName: string,
+  slotCount: number,
+  withBaseline: number,
+  leaseSeconds: number,
+): string {
   const seeded = `This run is ALREADY FAILED, with reason \`unreached\` — all ${slotCount} Checkpoint Manifest slot(s) of "${testName}" are seeded as missing, and each stays that way until it is actually reported. If you stop here, crash, or lose the connection, the run stays exactly this red; nothing infers anything from work you did but did not report.`;
   const closed =
     "The Manifest is a CLOSED set: those names are the only ones this run can ever be reported under, so do not invent, rename or merge them.";
@@ -765,7 +826,12 @@ function noteFor(testName: string, slotCount: number, withBaseline: number): str
     "How you reach each state is yours to decide: Varys drives no browser for this kind and does not watch how you get there. Follow the instructions above.";
   const reporting =
     "Report each slot with submit_checkpoint (its Manifest name, your screenshot, a pass/fail verdict and your reasoning — reasoning is required), attach anything else worth seeing with submit_evidence, and close with finish_agent_run and your account of the session. Nothing you do outside those calls reaches the run.";
-  return `${seeded} ${closed} ${baseline} ${driving} ${reporting}`;
+  // Said plainly rather than left to be discovered by a refusal. Retrying is the agent's own
+  // business and nothing here is asking it to stop — but an agent that knows its remaining time
+  // can spend it on the checkpoint most likely to be reachable instead of on the one it is stuck
+  // against, and can report what it did not get to rather than being cut off mid-thought.
+  const lease = `This session is bounded by a server-side wall-clock lease of ${describeLease(leaseSeconds)}, starting now. Varys enforces it; it is not something the instructions can extend. When it runs out the session is CLOSED — submit_checkpoint, submit_evidence and finish_agent_run all stop being accepted, and whatever is still unreported is what this run verified. Retrying a state you could not reach is entirely your call, but budget against that clock: if a state is not going to appear, the honest red is the finding.`;
+  return `${seeded} ${closed} ${baseline} ${driving} ${reporting} ${lease}`;
 }
 
 /** Trimmed, or null when there was nothing there — capture metadata is optional at every field. */

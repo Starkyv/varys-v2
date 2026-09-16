@@ -335,6 +335,9 @@ export interface UpdateTestBody {
   /** The test's Brief — what it is for, in the author's words; `null`/empty clears it. Omit to
    *  leave unchanged. Writes no new test_version, so editing it never disturbs the history. */
   brief?: string | null;
+  /** The wall-clock lease an Agent Run Session on this test is bounded by, in SECONDS. Omit to
+   *  leave unchanged. Refused on a pinned test, which Varys runs itself. */
+  agentLeaseSeconds?: number;
 }
 
 /** Rename / (un)file a test. Throws on a non-2xx response. */

@@ -63,6 +63,14 @@ export const tests = pgTable("tests", {
    *  an ordered list of `agent_checkpoints` that a locally-run Claude re-walks every Run. Defaults
    *  to `pinned`, so every test recorded before this column is exactly what it was. */
   kind: text("kind").notNull().default("pinned"),
+  /** How long an Agent Run Session on this test may run before Varys closes it, in seconds
+   *  (Agent-Driven Tests). The bound on an agent that will not stop: retrying is deliberately the
+   *  agent's own business, but an agent retrying a state that will NEVER appear has no reason to
+   *  stop, and it is the author's own Claude subscription it is burning. Wall-clock rather than a
+   *  tool-call budget, because twenty cheap actions and twenty expensive ones cost wildly
+   *  different amounts. Defaulted for every existing and new row, so nothing is unbounded, and
+   *  meaningless for a pinned test — which Varys runs itself and bounds by its own timeouts. */
+  agentLeaseSeconds: integer("agent_lease_seconds").notNull().default(900),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -274,6 +282,26 @@ export const runs = pgTable("runs", {
    * cannot declare itself done and then keep revising what it reported.
    */
   agentSummary: text("agent_summary"),
+  /**
+   * The wall-clock lease this session was GRANTED, in seconds — copied off the test at start
+   * (Agent-Driven Tests). Null for every pinned run, and for an agent run that predates leases.
+   *
+   * A copy for the same reason `agent_instructions` is one: the test's lease is editable and
+   * unversioned, so without it "was this run given ten minutes or ten hours?" becomes
+   * unanswerable the moment someone changes the setting.
+   */
+  agentLeaseSeconds: integer("agent_lease_seconds"),
+  /**
+   * When that lease runs out — an ABSOLUTE deadline, computed once when the session starts.
+   *
+   * This is the enforced value, not `agent_lease_seconds`: stamping the instant means the bound
+   * cannot drift with the run row's other timestamps, and expiry is a comparison against the wall
+   * clock rather than arithmetic over two clocks that may not agree. Past it, the session is
+   * closed and every tool that would write to it is refused. Nothing sweeps it — the run has been
+   * `failed`/`unreached` since its rows were seeded, so expiry needs no reconciliation to be
+   * correctly red.
+   */
+  agentLeaseExpiresAt: timestamp("agent_lease_expires_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -891,6 +919,11 @@ ALTER TABLE tests ADD COLUMN IF NOT EXISTS repair_policy text NOT NULL DEFAULT '
 -- model call (every test that existed before this column); 'agent' = an Agent-Driven Test, whose
 -- behaviour is the agent_checkpoints rows below. Defaulted, so nothing already recorded changes.
 ALTER TABLE tests ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'pinned';
+-- The wall-clock lease an Agent Run Session on this test is bounded by, in seconds. Defaulted for
+-- every row that already exists and every row written afterwards, so no test is ever unbounded and
+-- nobody has to opt in to being bounded. Fifteen minutes is deliberately modest: it is a stop on an
+-- agent grinding at a state that will never appear, not a budget anyone should be spending in full.
+ALTER TABLE tests ADD COLUMN IF NOT EXISTS agent_lease_seconds integer NOT NULL DEFAULT 900;
 -- The ordered Checkpoints of an Agent-Driven Test. Relational and UNVERSIONED: editing the
 -- wording of an instruction is not an audit event, so no test_version is written. The row id is
 -- the durable identity and the name is only a label, which is what lets a rename carry the
@@ -994,6 +1027,11 @@ ALTER TABLE runs ADD COLUMN IF NOT EXISTS agent_instructions text;
 -- The agent's written account of the session, stored when it finishes the run. Also the CLOSED
 -- flag: a run carrying one accepts no further submissions, so "done" cannot be walked back.
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS agent_summary text;
+-- The wall-clock lease this Agent Run Session was granted and when it runs out. The seconds are a
+-- forensic copy (the test's setting is editable and unversioned); the timestamp is the enforced
+-- deadline, stamped once at start so the bound is absolute. Null for every pinned run.
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS agent_lease_seconds integer;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS agent_lease_expires_at timestamptz;
 -- Which CLASS of failure ended a failed run (Slice 19): 'locator' = an unresolvable
 -- fingerprint (the only repairable class), 'unreached' = an Agent-Driven Test left a Checkpoint
 -- Manifest slot unfilled, NULL for everything else. Recorded by the runner, never inferred from
