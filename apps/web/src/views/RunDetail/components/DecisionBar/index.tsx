@@ -65,13 +65,24 @@ export function DecisionBar({ checkpoint: cp, runId }: { checkpoint: CheckpointV
 
   const isPassing = cp.reviewState === "passed";
   const isFirst = cp.reviewState === "pending-baseline";
+  // A `context` checkpoint is judged, not measured — there is no threshold it could be within,
+  // and for an Agent-Driven Test there is no pixel path at all. Saying "within threshold" here
+  // hands a reader a number that was never computed, off a `threshold` column that exists only
+  // because it is NOT NULL, and quietly contradicts the run's own contextual verdict.
+  const isContext = cp.compareMode === "context";
   const hint =
     cp.reviewState === "diff"
-      ? "Differs from the baseline — this run failed. If the capture is correct, set it as the new baseline; if it’s a bug, fix it and re-run."
+      ? isContext
+        ? "Judged as different from the baseline — this run failed. If the capture is correct, set it as the new baseline; if it’s a bug, fix it and run again."
+        : "Differs from the baseline — this run failed. If the capture is correct, set it as the new baseline; if it’s a bug, fix it and re-run."
       : isFirst
         ? "No baseline yet — approve this capture to set the first baseline and start comparing."
-        : "Within threshold — matched the baseline. You can re-anchor it to this capture.";
-  const identical = isPassing && cp.diffScore != null && cp.diffScore <= 0;
+        : isContext
+          ? "Judged as matching the baseline. You can re-anchor it to this capture."
+          : "Within threshold — matched the baseline. You can re-anchor it to this capture.";
+  // "These two images are byte-identical" is a pixel fact. A context checkpoint has no diffScore
+  // at all, so this stays false there rather than reading a null as a zero.
+  const identical = isPassing && !isContext && cp.diffScore != null && cp.diffScore <= 0;
 
   return (
     <div className={styles.bar}>

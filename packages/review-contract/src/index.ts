@@ -1419,6 +1419,45 @@ export interface EnvironmentView {
 }
 
 /** One checkpoint within a run, as the reviewer sees it. */
+/**
+ * How a capture was produced, as the agent that produced it described it.
+ *
+ * **Evidence, not a constraint.** Varys hosts no browser for an Agent-Driven Test (ADR 0007), so
+ * every field is testimony it cannot verify and any of them may be absent. It is here because the
+ * design knowingly allows a baseline shot headless at 1280x800 to be compared against an actual
+ * taken through computer use on a Retina display — and when that comparison reads strangely, the
+ * first thing a reviewer needs to know is whether the two images were even taken the same way.
+ *
+ * Null for every pinned checkpoint: Varys took those itself, under conditions the test records.
+ */
+export interface CaptureConditions {
+  /** e.g. `chrome-devtools`, `playwright`, `computer-use`. */
+  tool: string | null;
+  /** e.g. `1440x900`. Free text — an unconstrained capture has no canonical spelling. */
+  viewport: string | null;
+  /** Device pixel ratio, e.g. `2` on a Retina display. */
+  deviceScale: number | null;
+}
+
+/**
+ * One extra screenshot an agent attached to a run: unnamed, keying no baseline, filling no
+ * Manifest slot.
+ *
+ * "I could not find the filter, here is what the page looked like" is exactly what tells a
+ * reviewer a broken app from a wrong instruction, and it is the only material about the parts of
+ * the session Varys never saw. Browsable beside the checkpoints rather than filed elsewhere,
+ * because the person who needs it is already looking at the failure.
+ */
+export interface RunEvidenceView {
+  id: string;
+  /** Authenticated artifact-route URL of the screenshot. */
+  url: string;
+  /** The agent's note about it, or empty when it attached none. */
+  note: string;
+  /** When it was attached, ISO 8601 — the order the session produced it in. */
+  createdAt: string;
+}
+
 export interface CheckpointView {
   /** Checkpoint (screenshot) name within the test. */
   name: string;
@@ -1455,6 +1494,9 @@ export interface CheckpointView {
    *  who approved it and when (ISO). Null until a baseline has been approved (Slice 10). */
   baselineApprovedBy: string | null;
   baselineApprovedAt: string | null;
+  /** How the actual was captured, when an agent said. Null for every pinned checkpoint, and for
+   *  an agent one that was never filled or whose session volunteered nothing. */
+  capture: CaptureConditions | null;
 }
 
 /**
@@ -1930,6 +1972,35 @@ export interface RunView {
    * take here, only something to read.
    */
   assertions: AssertionResultView[];
+  /**
+   * Which kind of test this run belongs to, and therefore which run view is the right one.
+   *
+   * An `agent` run has no steps, no timeline and no pixel diff: it is a Checkpoint Manifest walked
+   * by the author's own local Claude, reported one slot at a time. The two are one corpus and sit
+   * side by side in the runs list and the dashboard — but reading one as the other would show a
+   * step-by-step replay of a session Varys never observed.
+   */
+  kind: TestKind;
+  /** The agent's own written account of the session, or null (a pinned run, or one whose session
+   *  never called `finish_agent_run`). The only record of the part Varys could not watch. */
+  agentSummary: string | null;
+  /**
+   * The fully composed AI Instructions this run was started with, copied onto it verbatim.
+   *
+   * The compensating control for unversioned instructions: suite, test and checkpoint text are all
+   * editable without writing a `test_version`, so without this copy a run from six weeks ago is
+   * unexplainable. Null for a pinned run.
+   */
+  agentInstructions: string | null;
+  /** Extra screenshots the agent attached during the session, oldest first. Empty for a pinned
+   *  run and for an agent run that attached none. */
+  evidence: RunEvidenceView[];
+  /**
+   * The one finding behind every unfilled Manifest slot, or null when nothing went unreached.
+   * Derived via {@link deriveUnreachedRootCause} so the view states a cause once instead of
+   * presenting each consequence as its own failure.
+   */
+  unreached: UnreachedRootCause | null;
 }
 
 /**
@@ -2028,6 +2099,82 @@ export function rollupRunStatus(
     else if (c.reviewState === "pending-baseline" || c.reviewState === "diff") anyPending = true;
   }
   return anyMissing ? "failed" : anyPending ? "needs_review" : anyRejected ? "failed" : "passed";
+}
+
+/** The minimal per-slot shape {@link deriveUnreachedRootCause} reads — `CheckpointView` satisfies it. */
+export interface UnreachedCheckpoint {
+  /** The Checkpoint Manifest slot name. */
+  name: string;
+  reviewState: ReviewState;
+}
+
+/**
+ * Where an agent-driven run's journey actually stopped — one fact, not one per unfilled slot.
+ *
+ * Null when nothing went unreached. Otherwise the FIRST unfilled slot in Manifest order, which is
+ * the only one that carries information: the Manifest is cumulative, so every later slot was
+ * unreachable the moment this one was, and reporting them as peers turns "login broke" into four
+ * independent mysteries.
+ */
+export interface UnreachedRootCause {
+  /** The slot the journey stopped at — the first one, in order, that was never filled. */
+  checkpointName: string;
+  /** Its 1-based position in the Manifest, so the view can say "stopped at step 3 of 5". */
+  step: number;
+  /** The last slot actually filled before it, or null when the run never reached anything at all
+   *  (login broke on the first screen — there is no "it got this far"). */
+  lastReached: string | null;
+  /**
+   * The unfilled slots IMMEDIATELY after it, in order — and only those.
+   *
+   * Contiguity is the whole claim. A Manifest is cumulative, so the slots directly behind a break
+   * were unreachable because of it; but once the session fills something again it has demonstrably
+   * got past it, and a slot missed later is a second thing going wrong, not fallout from the
+   * first. Sweeping those in here would be the exact failure this type exists to prevent, with
+   * the sign flipped: instead of five failures where there is one, one failure where there are two.
+   */
+  alsoUnreached: string[];
+  /**
+   * True when the session filled a slot after this break — it carried on rather than stopping.
+   *
+   * The honesty flag on the summary: one root cause is a way of not repeating yourself, never a
+   * licence to hide the second thing that went wrong. When this is true, "the journey stopped at
+   * X" is not the whole story and the view must not say it is.
+   */
+  resumed: boolean;
+}
+
+/**
+ * Reduce a run's unfilled Manifest slots to the one finding behind them. Pure (no IO), shared so
+ * the run view and anything else that summarises a red agent run cannot disagree about which slot
+ * is the cause and which are the fallout.
+ *
+ * `checkpoints` must be in **Manifest order** — the order the agent was asked to walk. That is why
+ * `run_results` rows are stamped in journey order when they are seeded: the sequence is a property
+ * of the run, and re-deriving it later from the test would let an edit reorder history.
+ */
+export function deriveUnreachedRootCause(
+  checkpoints: readonly UnreachedCheckpoint[],
+): UnreachedRootCause | null {
+  const firstIndex = checkpoints.findIndex((c) => c.reviewState === "missing");
+  if (firstIndex === -1) return null;
+
+  const before = checkpoints.slice(0, firstIndex);
+  const after = checkpoints.slice(firstIndex + 1);
+  // Stop at the first slot that WAS filled: everything up to it is blocked by this break, and
+  // everything past it belongs to a session that had already recovered.
+  const blockedEnd = after.findIndex((c) => c.reviewState !== "missing");
+  const blocked = blockedEnd === -1 ? after : after.slice(0, blockedEnd);
+  return {
+    checkpointName: checkpoints[firstIndex].name,
+    step: firstIndex + 1,
+    // The last one BEFORE the break that was actually filled. Not simply `before.at(-1)`: an
+    // earlier slot could itself be unfilled only if it were the first, which it is not by
+    // construction — but reading it explicitly keeps the field true if that ever changes.
+    lastReached: [...before].reverse().find((c) => c.reviewState !== "missing")?.name ?? null,
+    alsoUnreached: blocked.map((c) => c.name),
+    resumed: blockedEnd !== -1,
+  };
 }
 
 /**

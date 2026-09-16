@@ -16,6 +16,7 @@ import {
   useUpdateRunNotes,
 } from "../../queries";
 import { NotesCard } from "../../components/NotesCard";
+import { AgentRun } from "./components/AgentRun";
 import { ApproveDialog } from "./components/ApproveDialog";
 import { AssertionsCard } from "./components/AssertionsCard";
 import { CheckpointViewer } from "./components/CheckpointViewer";
@@ -98,6 +99,12 @@ export function RunDetail({ runId }: { runId: string }) {
   }
 
   const data = run.data;
+  /**
+   * An Agent-Driven run is a different object, not a timeline with the steps missing: Varys hosted
+   * no browser, watched no driving and recorded no steps, so `timeline` is empty by construction
+   * and the "this run recorded no steps" notice below would be the whole page.
+   */
+  const isAgentRun = data.kind === "agent";
   const hasTimeline = rows.length > 0;
   const inProgress = (data.status === "queued" || data.status === "running") && !hasTimeline;
   const pendingCount = data.checkpoints.filter(needsDecision).length;
@@ -197,20 +204,26 @@ export function RunDetail({ runId }: { runId: string }) {
             )}
           </div>
         </div>
-        <Button
-          variant="secondary"
-          iconLeft={<Play size={15} />}
-          disabled={rerun.isPending}
-          loading={rerun.isPending}
-          title={
-            data.environmentMissing
-              ? `The environment this ran against no longer exists — pick another`
-              : `Run this test again against ${data.environment}${data.trace ? ", keeping a trace" : ""}`
-          }
-          onClick={onRerun}
-        >
-          Re-run
-        </Button>
+        {/* Re-running is Varys replaying a test itself, and it hosts no browser for an
+            Agent-Driven one — the API refuses the call outright. Hidden rather than left to fail
+            with a toast: a button that cannot work is worse than no button. Another run of this
+            kind starts where the last one did, by asking your own local Claude. */}
+        {!isAgentRun && (
+          <Button
+            variant="secondary"
+            iconLeft={<Play size={15} />}
+            disabled={rerun.isPending}
+            loading={rerun.isPending}
+            title={
+              data.environmentMissing
+                ? `The environment this ran against no longer exists — pick another`
+                : `Run this test again against ${data.environment}${data.trace ? ", keeping a trace" : ""}`
+            }
+            onClick={onRerun}
+          >
+            Re-run
+          </Button>
+        )}
         <Button
           variant="secondary"
           iconLeft={<Flask size={15} />}
@@ -248,7 +261,7 @@ export function RunDetail({ runId }: { runId: string }) {
             Queue repair
           </Button>
         )}
-        {hasTimeline && pendingCount > 0 && (
+        {(hasTimeline || isAgentRun) && pendingCount > 0 && (
           <Button variant="primary" iconLeft={<Check size={15} />} onClick={() => setApproveAllOpen(true)}>
             Approve all
           </Button>
@@ -323,7 +336,9 @@ export function RunDetail({ runId }: { runId: string }) {
         />
       </div>
 
-      {!hasTimeline ? (
+      {isAgentRun ? (
+        <AgentRun run={data} gallery={gallery} />
+      ) : !hasTimeline ? (
         <div className={styles.notice}>
           {inProgress
             ? "This run is still in progress — the timeline fills in as each step executes."

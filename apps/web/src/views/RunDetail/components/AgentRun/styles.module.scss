@@ -1,0 +1,375 @@
+@use "../../../../styles/mixins" as *;
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-20);
+}
+
+/* --- One root cause ------------------------------------------------ */
+
+/* Danger-toned, unlike the triage note: this IS the failure, not a commentary on one. */
+.rootCause {
+  padding: var(--space-14) var(--space-16);
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-danger);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-inset);
+}
+
+.rootCauseHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  color: var(--color-danger);
+}
+
+.rootCauseTitle {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+}
+
+.rootCauseMeta {
+  margin-left: auto;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.rootCauseBody {
+  margin: var(--space-8) 0 0;
+  font-size: var(--font-size-sm);
+  line-height: 1.55;
+  color: var(--color-text);
+}
+
+.rootCauseCaveat {
+  margin: var(--space-8) 0 0;
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+
+/* --- The agent's account ------------------------------------------- */
+
+.summary {
+  padding: var(--space-14) var(--space-16);
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-info);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-inset);
+}
+
+.summaryHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  color: var(--color-text-muted);
+}
+
+.summaryTitle {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+}
+
+.summaryBody {
+  margin: var(--space-8) 0 0;
+  font-size: var(--font-size-sm);
+  line-height: 1.55;
+  color: var(--color-text);
+  white-space: pre-wrap;
+}
+
+.summaryFoot {
+  margin: var(--space-8) 0 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+/* --- Manifest slots ------------------------------------------------- */
+
+.slots {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+}
+
+.slot {
+  @include card(var(--space-20));
+}
+
+/* Unreached: a dashed edge and a muted face, so "there is nothing here" is legible before a word
+   of it is read — and unmistakably not the solid danger edge a real comparison failure carries. */
+.slotUnreached {
+  border-style: dashed;
+  background: var(--color-bg-inset);
+}
+
+/* A consequence of an earlier stop. Subordinate on purpose: same information, a quarter of the
+   weight, so the eye counts one failure rather than four. */
+.slotConsequence {
+  padding: var(--space-10) var(--space-16);
+  border-style: dashed;
+  background: transparent;
+  opacity: 0.72;
+}
+
+.slotHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-10);
+  flex-wrap: wrap;
+}
+
+.step {
+  @include icon-square(22px, var(--font-size-xs));
+
+  flex: none;
+  border-radius: var(--radius-full);
+  background: var(--color-bg-subtle);
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.slotName {
+  font-family: var(--font-display);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.slotSpacer {
+  flex: 1;
+}
+
+.slotMeta {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.capture {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: 2px var(--space-8);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.consequenceText {
+  margin: var(--space-6) 0 0 var(--space-32);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+
+.unreached {
+  display: flex;
+  gap: var(--space-12);
+  margin-top: var(--space-14);
+  color: var(--color-danger);
+}
+
+.unreachedTitle {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+}
+
+.unreachedText {
+  margin: var(--space-6) 0 0;
+  max-width: 62ch;
+  font-size: var(--font-size-sm);
+  line-height: 1.55;
+  color: var(--color-text-muted);
+}
+
+/* --- The argument, beside the images -------------------------------- */
+
+.compare {
+  display: grid;
+  grid-template-columns: minmax(0, 1.65fr) minmax(260px, 0.85fr);
+  gap: var(--space-16);
+  align-items: start;
+  margin-top: var(--space-14);
+}
+
+@include mq-down("lg") {
+  .compare {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.stage {
+  min-width: 0;
+}
+
+.argument {
+  padding: var(--space-12) var(--space-14);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-inset);
+}
+
+.argumentHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+}
+
+.argumentBody {
+  margin: var(--space-8) 0 0;
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+  color: var(--color-text);
+  white-space: pre-wrap;
+}
+
+.argumentEmpty {
+  margin: var(--space-8) 0 0;
+  font-size: var(--font-size-sm);
+  font-style: italic;
+  color: var(--color-text-muted);
+}
+
+.argumentFoot {
+  margin: var(--space-10) 0 0;
+  padding-top: var(--space-10);
+  border-top: 1px solid var(--color-border);
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+
+/* --- Evidence -------------------------------------------------------- */
+
+.evidence {
+  @include card(var(--space-20));
+}
+
+.evidenceHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  color: var(--color-text-muted);
+}
+
+.evidenceTitle {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+}
+
+.evidenceMeta {
+  margin-left: auto;
+  font-size: var(--font-size-xs);
+}
+
+.evidenceLead {
+  margin: var(--space-6) 0 var(--space-14);
+  max-width: 72ch;
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+
+.evidenceGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--space-14);
+}
+
+.evidenceItem {
+  margin: 0;
+  min-width: 0;
+}
+
+.evidenceImg {
+  width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-subtle);
+}
+
+.evidenceCaption {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: var(--space-6);
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+  color: var(--color-text);
+}
+
+.evidenceUnnoted {
+  font-style: italic;
+  color: var(--color-text-muted);
+}
+
+.evidenceTime {
+  color: var(--color-text-muted);
+}
+
+/* --- What the agent was told ----------------------------------------- */
+
+.instructions {
+  @include card(var(--space-16));
+}
+
+.instructionsToggle {
+  @include focus-ring;
+
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.chevron {
+  flex: none;
+  color: var(--color-text-muted);
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.chevronOpen {
+  transform: rotate(180deg);
+}
+
+.instructionsHint {
+  font-weight: var(--font-weight-regular);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.instructionsBody {
+  margin: var(--space-14) 0 0;
+  padding: var(--space-14);
+  max-height: 480px;
+  overflow: auto;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-inset);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  line-height: 1.6;
+  color: var(--color-text);
+  white-space: pre-wrap;
+}

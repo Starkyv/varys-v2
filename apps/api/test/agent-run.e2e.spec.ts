@@ -168,6 +168,80 @@ describe("Agent Run Session — red before the agent does anything", () => {
     return (res.body.result.tools as { name: string }[]).map((t) => t.name);
   };
 
+  /** A PNG, as far as anything in this path is concerned: the real 8-byte signature plus a
+   *  marker, so two captures are distinguishable without pulling in an encoder. */
+  const png = (marker: string): Buffer =>
+    Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.from(marker),
+    ]);
+  const b64 = (marker: string): string => png(marker).toString("base64");
+
+  interface SubmitResult {
+    runId: string;
+    checkpoint: string;
+    verdict: string;
+    hadBaseline: boolean;
+    reviewState: string;
+    remaining: string[];
+    note: string;
+  }
+  interface FinishResult {
+    runId: string;
+    outcome: string;
+    status: string;
+    failureKind: string | null;
+    checkpoints: { name: string; reviewState: string }[];
+    unreached: string[];
+    note: string;
+  }
+
+  /** Call a tool and parse its JSON payload, asserting it was not an error. */
+  const ok = async <T>(token: string, name: string, args: unknown): Promise<T> => {
+    const res = await callTool(token, name, args);
+    expect(res.isError, res.content[0]?.text).toBeFalsy();
+    return JSON.parse(res.content.find((c) => c.type === "text")?.text ?? "{}") as T;
+  };
+
+  const submit = (runId: string, name: string, extra: Record<string, unknown> = {}) =>
+    ok<SubmitResult>(mcpToken(), "submit_checkpoint", {
+      runId,
+      name,
+      image: b64(name),
+      verdict: "pass",
+      reasoning: `The ${name} state matches what the instructions describe.`,
+      ...extra,
+    });
+
+  const rowsOf = (runId: string) =>
+    handle.db
+      .select({
+        name: runResults.checkpointName,
+        reviewState: runResults.reviewState,
+        actualArtifactKey: runResults.actualArtifactKey,
+        baselineArtifactKey: runResults.baselineArtifactKey,
+        judgeReasoning: runResults.judgeReasoning,
+        captureTool: runResults.captureTool,
+        captureViewport: runResults.captureViewport,
+        captureDeviceScale: runResults.captureDeviceScale,
+      })
+      .from(runResults)
+      .where(eq(runResults.runId, runId))
+      .orderBy(asc(runResults.createdAt));
+
+  const runRow = async (runId: string) => {
+    const [row] = await handle.db
+      .select({
+        status: runs.status,
+        failureKind: runs.failureKind,
+        agentSummary: runs.agentSummary,
+      })
+      .from(runs)
+      .where(eq(runs.id, runId))
+      .limit(1);
+    return row;
+  };
+
   it("hands the agent the composed instructions and the ordered Checkpoint Manifest in one call", async () => {
     const { session } = await start({ testId, environmentId });
 
@@ -459,80 +533,6 @@ describe("Agent Run Session — red before the agent does anything", () => {
    */
   describe("submitting, finishing, and seeding baselines", () => {
     let submitTestId: string;
-
-    /** A PNG, as far as anything in this path is concerned: the real 8-byte signature plus a
-     *  marker, so two captures are distinguishable without pulling in an encoder. */
-    const png = (marker: string): Buffer =>
-      Buffer.concat([
-        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-        Buffer.from(marker),
-      ]);
-    const b64 = (marker: string): string => png(marker).toString("base64");
-
-    interface SubmitResult {
-      runId: string;
-      checkpoint: string;
-      verdict: string;
-      hadBaseline: boolean;
-      reviewState: string;
-      remaining: string[];
-      note: string;
-    }
-    interface FinishResult {
-      runId: string;
-      outcome: string;
-      status: string;
-      failureKind: string | null;
-      checkpoints: { name: string; reviewState: string }[];
-      unreached: string[];
-      note: string;
-    }
-
-    /** Call a tool and parse its JSON payload, asserting it was not an error. */
-    const ok = async <T>(token: string, name: string, args: unknown): Promise<T> => {
-      const res = await callTool(token, name, args);
-      expect(res.isError, res.content[0]?.text).toBeFalsy();
-      return JSON.parse(res.content.find((c) => c.type === "text")?.text ?? "{}") as T;
-    };
-
-    const submit = (runId: string, name: string, extra: Record<string, unknown> = {}) =>
-      ok<SubmitResult>(mcpToken(), "submit_checkpoint", {
-        runId,
-        name,
-        image: b64(name),
-        verdict: "pass",
-        reasoning: `The ${name} state matches what the instructions describe.`,
-        ...extra,
-      });
-
-    const rowsOf = (runId: string) =>
-      handle.db
-        .select({
-          name: runResults.checkpointName,
-          reviewState: runResults.reviewState,
-          actualArtifactKey: runResults.actualArtifactKey,
-          baselineArtifactKey: runResults.baselineArtifactKey,
-          judgeReasoning: runResults.judgeReasoning,
-          captureTool: runResults.captureTool,
-          captureViewport: runResults.captureViewport,
-          captureDeviceScale: runResults.captureDeviceScale,
-        })
-        .from(runResults)
-        .where(eq(runResults.runId, runId))
-        .orderBy(asc(runResults.createdAt));
-
-    const runRow = async (runId: string) => {
-      const [row] = await handle.db
-        .select({
-          status: runs.status,
-          failureKind: runs.failureKind,
-          agentSummary: runs.agentSummary,
-        })
-        .from(runs)
-        .where(eq(runs.id, runId))
-        .limit(1);
-      return row;
-    };
 
     beforeAll(async () => {
       const created = await authed(app)
@@ -990,6 +990,369 @@ describe("Agent Run Session — red before the agent does anything", () => {
 
       const rows = await rowsOf(session.runId);
       expect(rows.every((r) => r.reviewState === "missing")).toBe(true);
+    });
+  });
+
+  /**
+   * **Verification runs** — every run after the first, which is the one that actually catches a
+   * regression, and the read-model a human judges it through (ticket #6).
+   *
+   * The first run only ever proposes. What is under test here is the second: with a golden
+   * approved, a verdict finally means something, and the two directions it can go have to land as
+   * the right two words. `fail` → the slot is `diff` and the run READS as `regression`; `pass` →
+   * the slot is `passed` and a complete run reads `passed`. Nothing in between, and nothing that
+   * re-rolls either answer.
+   *
+   * The other half is the shape of the run a person opens: contextual comparison and no pixel door
+   * left ajar, the reasoning and both images on every slot, an unreached slot that reads
+   * differently from a failed one, one root cause instead of five failures, the evidence, and a
+   * place in the same runs list and dashboard as everything else.
+   */
+  describe("verification runs and the agent-driven run view", () => {
+    let verifyTestId: string;
+
+    interface RunViewBody {
+      runId: string;
+      kind: string;
+      status: string;
+      outcome: string;
+      failureKind: string | null;
+      agentSummary: string | null;
+      agentInstructions: string | null;
+      evidence: { id: string; url: string; note: string; createdAt: string }[];
+      unreached: {
+        checkpointName: string;
+        step: number;
+        lastReached: string | null;
+        alsoUnreached: string[];
+        resumed: boolean;
+      } | null;
+      checkpoints: {
+        name: string;
+        reviewState: string;
+        compareMode: string;
+        judgeReasoning: string | null;
+        actualUrl: string | null;
+        baselineUrl: string | null;
+        capture: { tool: string | null; viewport: string | null; deviceScale: number | null } | null;
+      }[];
+    }
+
+    const runView = async (runId: string): Promise<RunViewBody> =>
+      (await authed(app).get(`/runs/${runId}`).expect(200)).body as RunViewBody;
+
+    /** Walk a whole journey and approve every capture, so the NEXT run has goldens to judge
+     *  against. The first run is always a proposal; this is what turns it into a baseline. */
+    const seedBaselines = async (names: string[]): Promise<void> => {
+      const { session } = await start({ testId: verifyTestId, environmentId });
+      for (const name of names) await submit(session.runId, name);
+      await authed(app).post(`/runs/${session.runId}/approve-all`).expect(201);
+    };
+
+    beforeAll(async () => {
+      const created = await authed(app)
+        .post("/tests/agent")
+        .send({ name: "verification journey", instructions: "Sign in as qa@acme.io / hunter2." })
+        .expect(201);
+      verifyTestId = created.body.id as string;
+      for (const cp of [
+        { name: "login", instructions: "Sign in.", comparePrompt: "The dashboard shell is rendered." },
+        { name: "chart", instructions: "Open the analytics tab.", comparePrompt: "The chart has bars. Today's values will differ — that is expected." },
+        // Deliberately blank: this is the row that falls back to the configured global default.
+        { name: "export", instructions: "Open the export dialog.", comparePrompt: "" },
+      ]) {
+        await authed(app).post(`/tests/${verifyTestId}/agent-checkpoints`).send(cp).expect(201);
+      }
+      await seedBaselines(["login", "chart", "export"]);
+    });
+
+    it("turns a fail against an approved baseline into a diff, and the run into a regression", async () => {
+      const { session } = await start({ testId: verifyTestId, environmentId });
+      expect(session.manifest.every((m) => m.hasBaseline)).toBe(true);
+
+      await submit(session.runId, "login");
+      const failed = await submit(session.runId, "chart", {
+        verdict: "fail",
+        reasoning: "The chart area is empty. The golden shows seven bars; this render has axes and no series at all, which is not a data difference.",
+      });
+      expect(failed.hadBaseline).toBe(true);
+      expect(failed.reviewState).toBe("diff");
+      await submit(session.runId, "export");
+
+      const finished = await ok<FinishResult>(mcpToken(), "finish_agent_run", {
+        runId: session.runId,
+        summary: "Walked all three. The analytics chart came up empty on every reload.",
+      });
+      expect(finished.outcome).toBe("regression");
+      expect(finished.unreached).toEqual([]);
+
+      // And the same word through the read-model a human actually opens.
+      const view = await runView(session.runId);
+      expect(view.outcome).toBe("regression");
+      expect(view.checkpoints.find((c) => c.name === "chart")?.reviewState).toBe("diff");
+      // `unreached` is not how this run failed — it got everywhere and one thing looked wrong.
+      expect(view.failureKind).toBeNull();
+      expect(view.unreached).toBeNull();
+    });
+
+    it("turns a pass against an approved baseline into a verified pass for the whole run", async () => {
+      const { session } = await start({ testId: verifyTestId, environmentId });
+      for (const name of ["login", "chart", "export"]) await submit(session.runId, name);
+
+      const finished = await ok<FinishResult>(mcpToken(), "finish_agent_run", {
+        runId: session.runId,
+        summary: "All three matched their goldens; the chart's values moved, which the prompt allows.",
+      });
+      expect(finished.outcome).toBe("passed");
+      expect(finished.status).toBe("passed");
+
+      const view = await runView(session.runId);
+      expect(view.outcome).toBe("passed");
+      expect(view.checkpoints.map((c) => c.reviewState)).toEqual(["passed", "passed", "passed"]);
+    });
+
+    /**
+     * The comparison is contextual for this kind in every configuration, and that has to be true
+     * of the READ-MODEL too — not only of what the runner would have done. An agent test's one
+     * version row is a zero-step stub, so a `compareMode` inferred from the definition falls
+     * through to `pixel` and the run view then offers threshold readouts, mask editors and a diff
+     * score for a verdict that was argued, not measured.
+     */
+    it("reads every checkpoint as contextual, and leaves no pixel door open", async () => {
+      const { session } = await start({ testId: verifyTestId, environmentId });
+      await submit(session.runId, "login", {
+        verdict: "fail",
+        reasoning: "The shell is there but the nav is missing entirely.",
+      });
+
+      const view = await runView(session.runId);
+      expect(view.kind).toBe("agent");
+      expect(view.checkpoints.every((c) => c.compareMode === "context")).toBe(true);
+
+      // Preview re-diff: mutates nothing, which is exactly why it was the easy one to leave open.
+      // It would hand back a diff score for a checkpoint nobody measured.
+      const reEval = await authed(app)
+        .post(`/runs/${session.runId}/checkpoints/login/re-evaluate`)
+        .send({ threshold: 0.9 })
+        .expect(400);
+      expect(reEval.body.message).toContain("Agent-Driven Test");
+
+      // And the committing one, which would also write a second version row.
+      await authed(app)
+        .post(`/runs/${session.runId}/checkpoints/login/persist`)
+        .send({ masks: [{ x: 0, y: 0, width: 10, height: 10 }] })
+        .expect(400);
+    });
+
+    it("falls back to the configured global default judge prompt when a row leaves it blank", async () => {
+      const DEFAULT_PROMPT =
+        "Compare the two screenshots for meaning, not pixels: same page, same structure, same state. Content that is expected to change may change.";
+      await authed(app).put("/settings/judge").send({ defaultPrompt: DEFAULT_PROMPT }).expect(200);
+
+      const { session } = await start({ testId: verifyTestId, environmentId });
+      const blank = session.manifest.find((m) => m.name === "export");
+      expect(blank?.comparePrompt).toBe(DEFAULT_PROMPT);
+      // The composed document the run keeps a copy of carries it too — the agent is told the same
+      // thing the Manifest says, and a run from six weeks ago still explains what it was judging by.
+      expect(session.instructions).toContain(DEFAULT_PROMPT);
+
+      // A row that wrote its own prompt keeps it: the default fills a gap, it does not override.
+      expect(session.manifest.find((m) => m.name === "chart")?.comparePrompt).toContain(
+        "Today's values will differ",
+      );
+    });
+
+    it("shows the reasoning beside both images on every filled slot, with how it was captured", async () => {
+      const { session } = await start({ testId: verifyTestId, environmentId });
+      const REASONING =
+        "Seven bars against the golden's seven, same axis labels, same legend. The bar heights differ because these are today's numbers.";
+      await submit(session.runId, "chart", {
+        reasoning: REASONING,
+        capture: { tool: "chrome-devtools", viewport: "1440x900", deviceScale: 2 },
+      });
+
+      const chart = (await runView(session.runId)).checkpoints.find((c) => c.name === "chart");
+      // The argument for the verdict, and the two pictures it is an argument about. Varys watched
+      // none of this, so all three together are the entire audit trail.
+      expect(chart?.judgeReasoning).toBe(REASONING);
+      expect(chart?.actualUrl).toBeTruthy();
+      expect(chart?.baselineUrl).toBeTruthy();
+      expect(chart?.capture).toEqual({ tool: "chrome-devtools", viewport: "1440x900", deviceScale: 2 });
+    });
+
+    it("reads an unreached slot as its own fact, distinct from a capture that failed", async () => {
+      const { session } = await start({ testId: verifyTestId, environmentId });
+      await submit(session.runId, "login", {
+        verdict: "fail",
+        reasoning: "The shell renders but the sidebar is gone.",
+      });
+
+      const view = await runView(session.runId);
+      const byName = new Map(view.checkpoints.map((c) => [c.name, c]));
+      // "Got there and it looked wrong" — there is a picture, and a human owes it a decision.
+      expect(byName.get("login")?.reviewState).toBe("diff");
+      expect(byName.get("login")?.actualUrl).toBeTruthy();
+      // "Could not get there" — no picture at all, and nothing for a reviewer to approve.
+      expect(byName.get("chart")?.reviewState).toBe("missing");
+      expect(byName.get("chart")?.actualUrl).toBeNull();
+      expect(byName.get("chart")?.baselineUrl).toBeNull();
+      // The run's own reason says which of the two ended it.
+      expect(view.failureKind).toBe("unreached");
+      expect(view.outcome).toBe("failed");
+
+      // An unreached slot is not review work: there is nothing to look at and nothing to approve,
+      // so it must not appear in the queue beside captures that are waiting on a human.
+      const queue = (await authed(app).get("/runs/needs-review").expect(200)).body as {
+        runId: string;
+        checkpointName: string;
+      }[];
+      expect(queue.some((q) => q.runId === session.runId && q.checkpointName === "chart")).toBe(false);
+    });
+
+    it("states one root cause for a journey that stopped, not one failure per slot it never reached", async () => {
+      const { session } = await start({ testId: verifyTestId, environmentId });
+      await submit(session.runId, "login");
+
+      const view = await runView(session.runId);
+      expect(view.unreached).toEqual({
+        checkpointName: "chart",
+        step: 2,
+        lastReached: "login",
+        alsoUnreached: ["export"],
+        resumed: false,
+      });
+      // Two slots went unfilled and there is exactly one finding about them.
+      expect(view.checkpoints.filter((c) => c.reviewState === "missing")).toHaveLength(2);
+    });
+
+    it("says so when the session carried on past the break, rather than claiming one cause explains it all", async () => {
+      const { session } = await start({ testId: verifyTestId, environmentId });
+      // Skipped the chart, reached the export anyway — two things happened, and a summary that
+      // says "it stopped at the chart" would be a comfortable lie.
+      await submit(session.runId, "login");
+      await submit(session.runId, "export");
+
+      const view = await runView(session.runId);
+      expect(view.unreached).toMatchObject({
+        checkpointName: "chart",
+        lastReached: "login",
+        alsoUnreached: [],
+        resumed: true,
+      });
+    });
+
+    it("makes the agent's evidence and its written account browsable from the run", async () => {
+      const { session } = await start({ testId: verifyTestId, environmentId });
+      await submit(session.runId, "login");
+      await ok<{ attached: number }>(mcpToken(), "submit_evidence", {
+        runId: session.runId,
+        image: b64("console-errors"),
+        note: "The console, full of 401s from /api/metrics.",
+      });
+      await ok<{ attached: number }>(mcpToken(), "submit_evidence", {
+        runId: session.runId,
+        image: b64("empty-chart"),
+      });
+      const SUMMARY =
+        "Signed in fine. The analytics tab never rendered a chart — the metrics call 401s, so I could not reach the export either.";
+      await ok<FinishResult>(mcpToken(), "finish_agent_run", { runId: session.runId, summary: SUMMARY });
+
+      const view = await runView(session.runId);
+      expect(view.agentSummary).toBe(SUMMARY);
+      // The composed instructions ride along, so a run stays explainable after every layer of the
+      // text behind it has been rewritten.
+      expect(view.agentInstructions).toContain("qa@acme.io / hunter2");
+
+      expect(view.evidence).toHaveLength(2);
+      expect(view.evidence[0]).toMatchObject({ note: "The console, full of 401s from /api/metrics." });
+      // Attached in session order, and an unnoted attachment is still browsable.
+      expect(view.evidence[1].note).toBe("");
+      // The bytes are actually fetchable, rather than a URL that 404s when a reviewer clicks it.
+      const fetched = await authed(app).get(new URL(view.evidence[0].url, "http://x").pathname).expect(200);
+      expect(Buffer.from(fetched.body).equals(png("console-errors"))).toBe(true);
+    });
+
+    it("sits in the runs list and on the dashboard on the same footing as a pinned run", async () => {
+      const { session } = await start({ testId: verifyTestId, environmentId });
+      for (const name of ["login", "chart", "export"]) await submit(session.runId, name);
+      await ok<FinishResult>(mcpToken(), "finish_agent_run", {
+        runId: session.runId,
+        summary: "Clean walk, everything matched.",
+      });
+
+      // One corpus: the flat history carries it with the same outcome word every other run uses.
+      const list = (await authed(app).get("/runs").expect(200)).body as {
+        runId: string;
+        testName: string;
+        outcome: string;
+      }[];
+      const listed = list.find((r) => r.runId === session.runId);
+      expect(listed).toMatchObject({ testName: "verification journey", outcome: "passed" });
+
+      // And one view: the dashboard's matrix and activity feed both carry it, keyed by test and
+      // environment exactly as a pinned test's would be.
+      const dash = (await authed(app).get("/dashboard").expect(200)).body as {
+        matrix: {
+          environments: string[];
+          rows: { testId: string; cells: { environment: string; status: string; runId: string | null }[] }[];
+        };
+        recentRuns: { runId: string }[];
+      };
+      const cell = dash.matrix.rows
+        .find((r) => r.testId === verifyTestId)
+        ?.cells.find((c) => c.environment === "staging");
+      expect(cell?.status).toBe("passed");
+      expect(cell?.runId).toBe(session.runId);
+      expect(dash.recentRuns.some((r) => r.runId === session.runId)).toBe(true);
+    });
+
+    /**
+     * The one thing nothing in Varys may do to a failed verdict: try it again.
+     *
+     * A contextual judge that catches a regression intermittently is precisely the case where a
+     * retry policy makes a real bug vanish, so the guarantee is that there is no retry policy —
+     * not on the server, not on a schedule, and not reachable by the agent inside its own session.
+     */
+    it("leaves a failed verdict alone — no server path, and no scheduled one, re-rolls it", async () => {
+      const { session } = await start({ testId: verifyTestId, environmentId });
+      await submit(session.runId, "chart", {
+        verdict: "fail",
+        reasoning: "Empty plot area against a golden with seven bars.",
+      });
+
+      // The agent cannot re-roll it inside the session it already reported in.
+      const retry = await callTool(mcpToken(), "submit_checkpoint", {
+        runId: session.runId,
+        name: "chart",
+        image: b64("chart-second-go"),
+        verdict: "pass",
+        reasoning: "Reloaded a few times and it eventually drew.",
+      });
+      expect(retry.isError).toBe(true);
+
+      // Nor can anything schedule a re-walk. BOTH unattended doors are checked, because the
+      // scheduler fires per-test schedules straight into `RunsService.create` as well as fanning
+      // suites out — so "a schedule only ever runs a suite" would be a comfortable and wrong
+      // reason to check only one of them.
+      const refusedSuite = await authed(app)
+        .post("/suites")
+        .send({ name: "nightly regression", testIds: [verifyTestId] });
+      expect(refusedSuite.status).toBe(400);
+
+      const refusedSchedule = await authed(app)
+        .patch(`/tests/${verifyTestId}`)
+        .send({ schedule: { cron: "0 2 * * *", timezone: "UTC" } });
+      expect(refusedSchedule.status).toBe(400);
+
+      // And the test really is unscheduled afterwards, rather than refused by a check that ran
+      // after the write.
+      const after = (await authed(app).get(`/tests/${verifyTestId}`).expect(200)).body as {
+        schedule: unknown | null;
+      };
+      expect(after.schedule ?? null).toBeNull();
+
+      const rows = await rowsOf(session.runId);
+      expect(rows.find((r) => r.name === "chart")?.reviewState).toBe("diff");
     });
   });
 });

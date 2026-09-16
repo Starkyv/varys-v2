@@ -33,15 +33,18 @@ import type {
   Rect,
   Resolution,
   ReviewState,
+  RunEvidenceView,
   RunNetworkEvent,
   RunSummary,
   RunView,
   StepLabel,
   StepRun,
+  TestKind,
   TuningInput,
 } from "@varys/review-contract";
 import {
   deriveRunOutcome,
+  deriveUnreachedRootCause,
   isRepairInReview,
   rollupRunStatus,
   type RunFailureKind,
@@ -255,8 +258,11 @@ export class RunsService {
         triageFinding: runs.triageFinding,
         triageBy: runs.triageBy,
         triageAt: runs.triageAt,
+        agentSummary: runs.agentSummary,
+        agentInstructions: runs.agentInstructions,
         testId: testVersions.testId,
         testName: tests.name,
+        kind: tests.kind,
         repairPolicy: tests.repairPolicy,
         definition: testVersions.definition,
         // The version this run REPLAYED — an unreviewed repair in it is what makes an otherwise
@@ -271,6 +277,9 @@ export class RunsService {
       .where(eq(runs.id, runId))
       .limit(1);
     if (!row) throw new NotFoundException(`Run ${runId} not found`);
+
+    const kind: TestKind = row.kind === "agent" ? "agent" : "pinned";
+    const isAgentRun = kind === "agent";
 
     // Capture mode lives on the screenshot step of the version that ran; map it by
     // checkpoint name (absent ⇒ element, for definitions recorded before capture modes).
@@ -313,6 +322,9 @@ export class RunsService {
         actualArtifactKey: runResults.actualArtifactKey,
         baselineArtifactKey: runResults.baselineArtifactKey,
         diffArtifactKey: runResults.diffArtifactKey,
+        captureTool: runResults.captureTool,
+        captureViewport: runResults.captureViewport,
+        captureDeviceScale: runResults.captureDeviceScale,
         createdAt: runResults.createdAt,
       })
       .from(runResults)
@@ -433,12 +445,39 @@ export class RunsService {
       row.definition as TestDefinition,
     );
 
+    // Extra screenshots an agent attached during the session. Read for every run rather than
+    // gated on the kind: the table is empty for a pinned one, and a gate here would be a second
+    // place the two kinds have to agree about what an agent run is.
+    const evidenceRows = await this.db
+      .select({
+        id: runEvidence.id,
+        artifactKey: runEvidence.artifactKey,
+        note: runEvidence.note,
+        createdAt: runEvidence.createdAt,
+      })
+      .from(runEvidence)
+      .where(eq(runEvidence.runId, runId))
+      .orderBy(runEvidence.createdAt);
+    const evidence: RunEvidenceView[] = evidenceRows.map((e) => ({
+      id: e.id,
+      url: this.storage.getUrl(e.artifactKey),
+      note: e.note,
+      createdAt: e.createdAt.toISOString(),
+    }));
+
     const checkpoints: CheckpointView[] = dedupedResults.map(
       (r): CheckpointView => ({
         name: r.name,
         reviewState: r.reviewState as ReviewState,
         captureMode: captureModes.get(r.name) ?? "element",
-        compareMode: compareModes.get(r.name) ?? "pixel",
+        // An Agent-Driven Test's checkpoints are ALWAYS compared contextually — never pixel
+        // diffed, in any configuration (PRD, Out of Scope 9). The map above is built from the
+        // version's screenshot steps and this kind has none, so falling through to the `pixel`
+        // default would dress a judged verdict up as a diff score, offer mask and threshold
+        // editors for a comparison that has neither, and read "Within threshold" off a `threshold`
+        // column that only exists because it is NOT NULL. Stated from the kind rather than
+        // inferred from the definition, because there is no definition to infer it from.
+        compareMode: isAgentRun ? "context" : (compareModes.get(r.name) ?? "pixel"),
         resolution: r.resolution as Resolution | null,
         resolvedBy: r.resolvedBy,
         resolvedAt: r.resolvedAt ? r.resolvedAt.toISOString() : null,
@@ -452,6 +491,16 @@ export class RunsService {
         diffUrl: url(r.diffArtifactKey),
         baselineApprovedBy: baselineByName.get(r.name)?.approvedBy ?? null,
         baselineApprovedAt: baselineByName.get(r.name)?.approvedAt?.toISOString() ?? null,
+        // Null rather than a row of nulls when the session volunteered nothing, so the view has
+        // one thing to test instead of three.
+        capture:
+          r.captureTool == null && r.captureViewport == null && r.captureDeviceScale == null
+            ? null
+            : {
+                tool: r.captureTool,
+                viewport: r.captureViewport,
+                deviceScale: r.captureDeviceScale,
+              },
       }),
     );
 
@@ -498,6 +547,16 @@ export class RunsService {
       // never collapsed to a single pass/fail: `extraction-failed` and `relation-false` say
       // different things about who is wrong.
       assertions,
+      kind,
+      // Both null for a pinned run — it has no agent, and there is nothing to say so about.
+      agentSummary: row.agentSummary ?? null,
+      agentInstructions: row.agentInstructions ?? null,
+      evidence,
+      // Read off `checkpoints`, which is ordered by `created_at` — stamped in Manifest order when
+      // the rows were seeded, so this is the journey's own sequence and not an arbitrary one.
+      // Computed here rather than in the client for the same reason `outcome` is: a summary of a
+      // failure that two surfaces could word differently is a summary nobody can quote.
+      unreached: deriveUnreachedRootCause(checkpoints),
     };
   }
 
@@ -965,13 +1024,26 @@ export class RunsService {
         baselineArtifactKey: runResults.baselineArtifactKey,
         actualArtifactKey: runResults.actualArtifactKey,
         threshold: runResults.threshold,
+        testKind: tests.kind,
       })
       .from(runResults)
+      .innerJoin(runs, eq(runs.id, runResults.runId))
+      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
+      .innerJoin(tests, eq(tests.id, testVersions.testId))
       .where(and(eq(runResults.runId, runId), eq(runResults.checkpointName, checkpointName)))
       .limit(1);
     if (!r) {
       throw new NotFoundException(`Checkpoint ${checkpointName} not found for run ${runId}`);
     }
+    // The last pixel door standing open for this kind. The other one mutates; this one does not —
+    // which is exactly why it was the easy one to overlook, and exactly why it matters: it hands
+    // back a diff score and a diff image for a checkpoint that was judged rather than measured,
+    // and a reviewer shown "0.4% different" reads it as the verdict. The guarantee is that NO
+    // pixel path is reachable for this kind, not that none of them writes.
+    this.assertPixelComparable(
+      r.testKind,
+      "there is no pixel score to re-evaluate, and no mask or threshold that would change the verdict",
+    );
     const { baseline, actual } = await this.loadDiffInputs(
       r.baselineArtifactKey,
       r.actualArtifactKey,
@@ -1026,15 +1098,13 @@ export class RunsService {
     }
     // An Agent-Driven Test has ONE version row, written at creation and never again — every join,
     // dashboard and report that hangs off `runs.test_version_id` depends on that. It also has no
-    // masks and no pixel threshold to tune: its comparison is always contextual, and this is the
-    // one remaining door that would write a second version for it. Guarded here rather than left
-    // to a reachability argument, because agent-driven runs now exist and the argument was only
-    // ever "nothing can reach a checkpoint of one yet".
-    if (ctx.testKind === "agent") {
-      throw new BadRequestException(
-        "This checkpoint belongs to an Agent-Driven Test. It is compared contextually, never pixel by pixel, so there are no masks or thresholds to save — edit its comparison prompt on the test instead.",
-      );
-    }
+    // masks and no pixel threshold to tune. Guarded here rather than left to a reachability
+    // argument, because agent-driven runs now exist and the argument was only ever "nothing can
+    // reach a checkpoint of one yet".
+    this.assertPixelComparable(
+      ctx.testKind,
+      "there are no masks or thresholds to save — edit its comparison prompt on the test instead",
+    );
 
     // 1. New audited test_version with the updated masks/threshold on this step.
     const def = await this.latestDefinition(ctx.testId);
@@ -1098,6 +1168,23 @@ export class RunsService {
       threshold,
       version: nextVersion,
     };
+  }
+
+  /**
+   * Refuse a pixel operation on an Agent-Driven Test's checkpoint.
+   *
+   * Two doors reach the pixel engine from a run review — the preview re-diff and the committing
+   * mask save — and both have to be locked, because the guarantee this kind makes is about
+   * REACHABILITY, not about which of them happens to write. The lock is spelled once so the two
+   * cannot drift into disagreeing about whether this kind has a threshold; `consequence` is the
+   * only part that differs, because "there is nothing to re-evaluate" and "there is nothing to
+   * save" are different sentences to the person who just clicked.
+   */
+  private assertPixelComparable(testKind: string | null, consequence: string): void {
+    if (testKind !== "agent") return;
+    throw new BadRequestException(
+      `This checkpoint belongs to an Agent-Driven Test. Its capture was compared contextually — by the session that took it, holding both images — so ${consequence}. The agent's reasoning on the run is the record of how it was judged.`,
+    );
   }
 
   /** Load a checkpoint's stored baseline+actual bytes for an in-place re-diff. */

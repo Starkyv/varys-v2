@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   deriveRunOutcome,
+  deriveUnreachedRootCause,
   isRepairInReview,
   rollupRunStatus,
   type ReviewState,
   type Resolution,
   type RunOutcome,
   type RunOutcomeCheckpoint,
+  type UnreachedCheckpoint,
 } from "./index";
 
 /** Terse checkpoint builder: `cp("passed")`, `cp("diff", "approved")`. */
@@ -256,5 +258,120 @@ describe("rollupRunStatus", () => {
 
   it("outranks a pending checkpoint, so a half-walked run never reads as amber", () => {
     expect(rollupRunStatus([cp("pending-baseline"), cp("missing")])).toBe("failed");
+  });
+});
+
+/**
+ * The "one root cause, not five failures" derivation.
+ *
+ * A Checkpoint Manifest is CUMULATIVE — slot 3's instructions assume slots 1–2 already happened —
+ * so when a journey breaks, everything after it is unreachable by construction. Presenting those
+ * as independent findings is what makes a reader stop reading: four mysteries where there is one
+ * fact. This picks the fact.
+ */
+describe("deriveUnreachedRootCause", () => {
+  /** A named slot in Manifest order — the shape the run view holds. */
+  const slot = (name: string, reviewState: ReviewState): UnreachedCheckpoint => ({ name, reviewState });
+
+  it("is null when every slot was reached", () => {
+    expect(deriveUnreachedRootCause([])).toBeNull();
+    expect(
+      deriveUnreachedRootCause([slot("home", "passed"), slot("detail", "diff")]),
+    ).toBeNull();
+  });
+
+  it("names the first unfilled slot as the root cause and the rest as its consequences", () => {
+    const cause = deriveUnreachedRootCause([
+      slot("login", "passed"),
+      slot("dashboard", "passed"),
+      slot("filters", "missing"),
+      slot("export", "missing"),
+      slot("confirmation", "missing"),
+    ]);
+    expect(cause).toEqual({
+      checkpointName: "filters",
+      step: 3,
+      lastReached: "dashboard",
+      alsoUnreached: ["export", "confirmation"],
+      resumed: false,
+    });
+  });
+
+  // The login-broke case the PRD names: nothing was reached, so there is no "it got this far".
+  it("reports no last-reached slot when the journey never started", () => {
+    const cause = deriveUnreachedRootCause([
+      slot("login", "missing"),
+      slot("dashboard", "missing"),
+    ]);
+    expect(cause).toMatchObject({
+      checkpointName: "login",
+      step: 1,
+      lastReached: null,
+      alsoUnreached: ["dashboard"],
+    });
+  });
+
+  it("carries no consequences when only the last slot went unfilled", () => {
+    const cause = deriveUnreachedRootCause([slot("home", "passed"), slot("detail", "missing")]);
+    expect(cause).toMatchObject({ checkpointName: "detail", step: 2, alsoUnreached: [], resumed: false });
+  });
+
+  /**
+   * The honesty flag. If a later slot WAS filled, the break did not stop the session — so "the
+   * journey stopped at X" is not the whole story, and the view must not claim it is. One root
+   * cause is a summary, not a licence to hide the second thing that went wrong.
+   */
+  it("flags a run that carried on past the break, so one cause is not claimed to explain all of it", () => {
+    const cause = deriveUnreachedRootCause([
+      slot("login", "passed"),
+      slot("filters", "missing"),
+      slot("export", "passed"),
+      slot("confirmation", "missing"),
+    ]);
+    expect(cause).toMatchObject({
+      checkpointName: "filters",
+      step: 2,
+      lastReached: "login",
+      // "confirmation" is NOT fallout from the break at "filters": the session filled "export"
+      // in between, so it demonstrably got past it. Claiming it as a consequence would collapse
+      // two independent failures into one — the same dishonesty as the five-failure view, with
+      // the sign flipped.
+      alsoUnreached: [],
+      resumed: true,
+    });
+  });
+
+  // The contiguous block is what the break actually explains, and it stops where the session
+  // recovers — not at the end of the Manifest.
+  it("claims only the unbroken run of slots behind the break, not everything after it", () => {
+    const cause = deriveUnreachedRootCause([
+      slot("login", "passed"),
+      slot("filters", "missing"),
+      slot("chart", "missing"),
+      slot("export", "passed"),
+      slot("confirmation", "missing"),
+    ]);
+    expect(cause).toMatchObject({
+      checkpointName: "filters",
+      alsoUnreached: ["chart"],
+      resumed: true,
+    });
+  });
+
+  // Manifest order is the caller's, taken as given: `run_results` is stamped in journey order at
+  // seed time precisely so this reads the sequence the agent was asked to walk.
+  it("reads order from the array, not from the names", () => {
+    const cause = deriveUnreachedRootCause([
+      slot("zulu", "passed"),
+      slot("alpha", "missing"),
+    ]);
+    expect(cause).toMatchObject({ checkpointName: "alpha", step: 2, lastReached: "zulu" });
+  });
+
+  // A slot resolved by a human is a slot that WAS reached; only `missing` means unreached.
+  it("counts only missing slots — a rejected capture is a different fact with a different owner", () => {
+    expect(
+      deriveUnreachedRootCause([slot("home", "diff"), slot("detail", "pending-baseline")]),
+    ).toBeNull();
   });
 });
