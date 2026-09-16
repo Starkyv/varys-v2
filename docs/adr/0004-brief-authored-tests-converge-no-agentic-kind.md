@@ -1,5 +1,12 @@
 # Brief-authored tests converge into ordinary tests — there is no agentic test kind
 
+> **Superseded in part by [ADR 0006](./0006-agent-driven-tests-partially-reverse-adr-0004.md).**
+> `tests.kind` now exists and `agent` is one of its values. The **cost** objection below was
+> dissolved (those runs execute on the author's own Claude, on their own machine, so Varys pays
+> nothing per run); the **silent skipping** objection was never refuted and is instead engineered
+> around. It still governs the scope ADR 0006 declines to enter: an Agent-Driven Test cannot join
+> a suite or a schedule, and Varys's worker refuses to run one. Everything else below stands.
+
 A test authored from a natural-language **Brief** is not a new kind of test. Claude drives
 **once**, during an Authoring Session, and Varys **pins** what it decided — the steps, the
 multi-signal Fingerprint of every element it chose, and how each Assertion is to be evaluated.

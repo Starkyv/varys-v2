@@ -22,6 +22,70 @@
  */
 export type ReviewState = "pending-baseline" | "diff" | "passed" | "missing";
 
+/* ------------------------------------------------------------------ *
+ *  Agent-Driven Tests — the authoring surface                         *
+ * ------------------------------------------------------------------ */
+
+/**
+ * One Checkpoint of an Agent-Driven Test: a slot in its Checkpoint Manifest.
+ *
+ * The rows are **cumulative** — `instructions` describe only the increment from the previous
+ * checkpoint, because one Agent Run Session walks the list top to bottom carrying its own session
+ * state. They are also **unversioned**: editing them writes no `test_version`.
+ *
+ * `id` is durable and `name` is a label, which is the distinction that lets a rename carry the
+ * checkpoint's approved baselines rather than orphaning them.
+ */
+export interface AgentCheckpoint {
+  id: string;
+  /** Order within the journey — the sequence a Run walks, not a display hint. */
+  position: number;
+  /** Unique within the test. Keys a baseline per environment, and is the only name an agent may
+   *  submit under once the Manifest is handed to it. */
+  name: string;
+  /** How to reach this state from the previous checkpoint. */
+  instructions: string;
+  /** What must be true in this screenshot for it to match its baseline. Empty falls back to the
+   *  configured global default judge prompt. */
+  comparePrompt: string;
+}
+
+/** Create an Agent-Driven Test. It is `active` on create with `origin: "human"` — a person types
+ *  every word, so there is no machine-written artifact to promote. */
+export interface CreateAgentTestRequest {
+  name: string;
+  /** The test-level AI Instructions (stored on `tests.intent`). Optional at create; the editor
+   *  is where it is usually written. */
+  instructions?: string;
+}
+
+/** Add or edit one Checkpoint. On edit every field is optional — omitted means unchanged. */
+export interface AgentCheckpointInput {
+  name?: string;
+  instructions?: string;
+  comparePrompt?: string;
+}
+
+/** Reorder the whole list in one write: the complete set of checkpoint ids, in the new order. */
+export interface ReorderAgentCheckpointsRequest {
+  ids: string[];
+}
+
+/**
+ * What deleting a Checkpoint would cost, asked for BEFORE the delete.
+ *
+ * Deleting a slot drops its approved baselines in every environment, and the author should be
+ * told which rather than discovering it afterwards — the same reason a rename is made to carry
+ * them instead of silently orphaning them.
+ */
+export interface AgentCheckpointDeleteImpact {
+  checkpointName: string;
+  /** Environments holding an approved baseline for this checkpoint, which the delete would drop. */
+  environments: string[];
+  /** Total baseline rows that would go, across environments and viewports. */
+  baselineCount: number;
+}
+
 /** How a checkpoint was captured (absent in old definitions ⇒ `element`). */
 export type CaptureMode = "element" | "fullpage" | "region";
 /** How a checkpoint's capture is compared to its baseline: classic pixel diff, or an LLM
@@ -73,6 +137,19 @@ export interface PersistResult {
 /** Who authored a test: a human extension recording, or Claude via the MCP authoring
  *  layer (Slice 14). */
 export type TestOrigin = "human" | "ai";
+
+/**
+ * Which kind of test this is.
+ *
+ * `pinned` — every test that existed before Agent-Driven Tests — is behaviour written down as
+ * data: ordered steps, each carrying a Fingerprint, replayed by the worker with no model call.
+ * `agent` is an **Agent-Driven Test**: no steps and no fingerprints, an ordered list of
+ * Checkpoints that a locally-run Claude re-walks on every Run.
+ *
+ * The kind is a property of the TEST, not of its definition, because an Agent-Driven Test's
+ * behaviour is unversioned — see {@link AgentCheckpoint}.
+ */
+export type TestKind = "pinned" | "agent";
 
 /** A test's lifecycle: `draft` = an un-promoted AI authoring output (held out of suites
  *  and schedules, surfaced in the review queue); `active` = a normal, runnable test. */
@@ -594,6 +671,9 @@ export interface TestSummary {
   id: string;
   name: string;
   createdAt: string;
+  /** `pinned` (steps the worker replays) or `agent` (an Agent-Driven Test a local Claude walks).
+   *  Absent on nothing — every row has one, defaulted to `pinned`. */
+  kind: TestKind;
   /** Lifecycle state — the Tests view lists only `active`; drafts live in the review queue. */
   status: TestStatus;
   /** Who authored it (a promoted AI test keeps `origin: "ai"`). */
@@ -748,6 +828,10 @@ export interface LocatorVerifyResult {
 export interface TestConfigView {
   id: string;
   name: string;
+  /** Which kind of test this is. `agent` has no steps to configure at all — its behaviour is its
+   *  AI Instructions plus its ordered Checkpoints, edited in place and never versioned — so the
+   *  detail page branches on this rather than rendering an empty step editor. */
+  kind: TestKind;
   /** The latest version number this config reflects — echoed back as `baseVersion`
    *  in a save so the server can reject a stale edit (optimistic concurrency). */
   version: number;

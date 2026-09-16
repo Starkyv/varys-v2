@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
+  AgentCheckpointInput,
+  CreateAgentTestRequest,
   CreateAgentCredentialRequest,
   ImageComparisonSettings,
   SetRepairPolicyRequest,
@@ -12,6 +14,12 @@ import type {
   TuningInput,
 } from "@varys/review-contract";
 import {
+  addAgentCheckpoint,
+  createAgentTest,
+  deleteAgentCheckpoint,
+  fetchAgentCheckpoints,
+  reorderAgentCheckpoints,
+  updateAgentCheckpoint,
   approveAllInRun,
   createAgentCredential,
   fetchAgentCredentials,
@@ -571,6 +579,71 @@ export function useDeleteSuiteRun() {
       qc.invalidateQueries({ queryKey: runsQueryKey() });
       qc.invalidateQueries({ queryKey: needsReviewQueryKey() });
     },
+  });
+}
+
+/* ---- Agent-Driven Tests ------------------------------------------------------------- */
+
+/** The ordered Checkpoint Manifest's cache key. */
+export function agentCheckpointsQueryKey(testId: string) {
+  return ["agent-checkpoints", testId] as const;
+}
+
+/** The ordered Checkpoint Manifest of an Agent-Driven Test. */
+export function useAgentCheckpoints(testId: string, opts?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: agentCheckpointsQueryKey(testId),
+    queryFn: () => fetchAgentCheckpoints(testId),
+    enabled: opts?.enabled ?? true,
+  });
+}
+
+export function useCreateAgentTest() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CreateAgentTestRequest) => createAgentTest(body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: testsQueryKey() }),
+  });
+}
+
+export function useAddAgentCheckpoint(testId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: AgentCheckpointInput) => addAgentCheckpoint(testId, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: agentCheckpointsQueryKey(testId) }),
+  });
+}
+
+/** Edit one Checkpoint. A rename carries its baselines, so the test's config (which reads
+ *  baseline images per checkpoint name) is refreshed alongside the list. */
+export function useUpdateAgentCheckpoint(testId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { checkpointId: string; body: AgentCheckpointInput }) =>
+      updateAgentCheckpoint(testId, vars.checkpointId, vars.body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: agentCheckpointsQueryKey(testId) });
+      qc.invalidateQueries({ queryKey: testConfigQueryKey(testId) });
+    },
+  });
+}
+
+export function useDeleteAgentCheckpoint(testId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (checkpointId: string) => deleteAgentCheckpoint(testId, checkpointId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: agentCheckpointsQueryKey(testId) });
+      qc.invalidateQueries({ queryKey: testConfigQueryKey(testId) });
+    },
+  });
+}
+
+export function useReorderAgentCheckpoints(testId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (ids: string[]) => reorderAgentCheckpoints(testId, ids),
+    onSuccess: () => qc.invalidateQueries({ queryKey: agentCheckpointsQueryKey(testId) }),
   });
 }
 

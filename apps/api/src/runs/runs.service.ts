@@ -100,6 +100,22 @@ export class RunsService {
       triggerSource?: "manual" | "suite" | "schedule" | "api" | "repair";
     } = {},
   ): Promise<CreatedRun> {
+    // An Agent-Driven Test is never executed by the worker: it has no steps, and its one version
+    // row is a zero-step placeholder that exists only to satisfy `runs.test_version_id`. Replaying
+    // it would produce a run that captured nothing and compared nothing — which `deriveRunOutcome`
+    // has no checkpoints to redden, so it would read as a PASS. Refused here rather than at each
+    // entry point, because this is the single door the ad-hoc route and the suite fan-out share.
+    const [kindRow] = await this.db
+      .select({ kind: tests.kind })
+      .from(tests)
+      .where(eq(tests.id, testId))
+      .limit(1);
+    if (kindRow?.kind === "agent") {
+      throw new BadRequestException(
+        "An Agent-Driven Test is run by your own local Claude, not by Varys — there are no steps for the worker to replay.",
+      );
+    }
+
     const [version] = await this.db
       .select({ id: testVersions.id })
       .from(testVersions)

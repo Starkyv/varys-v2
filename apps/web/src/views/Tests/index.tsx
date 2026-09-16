@@ -16,6 +16,11 @@ import {
   SegmentedControl,
   Select,
   Skeleton,
+  Input,
+  Modal,
+  ModalBody,
+  ModalFooter,
+  ModalHeader,
   Sparkles,
 } from "@varys/ui";
 import { useCallback, useMemo, useState } from "react";
@@ -23,7 +28,14 @@ import { useConfirm } from "../../context/confirm";
 import { useRouter } from "../../context/router";
 import { useRunDialog } from "../../context/run-dialog";
 import { useToast } from "../../context/toast";
-import { useFolders, useSetRepairPolicy, useTags, useTests, useUpdateTest } from "../../queries";
+import {
+  useCreateAgentTest,
+  useFolders,
+  useSetRepairPolicy,
+  useTags,
+  useTests,
+  useUpdateTest,
+} from "../../queries";
 import { type FolderFilter, FolderRail } from "./components/FolderRail";
 import { TagFilter } from "./components/TagFilter";
 import { TestRow } from "./components/TestRow";
@@ -88,6 +100,7 @@ export function Tests() {
   );
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
+  const [creatingAgent, setCreatingAgent] = useState(false);
   // Finder-style icon grid vs. the detailed list. Persisted per-viewer.
   const [viewMode, setViewMode] = useState<"icons" | "list">(() => {
     try {
@@ -331,6 +344,15 @@ export function Tests() {
                 Apply
               </Button>
             </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              iconLeft={<Sparkles size={14} />}
+              onClick={() => setCreatingAgent(true)}
+              title="A test with no recorded steps, walked by your own local Claude"
+            >
+              New agent test
+            </Button>
             <SegmentedControl<"icons" | "list">
               ariaLabel="View"
               size="sm"
@@ -401,10 +423,19 @@ export function Tests() {
                   >
                     <span className={styles.fileGlyph}>
                       <FileIcon />
-                      {t.needsEnvironment && (
-                        <span className={styles.fileEnvBadge} title="Needs an environment">
-                          <Lock size={10} />
+                      {t.kind === "agent" ? (
+                        <span
+                          className={styles.fileAgentBadge}
+                          title="Agent-driven — no recorded steps; your own local Claude walks its instructions"
+                        >
+                          <Sparkles size={10} />
                         </span>
+                      ) : (
+                        t.needsEnvironment && (
+                          <span className={styles.fileEnvBadge} title="Needs an environment">
+                            <Lock size={10} />
+                          </span>
+                        )
                       )}
                     </span>
                     <span className={styles.folderLabel}>{t.name}</span>
@@ -488,6 +519,74 @@ export function Tests() {
           )}
         </div>
       </div>
+      <NewAgentTestDialog open={creatingAgent} onClose={() => setCreatingAgent(false)} />
     </div>
+  );
+}
+
+/**
+ * Create an Agent-Driven Test.
+ *
+ * Only a name is asked for. The instructions and checkpoints are written in the editor, where
+ * there is room for them — asking for prose in a modal produces prose written to fit a modal.
+ */
+function NewAgentTestDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const create = useCreateAgentTest();
+  const { navigate } = useRouter();
+  const { toast } = useToast();
+  const [name, setName] = useState("");
+
+  function submit() {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    create.mutate(
+      { name: trimmed },
+      {
+        onSuccess: (created) => {
+          setName("");
+          onClose();
+          // Straight into the editor: a test with no instructions and no checkpoints does
+          // nothing, so landing back on the list would just hide the work that remains.
+          navigate({ name: "testDetail", testId: created.id });
+        },
+        onError: (e) => toast(e instanceof Error ? e.message : "Couldn’t create the test"),
+      },
+    );
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} width={460} labelledBy="new-agent-test-title">
+      <ModalHeader
+        titleId="new-agent-test-title"
+        icon={<Sparkles size={16} />}
+        title="New agent-driven test"
+        onClose={onClose}
+      />
+      <ModalBody>
+        <p className={styles.dialogText}>
+          A test with no recorded steps. You write what it should do and what each screen must
+          show; your own local Claude walks it each run and compares what it captured against the
+          baselines you approve.
+        </p>
+        <Input
+          autoFocus
+          value={name}
+          placeholder="Analytics dashboard survives a bad filter"
+          aria-label="Test name"
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") submit();
+          }}
+        />
+      </ModalBody>
+      <ModalFooter>
+        <Button variant="secondary" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button disabled={!name.trim() || create.isPending} loading={create.isPending} onClick={submit}>
+          Create
+        </Button>
+      </ModalFooter>
+    </Modal>
   );
 }

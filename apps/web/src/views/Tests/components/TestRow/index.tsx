@@ -1,5 +1,5 @@
 import type { FolderSummary, TestSummary } from "@varys/review-contract";
-import { Button, Clock, Folder, Grip, IconButton, Inbox, Input, Lock, MoreHorizontal, Play, Select, Trash } from "@varys/ui";
+import { Button, Clock, Folder, Grip, IconButton, Inbox, Input, Lock, MoreHorizontal, Play, Select, Sparkles, Trash } from "@varys/ui";
 import { useState } from "react";
 import { useConfirm } from "../../../../context/confirm";
 import { useRouter } from "../../../../context/router";
@@ -55,6 +55,15 @@ export function TestRow({
             >
               {test.name}
             </button>
+            {test.kind === "agent" && (
+              <span
+                className={styles.agentBadge}
+                title="Agent-driven — no recorded steps; your own local Claude walks its instructions"
+              >
+                <Sparkles size={11} />
+                agent
+              </span>
+            )}
             {test.needsEnvironment && (
               <span className={styles.envBadge} title="Uses {{baseUrl}} — pick an environment to run">
                 <Lock size={11} />

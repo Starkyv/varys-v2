@@ -62,9 +62,13 @@ export async function effectiveTestIds(db: Db, suiteId: string): Promise<string[
   if (folderIds.length > 0) {
     const subtree = subtreeOf(folderIds, await folderChildren(db));
     const rows = await db
-      .select({ id: tests.id, folderId: tests.folderId, status: tests.status })
+      .select({ id: tests.id, folderId: tests.folderId, status: tests.status, kind: tests.kind })
       .from(tests);
     for (const t of rows) {
+      // Agent-Driven Tests are skipped here for the same reason `resolveEffective` skips them in
+      // the read-model: nothing can run one unattended. This is the path the fan-out actually
+      // uses, so filtering only the read-model would hide the member while still running it.
+      if (t.kind === "agent") continue;
       if (t.status === "active" && t.folderId && subtree.has(t.folderId)) ids.add(t.id);
     }
   }

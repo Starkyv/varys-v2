@@ -236,6 +236,15 @@
   box-shadow: 0 0 0 1.5px var(--color-bg), inset 0 0 0 1px var(--color-border);
 }
 
+/* Same medallion as .fileEnvBadge, info-toned. They are mutually exclusive by design: an
+   Agent-Driven Test always needs an environment, so showing both would say nothing extra and
+   the kind is the more useful fact at a glance. */
+.fileAgentBadge {
+  composes: fileEnvBadge;
+  color: var(--color-info-fg);
+  background: var(--color-info-soft);
+}
+
 /* Hover Run button, top-right of the tile. */
 .fileRun {
   position: absolute;
@@ -307,4 +316,11 @@
 
 .policyBulkSelect {
   min-width: 104px;
+}
+
+.dialogText {
+  margin: 0 0 var(--space-16);
+  font-size: var(--font-size-sm);
+  line-height: 1.55;
+  color: var(--color-text-muted);
 }

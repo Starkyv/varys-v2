@@ -66,6 +66,7 @@ import {
   useUpdateTest,
   useVerifyLocator,
 } from "../../queries";
+import { AgentTestEditor, AgentTestNotice } from "./components/AgentTestEditor";
 import styles from "./styles.module.scss";
 
 type LockedWait = Extract<ConfigWait, { kind: "selector" }>;
@@ -160,6 +161,32 @@ export function TestDetail({ testId }: { testId: string }) {
             Back to tests
           </Button>
         </div>
+      </div>
+    );
+  }
+
+  // An Agent-Driven Test has no steps, waits or thresholds, so it gets its own editor rather
+  // than a step editor rendering nothing. Keyed by id only: its edits never bump the version,
+  // which is precisely the property the remount below exists to handle for pinned tests.
+  if (config.data.kind === "agent") {
+    return (
+      <div className={styles.page}>
+        <div className={styles.header}>
+          <Button
+            variant="ghost"
+            size="sm"
+            iconLeft={<ArrowLeft size={14} />}
+            onClick={() => navigate({ name: "tests" })}
+          >
+            Back to tests
+          </Button>
+          <h1 className={styles.title}>{config.data.name}</h1>
+          <Badge tone="info" size="sm" icon={<Sparkles size={13} />}>
+            Agent-driven
+          </Badge>
+        </div>
+        <AgentTestNotice />
+        <AgentTestEditor key={config.data.id} config={config.data} />
       </div>
     );
   }

@@ -57,6 +57,12 @@ export const tests = pgTable("tests", {
    *  nothing an author recorded starts changing behind their back. Operational metadata, like
    *  `folder_id` / `status`: setting it never writes a test_version. */
   repairPolicy: text("repair_policy").notNull().default("manual"),
+  /** Which kind of test this is. `pinned` — the only kind before Agent-Driven Tests — is
+   *  behaviour written down as data: ordered steps, each carrying a Fingerprint, replayed by the
+   *  worker with no model call. `agent` is an **Agent-Driven Test**: no steps and no fingerprints,
+   *  an ordered list of `agent_checkpoints` that a locally-run Claude re-walks every Run. Defaults
+   *  to `pinned`, so every test recorded before this column is exactly what it was. */
+  kind: text("kind").notNull().default("pinned"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -455,6 +461,37 @@ export const baselines = pgTable("baselines", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+/**
+ * One Checkpoint of an **Agent-Driven Test** — a row of the Checkpoint Manifest.
+ *
+ * Unlike a pinned test's checkpoint (a screenshot step inside the versioned definition), this is
+ * relational and UNVERSIONED: editing the wording of an instruction is not an audit event, so
+ * these rows are edited in place and never write a `test_version`.
+ *
+ * `id` is the row's durable identity and `name` is only its label. That split is what lets a
+ * rename carry its approved baselines: `baselines` is keyed by `checkpoint_name`, so renaming
+ * updates those rows rather than orphaning them, and renaming for clarity costs nothing.
+ */
+export const agentCheckpoints = pgTable("agent_checkpoints", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  testId: uuid("test_id")
+    .notNull()
+    .references(() => tests.id, { onDelete: "cascade" }),
+  /** Order within the journey. The rows are CUMULATIVE — row 3's instructions assume rows 1-2
+   *  already happened — so this is the sequence an Agent Run Session walks, not a display hint. */
+  position: integer("position").notNull(),
+  /** The slot name. Keys a baseline per environment, and is the only name an agent may submit
+   *  under. Unique per test — enforced by an index, not by the writing code path. */
+  name: text("name").notNull(),
+  /** How to reach this state from the previous checkpoint (the increment only). */
+  instructions: text("instructions").notNull().default(""),
+  /** What must be true in this screenshot for it to match its baseline. Empty falls back to the
+   *  configured global default judge prompt. */
+  comparePrompt: text("compare_prompt").notNull().default(""),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 /** An environment to run against. Secret values are plaintext for the MVP
  *  (local/single-tenant) but must never be returned by the API. */
 export const environments = pgTable("environments", {
@@ -774,6 +811,29 @@ ALTER TABLE tests ADD COLUMN IF NOT EXISTS notes text;
 -- Repair Policy (Slice 19). Existing rows default to 'manual' — nothing an author already
 -- recorded starts self-editing when this column appears.
 ALTER TABLE tests ADD COLUMN IF NOT EXISTS repair_policy text NOT NULL DEFAULT 'manual';
+-- Test kind (Agent-Driven Tests). 'pinned' = steps + fingerprints the worker replays with no
+-- model call (every test that existed before this column); 'agent' = an Agent-Driven Test, whose
+-- behaviour is the agent_checkpoints rows below. Defaulted, so nothing already recorded changes.
+ALTER TABLE tests ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'pinned';
+-- The ordered Checkpoints of an Agent-Driven Test. Relational and UNVERSIONED: editing the
+-- wording of an instruction is not an audit event, so no test_version is written. The row id is
+-- the durable identity and the name is only a label, which is what lets a rename carry the
+-- approved baselines keyed by checkpoint_name instead of orphaning them.
+CREATE TABLE IF NOT EXISTS agent_checkpoints (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  test_id uuid NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+  position integer NOT NULL,
+  name text NOT NULL,
+  instructions text NOT NULL DEFAULT '',
+  compare_prompt text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+-- Two checkpoints on one test cannot share a name. In the DATABASE rather than only in the
+-- writing code path, because the Checkpoint Manifest's closed-set property depends on it: a
+-- duplicate name would make "which baseline does this slot key?" ambiguous.
+CREATE UNIQUE INDEX IF NOT EXISTS agent_checkpoints_test_name_uniq ON agent_checkpoints (test_id, name);
+CREATE INDEX IF NOT EXISTS agent_checkpoints_test_position_idx ON agent_checkpoints (test_id, position);
 CREATE TABLE IF NOT EXISTS test_tags (
   test_id uuid NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
   tag text NOT NULL,

@@ -43,6 +43,7 @@ import type { StorageAdapter } from "@varys/storage-adapter";
 import parser from "cron-parser";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
+import { AgentTestsService } from "./agent-tests.service";
 import {
   baselines,
   draftPreviews,
@@ -289,6 +290,9 @@ export class TestsService {
   constructor(
     @Inject(DB) private readonly db: Db,
     @Inject(STORAGE) private readonly storage: StorageAdapter,
+    // The one place that knows how to refuse an Agent-Driven Test, and the wording it refuses
+    // with — so the schedule path and the suite path give the author the same answer.
+    @Inject(AgentTestsService) private readonly agent: AgentTestsService,
   ) {}
 
   /** Persist a (human) recording. `createdBy` is the uploader's email — the test's
@@ -325,6 +329,7 @@ export class TestsService {
         folderName: folders.name,
         definition: testVersions.definition,
         repairPolicy: tests.repairPolicy,
+        kind: tests.kind,
         scheduleCron: testSchedules.cron,
         scheduleEnabled: testSchedules.enabled,
         scheduleNextRunAt: testSchedules.nextRunAt,
@@ -357,6 +362,7 @@ export class TestsService {
         createdAt: r.createdAt.toISOString(),
         status: r.status as TestStatus,
         origin: r.origin as TestOrigin,
+        kind: r.kind === "agent" ? "agent" : "pinned",
         createdBy: r.createdBy,
         promotedBy: r.promotedBy,
         promotedAt: r.promotedAt ? r.promotedAt.toISOString() : null,
@@ -605,6 +611,12 @@ export class TestsService {
     const hasSchedule = input.schedule !== undefined;
     if (Object.keys(patch).length === 0 && tags === undefined && !hasSchedule) return { ok: true };
 
+    // An Agent-Driven Test cannot be scheduled: it runs on the author's own local Claude, so
+    // there is nothing to fire it at 3am. Refused rather than accepted-and-never-run, because a
+    // schedule that silently never fires is worse than no schedule at all. Clearing one (null)
+    // stays allowed — that can only ever make things more true.
+    if (input.schedule) await this.agent.assertNoAgentTests([id], "schedule");
+
     // Validate + assemble the schedule BEFORE any write (fail fast): an unparseable cron
     // is a 400, an unknown environment a 404 — neither leaves a half-applied update.
     // `undefined` = leave as-is, `null` = clear, a row = upsert.
@@ -789,7 +801,12 @@ export class TestsService {
     const def = view.definition;
     const schedule = await this.readSchedule(id);
     const [meta] = await this.db
-      .select({ notes: tests.notes, brief: tests.intent, repairPolicy: tests.repairPolicy })
+      .select({
+        notes: tests.notes,
+        brief: tests.intent,
+        repairPolicy: tests.repairPolicy,
+        kind: tests.kind,
+      })
       .from(tests)
       .where(eq(tests.id, id))
       .limit(1);
@@ -817,6 +834,7 @@ export class TestsService {
       name: view.name,
       version: view.version,
       schedule,
+      kind: meta?.kind === "agent" ? "agent" : "pinned",
       notes: meta?.notes ?? null,
       brief: meta?.brief ?? null,
       repairPolicy: asRepairPolicy(meta?.repairPolicy),
@@ -911,6 +929,26 @@ export class TestsService {
      */
     review?: { unreviewed?: boolean; repairJobId?: string | null },
   ): Promise<{ version: number; versionId: string }> {
+    // An Agent-Driven Test has exactly one version row, written at creation and never again —
+    // it holds no steps, waits or thresholds to configure, and its real behaviour (instructions
+    // and checkpoints) is edited in place precisely so wording changes are not audit events.
+    //
+    // This is the only door an agent test can currently REACH. The run-review mask/threshold save
+    // and the repair-review write also create versions, but both require an existing run, and
+    // Varys refuses to run this kind at all (see RunsService.create). That reachability argument
+    // is what holds the invariant today, and it stops holding the moment agent runs exist — so
+    // those two paths need their own guard when the Agent Run Session lands.
+    const [kindRow] = await this.db
+      .select({ kind: tests.kind })
+      .from(tests)
+      .where(eq(tests.id, id))
+      .limit(1);
+    if (kindRow?.kind === "agent") {
+      throw new BadRequestException(
+        "An Agent-Driven Test has no step configuration — edit its AI Instructions and checkpoints instead.",
+      );
+    }
+
     const [latest] = await this.db
       .select({
         id: testVersions.id,

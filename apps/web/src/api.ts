@@ -40,6 +40,10 @@ import type {
   SuiteRunView,
   SuiteSummary,
   SuiteView,
+  AgentCheckpoint,
+  AgentCheckpointDeleteImpact,
+  AgentCheckpointInput,
+  CreateAgentTestRequest,
   TestConfigPatch,
   TestConfigView,
   TestScheduleInput,
@@ -345,6 +349,100 @@ export async function updateTest(id: string, body: UpdateTestBody): Promise<void
   }
 }
 
+/** The server's own error message when it has one, else a generic fallback. These endpoints
+ *  refuse things for reasons the author needs to read — "cannot join a suite because nothing can
+ *  run it unattended" is the answer to a question they are about to ask anyway. */
+async function errorText(res: Response, fallback: string): Promise<string> {
+  const body = (await res.json().catch(() => ({}))) as { message?: string };
+  return body.message ?? `${fallback} (${res.status})`;
+}
+
+/* ---- Agent-Driven Tests ------------------------------------------------------------- *
+ * The authoring surface for the kind with no steps: test-level AI Instructions (which reuse
+ * `brief` on updateTest above) and an ordered list of Checkpoints. None of these writes a new
+ * test version — iterating on wording is deliberately not an audit event. */
+
+/** Create an Agent-Driven Test. Active on create: there is no Draft and no Promote for this
+ *  kind, because a person types every word of it. */
+export async function createAgentTest(body: CreateAgentTestRequest): Promise<{ id: string }> {
+  const res = await fetch(`${API_BASE}/tests/agent`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await errorText(res, "Failed to create test"));
+  return (await res.json()) as { id: string };
+}
+
+/** The test's Checkpoints, in journey order. */
+export async function fetchAgentCheckpoints(testId: string): Promise<AgentCheckpoint[]> {
+  const res = await fetch(`${API_BASE}/tests/${testId}/agent-checkpoints`);
+  if (!res.ok) throw new Error(`Failed to load checkpoints (${res.status})`);
+  return (await res.json()) as AgentCheckpoint[];
+}
+
+export async function addAgentCheckpoint(
+  testId: string,
+  body: AgentCheckpointInput,
+): Promise<AgentCheckpoint> {
+  const res = await fetch(`${API_BASE}/tests/${testId}/agent-checkpoints`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await errorText(res, "Failed to add checkpoint"));
+  return (await res.json()) as AgentCheckpoint;
+}
+
+/** Edit one Checkpoint. A rename carries its approved baselines in every environment. */
+export async function updateAgentCheckpoint(
+  testId: string,
+  checkpointId: string,
+  body: AgentCheckpointInput,
+): Promise<AgentCheckpoint> {
+  const res = await fetch(`${API_BASE}/tests/${testId}/agent-checkpoints/${checkpointId}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await errorText(res, "Failed to save checkpoint"));
+  return (await res.json()) as AgentCheckpoint;
+}
+
+/** What deleting this Checkpoint would cost — asked before the delete, shown in its confirm. */
+export async function fetchAgentCheckpointDeleteImpact(
+  testId: string,
+  checkpointId: string,
+): Promise<AgentCheckpointDeleteImpact> {
+  const res = await fetch(
+    `${API_BASE}/tests/${testId}/agent-checkpoints/${checkpointId}/delete-impact`,
+  );
+  if (!res.ok) throw new Error(`Failed to check what this would delete (${res.status})`);
+  return (await res.json()) as AgentCheckpointDeleteImpact;
+}
+
+export async function deleteAgentCheckpoint(testId: string, checkpointId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/tests/${testId}/agent-checkpoints/${checkpointId}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error(await errorText(res, "Failed to delete checkpoint"));
+}
+
+/** Reorder the whole journey. Must name every checkpoint exactly once — the rows are
+ *  cumulative, so a partial reorder would change what each later instruction may assume. */
+export async function reorderAgentCheckpoints(
+  testId: string,
+  ids: string[],
+): Promise<AgentCheckpoint[]> {
+  const res = await fetch(`${API_BASE}/tests/${testId}/agent-checkpoints/reorder`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ids }),
+  });
+  if (!res.ok) throw new Error(await errorText(res, "Failed to reorder checkpoints"));
+  return (await res.json()) as AgentCheckpoint[];
+}
+
 /** Hard-delete a test — removes it and ALL its runs, baselines, and history. No
  *  rollback. Throws on a non-2xx response. */
 export async function deleteTest(id: string): Promise<void> {
@@ -531,7 +629,7 @@ export async function createSuite(body: {
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    throw new Error(`Failed to create suite (${res.status})`);
+    throw new Error(await errorText(res, "Failed to create suite"));
   }
   return (await res.json()) as { id: string };
 }
@@ -553,7 +651,7 @@ export async function updateSuite(
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    throw new Error(`Failed to update suite (${res.status})`);
+    throw new Error(await errorText(res, "Failed to update suite"));
   }
 }
 
