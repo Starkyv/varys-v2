@@ -136,6 +136,14 @@
   color: var(--color-info-fg);
 }
 
+/* The unreached card reuses .pendingCard's frame but never its icon tone: info-blue is the
+   "awaiting your approval" look, and an unreached slot is a failure with nothing to approve. */
+.unreachedIcon {
+  composes: pendingIcon;
+  background: var(--color-danger-soft);
+  color: var(--color-danger-fg);
+}
+
 .pendingTitle {
   font-size: var(--font-size-base);
   font-weight: var(--font-weight-semibold);

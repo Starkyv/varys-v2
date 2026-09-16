@@ -159,6 +159,56 @@ describe("deriveRunOutcome — the healed rung", () => {
   });
 });
 
+/**
+ * `missing` — a Checkpoint Manifest slot that was expected and never filled (Agent-Driven Tests).
+ *
+ * Every case here is the same claim from a different angle: a run that did not check something
+ * cannot report anything but red. The rows are pre-seeded before an agent starts, so these
+ * outcomes hold whether the agent skipped deliberately, crashed, or never reported at all —
+ * which is the whole reason the state exists rather than being inferred from a missing row.
+ */
+describe("deriveRunOutcome — a missing checkpoint", () => {
+  it("makes an otherwise-clean run failed", () => {
+    expect(deriveRunOutcome([cp("passed"), cp("missing")], { status: "passed" })).toBe("failed");
+  });
+
+  it("is failed even when every other slot matched and the run status says passed", () => {
+    expect(deriveRunOutcome([cp("passed"), cp("passed"), cp("missing")], { status: "passed" })).toBe("failed");
+  });
+
+  it("outranks a regression — the journey breaking is more urgent than a pixel that moved", () => {
+    expect(deriveRunOutcome([cp("diff"), cp("missing")], { status: "needs_review" })).toBe("failed");
+  });
+
+  it("outranks a rejected diff", () => {
+    expect(deriveRunOutcome([cp("diff", "rejected"), cp("missing")], { status: "needs_review" })).toBe("failed");
+  });
+
+  it("outranks pending-baseline — a first run that reached nothing is not awaiting approval", () => {
+    expect(deriveRunOutcome([cp("pending-baseline"), cp("missing")], { status: "needs_review" })).toBe("failed");
+  });
+
+  it("outranks a baseline write", () => {
+    expect(deriveRunOutcome([cp("pending-baseline", "approved"), cp("missing")], { status: "passed" })).toBe("failed");
+  });
+
+  it("outranks healed — a repair can never dress an unreached checkpoint up as amber", () => {
+    expect(
+      deriveRunOutcome([cp("passed"), cp("missing")], { status: "passed", repairApplied: true }),
+    ).toBe("failed");
+  });
+
+  it("is failed when every slot is missing", () => {
+    expect(deriveRunOutcome([cp("missing"), cp("missing")], { status: "needs_review" })).toBe("failed");
+  });
+
+  it("does not disturb queued / running / cancelled", () => {
+    expect(deriveRunOutcome([cp("missing")], { status: "queued" })).toBe("queued");
+    expect(deriveRunOutcome([cp("missing")], { status: "running" })).toBe("running");
+    expect(deriveRunOutcome([cp("missing")], { status: "cancelled" })).toBe("cancelled");
+  });
+});
+
 describe("isRepairInReview", () => {
   it("is true only for a repair version still awaiting a human", () => {
     expect(isRepairInReview("job-1", "unreviewed")).toBe(true);

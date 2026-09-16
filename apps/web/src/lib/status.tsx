@@ -17,7 +17,7 @@ import type { ReactNode } from "react";
  * The Varys status vocabulary → visual mapping. One source of truth for the derived run
  * outcome (`passed | baseline | pending-baseline | healed | regression | failed`), the stored run status
  * (`queued | running | passed | needs_review | failed`), and the checkpoint review state
- * (`pending-baseline | diff | passed`) — so a status looks identical in the dashboard, the
+ * (`pending-baseline | diff | passed | missing`) — so a status looks identical in the dashboard, the
  * runs table, the review queue and the diff viewer.
  */
 export type StatusKey =
@@ -26,6 +26,7 @@ export type StatusKey =
   | "needs_review"
   | "diff"
   | "pending-baseline"
+  | "missing"
   | "healed"
   | "regression"
   | "failed"
@@ -46,6 +47,9 @@ const META: Record<StatusKey, StatusMeta> = {
   diff: { tone: "warning", label: "Diff" },
   // Awaiting your approval (amber) — distinct from an established `baseline` (info/blue).
   "pending-baseline": { tone: "warning", label: "Pending baseline" },
+  // A Checkpoint Manifest slot the run never filled. Red, not amber: there is nothing to review,
+  // nothing to approve and nothing to look at — the run simply did not check this.
+  missing: { tone: "danger", label: "Unreached" },
   // It verified — but on a repair nobody has accepted yet. Amber like `pending-baseline` because
   // it is the same kind of thing (a queue item, not an alarm), and distinct from it by glyph and
   // label because what is queued is completely different: a repaired version, not a first capture.
@@ -85,6 +89,10 @@ export function StatusIcon({ status, size = "1em" }: { status: string; size?: nu
       return <Eye size={size} />;
     case "pending-baseline":
       return <Layers size={size} />;
+    case "missing":
+      // Deliberately NOT the pending-baseline glyph: an unreached slot must never be mistaken at a
+      // glance for a capture awaiting approval.
+      return <AlertTriangle size={size} />;
     case "healed":
       // The repair-agent glyph, so an amber "something fixed itself" is legible at a glance and
       // never mistaken for an unapproved baseline.

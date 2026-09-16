@@ -59,8 +59,10 @@ _Avoid_: AI mode, copilot
 The author's natural-language statement of what a test should do and check. It is the durable
 statement of intent: it produces the test in an Authoring Session, and any later repair must
 still satisfy it. Stored on the test (`tests.intent` today). Distinct from a checkpoint's
-judge **prompt**, which is what the judge looks for in one screenshot.
-_Avoid_: prompt, script, scenario, agentic test
+judge **prompt**, which is what the judge looks for in one screenshot. A Brief is either
+**pinned** into steps and fingerprints (an ordinary test) or left unpinned and re-walked every
+run (an **Agent-Driven Test**).
+_Avoid_: prompt, script, scenario
 
 **Assertion**:
 A named check on a test that no single screenshot can express — typically a comparison between
@@ -101,6 +103,55 @@ finds they DISAGREE is correct, and the page is not: it is stored as written and
 the same rule as "a false relation is never repairable", one moment earlier — rewording a check at
 authoring time until the app agrees with it hides exactly the bug the check was for.
 _Avoid_: cache, lock, freeze
+
+**Agent-Driven Test**:
+A test with no steps and no fingerprints: an ordered list of Checkpoints, each carrying how to
+reach it and what to accept, which a locally-run Claude re-walks in full on every Run. Its
+checkpoints are always compared **contextually** — never pixel-diffed. It is never executed by
+the worker, so it cannot belong to a suite or a schedule. Distinct from an ordinary test, whose
+behaviour is pinned data the worker replays with no model call.
+_Avoid_: agentic test, prompt test, AI test
+
+**Checkpoint Manifest**:
+The closed set of checkpoint names an Agent-Driven Test's Run must produce — the test's
+**authored** checkpoints, in order. Handed to the claimer when it takes the job; the capture
+tool accepts no name outside it, and a Run that leaves a slot unfilled is red. It is what stops
+an agent that re-decides its path from quietly checking less and still reporting green. A slot
+whose environment has no approved baseline yet is not a failure but a **proposal**: it is still
+required to be produced, and what it produces awaits human approval.
+_Avoid_: checklist, contract, expected checkpoints
+
+**AI Instructions**:
+The natural-language context an agent is given for a Run, composed general-to-specific from
+three layers — **suite**, **test** (the Brief's preamble), then the **checkpoint**'s own — and
+concatenated, never overridden, because the layers are additive context rather than competing
+settings. They are environmental, not behavioural: what app, which account, what to ignore.
+Credentials live here as plain text by deliberate choice. Because instructions are unversioned
+and editable in place, the fully composed text is **copied onto the Run**, so a Run stays
+explainable after every layer has been rewritten.
+_Avoid_: prompt, system prompt, context
+
+**Unreached**:
+A Checkpoint Manifest slot a Run was required to fill and never did. Written as the checkpoint
+review state `missing` — the rows are seeded before an agent starts, so the state survives an
+agent that skipped, crashed or never reported — and surfaced on the Run as `failure_kind`
+`unreached`. The Run is **failed**, outranking `regression` and `pending-baseline` both: a
+journey that broke is more urgent than a pixel that moved, and a Run that reached nothing is not
+"awaiting approval". Distinct from a **judged fail**, where the agent got there and the state was
+wrong; nothing was compared here at all.
+_Avoid_: skipped, not captured, incomplete
+
+**Agent Run Session**:
+One execution of an Agent-Driven Test, started by a person asking their own local Claude to run
+it. Varys supplies no browser and sees no driving: Claude reaches each state with whatever it
+judges best — Chrome DevTools, Playwright, computer use — and captures however it likes.
+Varys's surface is **reporting, not driving**: it hands over the composed AI Instructions, the
+Checkpoint Manifest and the approved baselines, and takes back an image, a verdict and a
+reasoning per slot. What Claude may not do is the bookkeeping it would be grading itself on:
+approve a baseline, set the Run's outcome, or submit under a name outside the Manifest.
+Distinct from an Authoring Session (which records into a Draft) and a Repair Session (which
+edits an existing test) — both of which are Varys-hosted browsers.
+_Avoid_: agent session, run session, execution session
 
 **Repair Policy**:
 Per-test setting for what happens when a run fails on a locator it cannot resolve: `manual`

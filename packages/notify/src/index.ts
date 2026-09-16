@@ -8,7 +8,7 @@ import {
   tests,
   testVersions,
 } from "@varys/db";
-import { deriveRunOutcome, isRepairInReview } from "@varys/review-contract";
+import { deriveRunOutcome, isRepairInReview, type ReviewState } from "@varys/review-contract";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 
 /**
@@ -209,6 +209,10 @@ function statusFace(status: string): { emoji: string; label: string; tone: Tone 
       return { emoji: "⚠️", label: "NEEDS REVIEW", tone: "review" };
     case "failed":
       return { emoji: "❌", label: "FAILED", tone: "fail" };
+    // A Checkpoint Manifest slot the run never filled. Red like a failure and NOT "review",
+    // because there is nothing to review — nobody can look at a capture that was never taken.
+    case "missing":
+      return { emoji: "❌", label: "UNREACHED", tone: "fail" };
     case "cancelled":
       return { emoji: "🚫", label: "CANCELLED", tone: "neutral" };
     default:
@@ -381,7 +385,10 @@ export async function notifyRunComplete(
     .from(runResults)
     .where(eq(runResults.runId, runId));
   const passed = checkpoints.filter((c) => c.reviewState === "passed").length;
-  const review = checkpoints.length - passed;
+  const unreached = checkpoints.filter((c) => c.reviewState === "missing").length;
+  // Unreached slots are excluded from "needs review": they are failures with nothing to look at,
+  // and counting them as work awaiting a human is the flattering reading this state exists to deny.
+  const review = checkpoints.length - passed - unreached;
   const scores = checkpoints.map((c) => c.diffScore).filter((s): s is number => s != null);
   const avgMismatch = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
   const durationMs = (run.updatedAt ?? run.createdAt).getTime() - run.createdAt.getTime();
@@ -394,7 +401,7 @@ export async function notifyRunComplete(
   // truthfully, and is left to the app.
   const outcome = deriveRunOutcome(
     checkpoints.map((c) => ({
-      reviewState: c.reviewState as "pending-baseline" | "diff" | "passed",
+      reviewState: c.reviewState as ReviewState,
       resolution: c.resolution as "approved" | "rejected" | null,
     })),
     { status: run.status, error: run.error, repairApplied: isRepairInReview(run.versionRepairJobId, run.versionReviewState) },
@@ -433,13 +440,14 @@ export async function notifyRunComplete(
       { label: "Checkpoints", value: String(checkpoints.length) },
       { label: "Passed", value: String(passed), tone: passed ? "pass" : "neutral" },
       { label: "Needs review", value: String(review), tone: review ? "review" : "neutral" },
+      ...(unreached ? [{ label: "Unreached", value: String(unreached), tone: "fail" as const }] : []),
       { label: "Avg mismatch", value: pct(avgMismatch) },
     ],
     rowsTitle: "Checkpoints",
     rows: checkpoints.map((c) => ({
       name: c.name,
       meta: c.diffScore != null ? `mismatch ${pct(c.diffScore)}` : "",
-      status: c.reviewState === "passed" ? "passed" : "needs_review",
+      status: c.reviewState === "passed" ? "passed" : c.reviewState === "missing" ? "missing" : "needs_review",
     })),
   };
 

@@ -25,6 +25,21 @@ export function DecisionBar({ checkpoint: cp, runId }: { checkpoint: CheckpointV
     </span>
   ) : null;
 
+  // An unreached slot produced no capture, so every action here is meaningless — and "Approve
+  // baseline" on one would be actively dangerous, since it would promise a golden image that does
+  // not exist.
+  if (cp.reviewState === "missing") {
+    return (
+      <div className={styles.bar}>
+        <span className={styles.hint}>
+          Nothing was captured for this checkpoint, so there is nothing to approve. Fix what stopped
+          the run reaching it, then run again.
+        </span>
+        {audit}
+      </div>
+    );
+  }
+
   if (cp.resolution) {
     return (
       <div className={styles.bar}>

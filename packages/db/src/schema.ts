@@ -851,8 +851,10 @@ ALTER TABLE runs ADD COLUMN IF NOT EXISTS triggered_by text;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS trigger_source text;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS notes text;
 -- Which CLASS of failure ended a failed run (Slice 19): 'locator' = an unresolvable
--- fingerprint (the only repairable class), NULL for everything else. Recorded by the runner,
--- never inferred from the error text.
+-- fingerprint (the only repairable class), 'unreached' = an Agent-Driven Test left a Checkpoint
+-- Manifest slot unfilled, NULL for everything else. Recorded by the runner, never inferred from
+-- the error text. Plain text with no CHECK: the known set is enforced in the API, which degrades
+-- an unrecognised value to null rather than shipping a class no surface can render.
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS failure_kind text;
 -- A Triage Job's written finding on a red run (slice 08). An annotation only: the run's status and
 -- derived outcome are untouched, because a diagnosis must never be mistakable for a resolution.

@@ -8,8 +8,19 @@
  * server-side and only *displayed* here — never recomputed on the client.
  */
 
-/** The two states that need a human decision, plus the resolved `passed`. */
-export type ReviewState = "pending-baseline" | "diff" | "passed";
+/**
+ * A checkpoint's review state.
+ *
+ * Three of the four are a capture's verdict: `pending-baseline` and `diff` need a human decision,
+ * `passed` is the resolved one.
+ *
+ * `missing` is the odd one out and the only one no capture produces: it is a Checkpoint Manifest
+ * slot that was EXPECTED and never filled (Agent-Driven Tests). Varys writes these rows before an
+ * agent starts, so a slot that is never submitted stays `missing` and turns the run red — whether
+ * the agent skipped it, crashed, or never reported at all. Nothing can be inferred from an absent
+ * row, which is exactly why the state is written up front rather than reconciled afterwards.
+ */
+export type ReviewState = "pending-baseline" | "diff" | "passed" | "missing";
 
 /** How a checkpoint was captured (absent in old definitions ⇒ `element`). */
 export type CaptureMode = "element" | "fullpage" | "region";
@@ -91,6 +102,8 @@ export type RepairPolicy = "manual" | "auto";
  *                  relation is NEVER repairable: the test is right and the app is wrong.
  *  - `timeout`   — a step waited for something that never arrived.
  *  - `crash`     — the replay threw. An outage is not a broken locator.
+ *  - `unreached` — an Agent-Driven Test left a Checkpoint Manifest slot unfilled. Not repairable
+ *                  either: nothing was pinned, so there is no locator to re-pin.
  *
  * `null` for runs that finished before the column existed, and for runs that are not red.
  */
@@ -101,6 +114,10 @@ export type RunFailureKind =
   | "assertion"
   | "timeout"
   | "crash"
+  /** An Agent-Driven Test's run left at least one Checkpoint Manifest slot unfilled — the agent
+   *  never reached that state (or stopped reporting before it did). Never repairable: there is no
+   *  locator to re-pin, because nothing was pinned. */
+  | "unreached"
   | null;
 
 /** The failure classes a Triage Job diagnoses — every red class except the repairable one. */
@@ -1353,8 +1370,10 @@ export interface NeedsReviewItem {
   environment: string;
   runTimestamp: string;
   checkpointName: string;
-  /** Why it needs review: `pending-baseline` (first approval) or `diff`. */
-  reviewState: Exclude<ReviewState, "passed">;
+  /** Why it needs review: `pending-baseline` (first approval) or `diff`. Spelled out rather than
+   *  `Exclude<ReviewState, "passed">`, because `missing` is also not-passed and is emphatically
+   *  NOT awaiting a human decision — there is nothing to look at and nothing to approve. */
+  reviewState: "pending-baseline" | "diff";
 }
 
 /**
@@ -1879,12 +1898,21 @@ export function isRepairInReview(
  * Precedence, top → down:
  *  1. queued / running                  → unchanged
  *  2. execution error                   → `failed`  (a crash)
- *  3. any unaccepted `diff` (or legacy `rejected`) → `regression`  (a baseline existed and changed)
- *  4. any unresolved first-capture seed → `pending-baseline`  (no baseline yet — awaiting approval)
- *  5. nothing was actually verified     → `failed`  (it captured nothing to compare)
- *  6. an unaccepted repair is in play   → `healed`  (it verified, but on an unreviewed repair)
- *  7. any checkpoint set as baseline    → `baseline`
- *  8. otherwise (all matched)           → `passed`
+ *  3. any `missing` checkpoint          → `failed`  (a Manifest slot was never filled)
+ *  4. any unaccepted `diff` (or legacy `rejected`) → `regression`  (a baseline existed and changed)
+ *  5. any unresolved first-capture seed → `pending-baseline`  (no baseline yet — awaiting approval)
+ *  6. nothing was actually verified     → `failed`  (it captured nothing to compare)
+ *  7. an unaccepted repair is in play   → `healed`  (it verified, but on an unreviewed repair)
+ *  8. any checkpoint set as baseline    → `baseline`
+ *  9. otherwise (all matched)           → `passed`
+ *
+ * `missing` outranks EVERYTHING below queued/running and a crash, and both directions matter. Above
+ * `regression`, because an unreached checkpoint means the journey broke, and that is more urgent and
+ * more actionable than a pixel that moved earlier in the flow. Above `pending-baseline`, or a first
+ * run that reached nothing would read as "awaiting approval" — the most flattering possible
+ * description of having checked nothing. Above `healed` and `baseline` for the same reason the
+ * execution-failure rule sits above `healed`: neither a repair nor a baseline write may dress an
+ * unfilled slot up as anything other than red.
  *
  * A diff outranks a pending seed: a real failure against an established baseline is more urgent than
  * approving a brand-new checkpoint. A `resolution="approved"` checkpoint was promoted to the
@@ -1905,19 +1933,25 @@ export function deriveRunOutcome(
   if (run.status === "cancelled") return "cancelled";
   if (run.error != null && run.error !== "") return "failed";
 
+  let unfilled = false;
   let failing = false;
   let pendingSeed = false;
   let baselineWrite = false;
   let matched = false;
 
   for (const c of checkpoints) {
-    if (c.resolution === "approved") baselineWrite = true; // promoted to baseline
+    // Checked before `resolution`, because an unfilled slot can carry neither: there is no capture
+    // to approve or reject, so a resolution on one could only be data corruption — and treating it
+    // as a baseline write is the one reading that would turn it green.
+    if (c.reviewState === "missing") unfilled = true; // expected, never filled
+    else if (c.resolution === "approved") baselineWrite = true; // promoted to baseline
     else if (c.resolution === "rejected") failing = true; // legacy: a confirmed bug stays red
     else if (c.reviewState === "diff") failing = true; // an established baseline changed
     else if (c.reviewState === "pending-baseline") pendingSeed = true; // first capture, no baseline yet
     else if (c.reviewState === "passed") matched = true;
   }
 
+  if (unfilled) return "failed"; // a Manifest slot was never filled — nothing may soften this
   if (failing) return "regression"; // a visual difference (changed baseline or rejected diff) outranks the rest
   if (pendingSeed) return "pending-baseline"; // first run awaiting approval (not a failure)
   // No checkpoints (or all neutral) — mirror the stored status. A non-passing run here is

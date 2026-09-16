@@ -707,7 +707,9 @@ export class RunsService {
         environment: r.environmentId ? (envNames.get(r.environmentId) ?? ENVIRONMENT) : ENVIRONMENT,
         runTimestamp: r.runTimestamp.toISOString(),
         checkpointName: r.checkpointName,
-        reviewState: r.reviewState as Exclude<ReviewState, "passed">,
+        // Narrowed by the query above, which selects only these two — notably NOT `missing`,
+        // which is a failure with nothing to look at rather than work awaiting a human.
+        reviewState: r.reviewState as "pending-baseline" | "diff",
       }),
     );
   }
@@ -723,7 +725,12 @@ export class RunsService {
    * reviewing the partial checkpoints a run captured before it failed must not flip it
    * to passed — and queued/running are owned by the worker. Per-checkpoint effective
    * status mirrors the UI: approved→passed, rejected→regression, else the stored
-   * reviewState; rollup is any-pending→needs_review, else any-rejected→failed, else passed.
+   * reviewState; rollup is any-missing→failed, else any-pending→needs_review, else
+   * any-rejected→failed, else passed.
+   *
+   * `missing` is checked first and hard-fails: an unfilled Checkpoint Manifest slot is neither
+   * work awaiting a human nor something a decision on a SIBLING checkpoint can resolve, so
+   * resolving the last reviewable checkpoint on such a run must not roll it up to passed.
    */
   private async recomputeRunStatus(runId: string): Promise<void> {
     const [run] = await this.db
@@ -738,14 +745,16 @@ export class RunsService {
       .from(runResults)
       .where(eq(runResults.runId, runId));
 
+    let anyMissing = false;
     let anyPending = false;
     let anyRejected = false;
     for (const r of results) {
-      if (r.resolution === "rejected") anyRejected = true;
+      if (r.reviewState === "missing") anyMissing = true; // an unfilled slot — nothing resolves it
+      else if (r.resolution === "rejected") anyRejected = true;
       else if (r.resolution === "approved") continue; // resolved → passed
       else if (r.reviewState === "pending-baseline" || r.reviewState === "diff") anyPending = true;
     }
-    const next = anyPending ? "needs_review" : anyRejected ? "failed" : "passed";
+    const next = anyMissing ? "failed" : anyPending ? "needs_review" : anyRejected ? "failed" : "passed";
     if (next === run.status) return;
     await this.db.update(runs).set({ status: next, updatedAt: new Date() }).where(eq(runs.id, runId));
   }
@@ -895,6 +904,13 @@ export class RunsService {
     // re-baseline it via approve instead).
     if (result.reviewState === "passed") {
       throw new BadRequestException("can't reject a passing checkpoint");
+    }
+    // An unfilled Checkpoint Manifest slot captured nothing, so there is no regression to
+    // confirm. Refused rather than tolerated: a resolution on such a row is meaningless to
+    // `deriveRunOutcome` (which reads `missing` before `resolution`) but WOULD change how the
+    // row renders, so allowing it lets the badge disagree with the run's outcome.
+    if (result.reviewState === "missing") {
+      throw new BadRequestException("can't reject a checkpoint the run never captured");
     }
     await this.db
       .update(runResults)
@@ -1066,6 +1082,7 @@ function isRunFailureKind(value: string | null): value is Exclude<RunFailureKind
     value === "judge" ||
     value === "assertion" ||
     value === "timeout" ||
-    value === "crash"
+    value === "crash" ||
+    value === "unreached"
   );
 }
