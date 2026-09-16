@@ -30,9 +30,12 @@ test into a Draft.
 _Avoid_: debug session, fix session
 
 **Draft**:
-An AI-authored test that has not yet been promoted — a first-class test with a full
-definition, but excluded from suites and schedules and surfaced in a review queue until a
-human accepts it. (Human-recorded tests are active on create and are never drafts.)
+An AI-authored test that has not yet been promoted — a first-class, runnable test surfaced in a
+review queue until a human accepts it. For an ordinary test it is also held out of suites and
+schedules. An **Agent-Driven Test** is barred from both whatever its status, so Draft does
+something else for that kind: it is the only status Claude may write to, which makes **Promote**
+the moment a test passes out of Claude's reach and into its author's.
+(Human-authored tests are active on create and are never drafts.)
 _Avoid_: staging test, pending test
 
 **Promote**:
@@ -50,9 +53,11 @@ drives).
 _Avoid_: agent, daemon, connector
 
 **Author with AI**:
-The in-product authoring surface: a chat inside the Varys web app that drives an Authoring
-Session through the user's Bridge Helper, with a live browser preview. Distinct from
-connecting your own Claude Code directly to the public MCP server.
+The in-product authoring surface: a chat inside the Varys web app that drives the user's Bridge
+Helper. Producing an ordinary test, it drives an **Authoring Session** and shows a live browser
+preview; producing an **Agent-Driven Test**, it drives nothing — Claude explores the app with its
+own local tooling and Varys sees only the prose it writes. Distinct from connecting your own
+Claude Code directly to the public MCP server.
 _Avoid_: AI mode, copilot
 
 **Brief**:
@@ -108,8 +113,10 @@ _Avoid_: cache, lock, freeze
 A test with no steps and no fingerprints: an ordered list of Checkpoints, each carrying how to
 reach it and what to accept, which a locally-run Claude re-walks in full on every Run. Its
 checkpoints are always compared **contextually** — never pixel-diffed. It is never executed by
-the worker, so it cannot belong to a suite or a schedule. Distinct from an ordinary test, whose
-behaviour is pinned data the worker replays with no model call.
+the worker, so it cannot belong to a suite or a schedule. Its Checkpoints and **AI Instructions**
+are written either by a person in the editor or by Claude through **Author with AI**, which
+produces it as a **Draft**. Distinct from an ordinary test, whose behaviour is pinned data the
+worker replays with no model call.
 _Avoid_: agentic test, prompt test, AI test
 
 **Checkpoint Manifest**:

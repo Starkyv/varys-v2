@@ -449,13 +449,40 @@ export class TestsService {
     // Authoring-preview screenshots: reference images of what Claude saw at each
     // checkpoint (DESIGN §4 — NOT the golden baseline; the runner seeds that on replay).
     for (const p of opts?.previews ?? []) {
-      const key = previewKey(created.id, p.checkpointName);
-      await this.storage.put(key, p.bytes);
-      await this.db
-        .insert(draftPreviews)
-        .values({ testId: created.id, checkpointName: p.checkpointName, artifactKey: key });
+      await this.putDraftPreview(created.id, p.checkpointName, p.bytes);
     }
     return { id: created.id, version: 1 };
+  }
+
+  /**
+   * Store one authoring-preview screenshot for a Draft's checkpoint — the "what Claude saw"
+   * reference image, NOT a baseline (DESIGN §4: recording is not a baseline, and the first Run
+   * still produces the capture a human approves per environment).
+   *
+   * Lives here rather than beside its caller so the storage key is derived in exactly one place.
+   * Two callers now write these: the pinned authoring session, which persists them all at once
+   * when it finishes, and the Agent-Driven authoring tools, which write one per Checkpoint as
+   * Claude submits it. A second key function would silently split one slot's picture across two
+   * locations, and the symptom — a preview that renders blank — names neither of them.
+   *
+   * Upserted rather than inserted, which is a change the AGENT path forced and the pinned one
+   * cannot notice. `(test_id, checkpoint_name)` is unique; deleting a Checkpoint drops its
+   * baselines but leaves its preview row behind, so re-adding that name — possible here because
+   * Claude writes one Checkpoint per call into a Draft a person can edit between calls — would
+   * fail on a row nothing can reach. The pinned caller is unaffected either way: it writes every
+   * preview for a test it has just created, from a map already keyed by name, so it has never had
+   * a conflict to resolve.
+   */
+  async putDraftPreview(testId: string, checkpointName: string, bytes: Buffer): Promise<void> {
+    const key = previewKey(testId, checkpointName);
+    await this.storage.put(key, bytes);
+    await this.db
+      .insert(draftPreviews)
+      .values({ testId, checkpointName, artifactKey: key })
+      .onConflictDoUpdate({
+        target: [draftPreviews.testId, draftPreviews.checkpointName],
+        set: { artifactKey: key },
+      });
   }
 
   /** The AI-authored Draft review queue, newest first — each draft's checkpoint count

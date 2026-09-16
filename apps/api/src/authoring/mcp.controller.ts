@@ -9,6 +9,7 @@ import {
   type CheckpointInput,
   type TestEditInput,
 } from "./authoring-session.service";
+import { AgentAuthoringService } from "./agent-authoring.service";
 import {
   AgentRunService,
   type AgentCaptureMeta,
@@ -150,6 +151,13 @@ const LOCATOR_PATCH_SCHEMA = {
  *    the test does not already declare.
  *  - `failed_runs` — a cross-test read. A drainer is handed its work by the job it claimed; it has
  *    no business browsing every other test's failures.
+ *  - `create_agent_test`, `add_agent_checkpoint` — authoring an Agent-Driven Test, for the same
+ *    reason `open_session` is excluded and then some. The run surface has a capability because
+ *    unattended running has a real use case; unattended AUTHORING has none, and an agent that can
+ *    write a test can write one that passes. No capability grants these, so the absence here is
+ *    the whole boundary — deliberately stricter than the pinned path, where `edit_test` is
+ *    reachable under a repair claim. Nothing comparable exists for this kind: there is no repair
+ *    path at all, so there is no claim that could scope the write.
  *  - `find_elements` — read-only perception, and arguably harmless for a drainer diagnosing why an
  *    assertion could not read a value. Withheld anyway: widening an agent's capability surface is
  *    a decision to take deliberately, not a side effect of the slice that introduced the tool.
@@ -267,6 +275,9 @@ export class McpController {
     // Starting an Agent Run Session (Agent-Driven Tests) — the one MCP surface that hands work
     // OUT to the caller's own machine rather than driving anything here.
     @Inject(AgentRunService) private readonly agentRun: AgentRunService,
+    // WRITING an Agent-Driven Test, as opposed to running one. Human principals only, and only
+    // ever into a Draft — see `AgentAuthoringService`.
+    @Inject(AgentAuthoringService) private readonly agentAuthoring: AgentAuthoringService,
   ) {}
 
   // Streamable HTTP: this server doesn't push, so the optional server→client SSE stream
@@ -986,6 +997,72 @@ export class McpController {
           required: ["sessionId"],
         },
         handler: (args) => a.discard(String(args.sessionId ?? "")),
+      },
+      {
+        name: "create_agent_test",
+        description:
+          "Write an **Agent-Driven Test** into Varys as a **Draft** — a test with no recorded steps, which a future run walks by following the instructions you write here.\n\nReach for this when the flow you are being asked to capture will not sit still: a chart that redraws, a dashboard whose numbers change hourly, anything behind a login that a recorder's fingerprints would go stale on by next week. A pinned test (open_session) replays a fixed sequence for free and is the right answer whenever the DOM is stable enough for one. This kind is not free — every run of it spends the author's Claude subscription — so it should earn that.\n\nWalk the app FIRST, with whatever tooling you have. Varys hosts no browser for authoring, exactly as it hosts none for a run, and offers you no perception or action tools: use Chrome DevTools, Playwright, computer use, whatever actually works on the app in front of you. Write the instructions from what you actually saw, not from what the user described.\n\n`instructions` are the standing orders for every future run, composed above each Checkpoint's own. Put the durable things there: where the app is, how to sign in (credentials go in as plain text — that is the design), what to dismiss, what never to touch. Do NOT put the user's request to you in here, and do not restate the journey step by step; the Checkpoints carry that.\n\nThen add one Checkpoint per state you reached, with add_agent_checkpoint. There is no session and no finish step: the Draft is in the review queue from the moment this returns, so if you stop half way a human sees exactly how far you got. A human promotes it in the web app — you cannot, and neither can you touch it again once they have.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+              description: "What this test is called in the Varys web app — the journey, not the app (e.g. \"checkout with a saved card\").",
+            },
+            instructions: {
+              type: "string",
+              description:
+                "The AI Instructions every future run is driven by: where the app is, how to sign in, what to ignore, what never to touch. Written from what you saw walking it. NOT the request that asked you for this test — that is not recorded anywhere, deliberately.",
+            },
+          },
+          required: ["name", "instructions"],
+        },
+        handler: (args) =>
+          this.agentAuthoring.createTest({
+            name: String(args.name ?? ""),
+            instructions: String(args.instructions ?? ""),
+            createdBy: user.email,
+          }),
+      },
+      {
+        name: "add_agent_checkpoint",
+        description:
+          "Add one **Checkpoint** to a Draft you created with create_agent_test: a state on the journey, how to get back to it, what counts as still being right — and the screenshot proving you actually reached it.\n\nCall it once per state, in journey order. The rows are cumulative: each Checkpoint's `instructions` continue from where the previous one left the app, so write them as the next thing to do and not as a fresh start from the login page.\n\n**The image is required and there is no way around it.** Prose about a state you reached and prose about one you imagined read identically on the page, so the picture is the only thing separating them — which is why Varys refuses the write rather than asking you nicely. Capture the state you are looking at, right now, before you move on. If you could not reach a state, do not write a Checkpoint for it: say so to the user instead. A Checkpoint nobody can reach is `unreached` in every future run, and because the Manifest is a closed set the only fix is editing the test.\n\n`comparePrompt` is what a future run judges its screenshot against, and both directions of it are worth writing. Say what must hold, and say what is allowed to vary — figures that move, dates, avatars, anything seeded per-environment. Too tight and the test goes red on legitimate change; too loose and it passes through a regression. You have just seen the page, so you know which is which better than the author will.\n\nYour capture is stored as a REFERENCE image, never a baseline. The first run against an environment proposes the baselines and a human approves them there — nothing you submit here can pass a future run on its own.\n\nOnly Drafts can be written to. Once a human promotes the test it is in service and these tools no longer reach it; make the Draft right before it is promoted, because there is no second pass.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            testId: { type: "string", description: "The Draft create_agent_test gave you." },
+            name: {
+              type: "string",
+              description:
+                "A short, stable name for this state — `dashboard-loaded`, `cart-has-two-items`. It is the slot's permanent identity: baselines hang off it, and it must be unique within the test.",
+            },
+            instructions: {
+              type: "string",
+              description:
+                "How a future run gets from the PREVIOUS Checkpoint to this state. Continue the journey; do not restate the whole flow.",
+            },
+            comparePrompt: {
+              type: "string",
+              description:
+                "What counts as this state still being right, and what is allowed to differ. Both halves — the second is what stops the test going red on data that was always going to move.",
+            },
+            image: {
+              type: "string",
+              description:
+                "The screenshot of the state you reached: base64-encoded PNG bytes (a data: URL is fine too). Required — a Checkpoint with no picture is refused.",
+            },
+          },
+          required: ["testId", "name", "instructions", "comparePrompt", "image"],
+        },
+        handler: (args) =>
+          this.agentAuthoring.addCheckpoint({
+            testId: String(args.testId ?? ""),
+            name: String(args.name ?? ""),
+            instructions: String(args.instructions ?? ""),
+            comparePrompt: String(args.comparePrompt ?? ""),
+            image: String(args.image ?? ""),
+          }),
       },
       {
         name: "start_agent_run",

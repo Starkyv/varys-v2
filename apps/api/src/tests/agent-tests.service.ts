@@ -57,7 +57,8 @@ export class AgentTestsService {
   constructor(@Inject(DB) private readonly db: Db) {}
 
   /**
-   * Create an Agent-Driven Test: active immediately, `origin: "human"`, no Draft and no Promote.
+   * Create an Agent-Driven Test a PERSON wrote: active immediately, `origin: "human"`, no Draft
+   * and no Promote.
    *
    * Draft exists to gate an artifact a MACHINE wrote before a human trusts it. Here a person
    * types every word — the instructions, each checkpoint's name, how to reach it, what to accept
@@ -66,6 +67,33 @@ export class AgentTestsService {
    * exists.
    */
   async create(input: CreateAgentTestRequest, createdBy?: string): Promise<{ id: string; version: number }> {
+    return await this.insert(input, { status: "active", origin: "human", createdBy });
+  }
+
+  /**
+   * Create an Agent-Driven Test **Claude** wrote: a Draft, `origin: "ai"`, awaiting a human's
+   * Promote — the mirror of {@link create} and the reason Draft returns for this kind.
+   *
+   * The gate is back because the premise that removed it is no longer true: a machine now writes
+   * the artifact. Draft also earns a second job it did not have on the pinned path — it is the
+   * only status the MCP authoring tools may write to, so promoting a test is what puts it beyond
+   * their reach.
+   *
+   * `instructions` is the AI Instructions Claude AUTHORED, not the steering prompt that asked for
+   * them. The two must not be confused: this slot is composed into every future run, so the
+   * request ("make me a test for the dashboard") landing here would become standing orders.
+   */
+  async createDraft(
+    input: CreateAgentTestRequest,
+    createdBy?: string,
+  ): Promise<{ id: string; version: number }> {
+    return await this.insert(input, { status: "draft", origin: "ai", createdBy });
+  }
+
+  private async insert(
+    input: CreateAgentTestRequest,
+    opts: { status: "active" | "draft"; origin: "human" | "ai"; createdBy?: string },
+  ): Promise<{ id: string; version: number }> {
     const name = input?.name?.trim();
     if (!name) throw new BadRequestException("test name cannot be empty");
     const instructions = input.instructions?.trim() || null;
@@ -76,10 +104,10 @@ export class AgentTestsService {
         .values({
           name,
           kind: "agent",
-          status: "active",
-          origin: "human",
+          status: opts.status,
+          origin: opts.origin,
           intent: instructions,
-          createdBy: createdBy ?? null,
+          createdBy: opts.createdBy ?? null,
         })
         .returning({ id: tests.id });
 

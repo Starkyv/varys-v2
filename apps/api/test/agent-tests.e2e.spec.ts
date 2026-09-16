@@ -1,12 +1,18 @@
 import "reflect-metadata";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { createDb, type DbHandle, baselines } from "@varys/db";
+import type { AgentCheckpoint, CreatedAgentCredential } from "@varys/review-contract";
+import { LocalFsAdapter } from "@varys/storage-adapter";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
-import { authed, prepareAuth } from "./auth-harness";
+import { authed, mcpToken, prepareAuth } from "./auth-harness";
 import { startTestDb, type TestDb } from "./db-harness";
+import { mcpCallTool, mcpRpc, mcpTool, mcpToolNames, pngBase64, pngFixture } from "./mcp-harness";
 
 /**
  * Agent-Driven Tests — the authoring surface (no agent involved).
@@ -28,6 +34,8 @@ describe("Agent-Driven Tests — authoring", () => {
   let app: INestApplication;
   let db: TestDb;
   let handle: DbHandle;
+  let storageDir: string;
+  let storage: LocalFsAdapter;
 
   const PINNED = {
     name: "pinned smoke",
@@ -63,19 +71,23 @@ describe("Agent-Driven Tests — authoring", () => {
 
   beforeAll(async () => {
     db = await startTestDb();
+    storageDir = await mkdtemp(join(tmpdir(), "varys-art-agenttests-"));
     process.env.DATABASE_URL = db.connectionString;
+    process.env.VARYS_STORAGE_DIR = storageDir;
     handle = createDb(db.connectionString);
 
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleRef.createNestApplication();
     await app.init();
     await prepareAuth();
-  });
+    storage = new LocalFsAdapter(storageDir);
+  }, 180_000);
 
   afterAll(async () => {
     await handle?.pool.end();
     await app?.close();
     await db?.container.stop();
+    if (storageDir) await rm(storageDir, { recursive: true, force: true });
   });
 
   it("creates an agent-driven test that is active immediately, human-authored, and needs no promotion", async () => {
@@ -340,5 +352,313 @@ describe("Agent-Driven Tests — authoring", () => {
     const row = list.body.find((t: { id: string }) => t.id === id);
     expect(row.folderId).toBe(folder.body.id);
     expect(row.tags).toEqual(["dashboard", "smoke"]);
+  });
+  /**
+   * Claude writes the test — the authoring half of the same kind, over `/mcp` (ticket #10).
+   *
+   * Everything above this block is a person typing into the editor. Everything below is the
+   * author's own Claude writing the same rows through the same services, and the interesting
+   * assertions are all refusals: the three things Varys will not let it do are the entire reason
+   * handing it a write surface is safe.
+   *
+   * The load-bearing one is the required image. Prose describing a state Claude reached and prose
+   * describing one it imagined are indistinguishable on the page, so the picture is the only thing
+   * separating them — and a refusal that left a row behind would be no refusal at all.
+   */
+  describe("authored by Claude over /mcp", () => {
+    interface ToolDescriptor {
+      name: string;
+      inputSchema: { properties?: Record<string, unknown>; required?: string[] };
+    }
+
+    /** The AI Instructions Claude authored — the artifact, not the sentence that asked for it. */
+    const AUTHORED = [
+      "App is on http://localhost:3000. Sign in as qa@acme.io / hunter2.",
+      "Dismiss the cookie banner if it appears. Never touch anything under Settings > Danger zone.",
+    ].join("\n");
+
+    const create = (name: string, instructions = AUTHORED) =>
+      mcpTool<{ testId: string; name: string; kind: string; status: string; origin: string }>(
+        app,
+        mcpToken(),
+        "create_agent_test",
+        { name, instructions },
+      );
+
+    const addCp = (
+      testId: string,
+      name: string,
+      extra: Record<string, unknown> = {},
+    ) =>
+      mcpCallTool(app, mcpToken(), "add_agent_checkpoint", {
+        testId,
+        name,
+        instructions: `Drive to ${name}.`,
+        comparePrompt: `The ${name} state is on screen.`,
+        image: pngBase64(name),
+        ...extra,
+      });
+
+    /** The checkpoints as the web editor reads them — the Draft is queryable between calls. */
+    const checkpointsOf = async (testId: string): Promise<AgentCheckpoint[]> =>
+      (await authed(app).get(`/tests/${testId}/agent-checkpoints`).expect(200)).body;
+
+    const testRow = async (testId: string) => {
+      const { rows } = await handle.pool.query<{
+        kind: string;
+        status: string;
+        origin: string;
+        intent: string | null;
+        name: string;
+      }>("select kind, status, origin, intent, name from tests where id = $1", [testId]);
+      return rows[0];
+    };
+
+    const previewRows = async (testId: string) => {
+      const { rows } = await handle.pool.query<{ checkpoint_name: string; artifact_key: string }>(
+        "select checkpoint_name, artifact_key from draft_previews where test_id = $1 order by checkpoint_name",
+        [testId],
+      );
+      return rows;
+    };
+
+    it("writes a Draft carrying the AI Instructions it authored, and not the prompt that asked for it", async () => {
+      const created = await create("dashboard journey");
+
+      expect(created.kind).toBe("agent");
+      expect(created.status).toBe("draft");
+      expect(created.origin).toBe("ai");
+
+      const row = await testRow(created.testId);
+      expect(row.name).toBe("dashboard journey");
+      expect(row.kind).toBe("agent");
+      expect(row.status).toBe("draft");
+      expect(row.origin).toBe("ai");
+      // The Brief slot carries the authored artifact byte-for-byte — this is what every future
+      // run is composed from, so anything else here is an instruction nobody wrote.
+      expect(row.intent).toBe(AUTHORED);
+
+      // It is in the review queue from the moment it exists — an abandoned pass leaves a visibly
+      // incomplete Draft rather than nothing.
+      const queue = await authed(app).get("/drafts").expect(200);
+      expect(queue.body.map((d: { id: string }) => d.id)).toContain(created.testId);
+
+      // The steering prompt has nowhere to land: the tool's whole declared input is a name and
+      // the authored instructions. Without that, "make me a test for the dashboard" would reach
+      // `intent` and become every future run's standing orders.
+      const listed = await mcpRpc(app, mcpToken(), "tools/list", {}).expect(200);
+      const tool = (listed.body.result.tools as ToolDescriptor[]).find(
+        (t) => t.name === "create_agent_test",
+      );
+      expect(Object.keys(tool?.inputSchema.properties ?? {}).sort()).toEqual([
+        "instructions",
+        "name",
+      ]);
+    });
+
+    it("accumulates Checkpoints in journey order across separate calls, queryable between them", async () => {
+      const { testId } = await create("checkout journey");
+
+      expect(await checkpointsOf(testId)).toEqual([]);
+
+      for (const name of ["signed-in", "cart-filled", "order-placed"]) {
+        const res = await addCp(testId, name);
+        expect(res.isError, res.content[0]?.text).toBeFalsy();
+        // Readable BETWEEN calls, not only at the end — there is no finish step to wait for.
+        const so_far = await checkpointsOf(testId);
+        expect(so_far[so_far.length - 1].name).toBe(name);
+      }
+
+      const cps = await checkpointsOf(testId);
+      expect(cps.map((c) => c.name)).toEqual(["signed-in", "cart-filled", "order-placed"]);
+      expect(cps.map((c) => c.position)).toEqual([0, 1, 2]);
+      expect(cps[0].instructions).toBe("Drive to signed-in.");
+      expect(cps[0].comparePrompt).toBe("The signed-in state is on screen.");
+
+      // The single version row, written at creation and never again.
+      expect(await versionCount(testId)).toBe(1);
+    });
+
+    it("refuses a Checkpoint with no image, leaving no row and no artifact", async () => {
+      const { testId } = await create("no picture no checkpoint");
+
+      const res = await addCp(testId, "imagined-state", { image: "" });
+      expect(res.isError).toBe(true);
+      expect(res.content[0]?.text).toMatch(/image/i);
+
+      expect(await checkpointsOf(testId)).toEqual([]);
+      expect(await previewRows(testId)).toEqual([]);
+      expect(await storage.get(`drafts/${testId}/imagined-state/preview.png`)).toBeNull();
+    });
+
+    it("refuses something that is not a PNG, for the same reason", async () => {
+      const { testId } = await create("not a png");
+      const res = await addCp(testId, "jpeg-state", {
+        image: Buffer.from("/tmp/screenshot.png").toString("base64"),
+      });
+      expect(res.isError).toBe(true);
+      expect(res.content[0]?.text).toMatch(/PNG/i);
+      expect(await checkpointsOf(testId)).toEqual([]);
+    });
+
+    it("refuses two Checkpoints with the same name on one test, in the database", async () => {
+      const { testId } = await create("one name one slot");
+      expect((await addCp(testId, "dashboard")).isError).toBeFalsy();
+
+      const again = await addCp(testId, "dashboard", { image: pngBase64("second try") });
+      expect(again.isError).toBe(true);
+      expect(again.content[0]?.text).toMatch(/already has a checkpoint named "dashboard"/);
+
+      expect((await checkpointsOf(testId)).length).toBe(1);
+      // The first capture is untouched — a refused duplicate must not overwrite the picture that
+      // already belongs to that slot.
+      const stored = await storage.get(`drafts/${testId}/dashboard/preview.png`);
+      expect(stored?.equals(pngFixture("dashboard"))).toBe(true);
+    });
+
+    it("stores each capture as a draft preview — a reference image, never a baseline", async () => {
+      const { testId } = await create("captures land as previews");
+      await addCp(testId, "first");
+      await addCp(testId, "second");
+
+      const previews = await previewRows(testId);
+      expect(previews.map((p) => p.checkpoint_name)).toEqual(["first", "second"]);
+      for (const p of previews) {
+        const bytes = await storage.get(p.artifact_key);
+        expect(bytes?.equals(pngFixture(p.checkpoint_name))).toBe(true);
+      }
+
+      // Authoring proposes nothing. The first Run still produces the captures a human approves.
+      const { rows } = await handle.pool.query<{ n: string }>(
+        "select count(*)::text as n from baselines where test_id = $1",
+        [testId],
+      );
+      expect(Number(rows[0].n)).toBe(0);
+
+      // The Drafts queue shows the first Checkpoint's capture as the thumbnail.
+      const detail = await authed(app).get(`/drafts/${testId}`).expect(200);
+      expect(detail.body.intent).toBe(AUTHORED);
+    });
+
+    it("refuses a Checkpoint aimed at a promoted test, including one with a live Agent Run Session", async () => {
+      const { testId } = await create("promoted then closed");
+      await addCp(testId, "landing");
+      await authed(app).post(`/drafts/${testId}/promote`).send({}).expect(201);
+
+      const refused = await addCp(testId, "after-promotion");
+      expect(refused.isError).toBe(true);
+      expect(refused.content[0]?.text).toMatch(/draft/i);
+      expect((await checkpointsOf(testId)).map((c) => c.name)).toEqual(["landing"]);
+
+      // And with a run in flight, which is the case that would matter most: a promoted test is
+      // the only kind that can HAVE a session, so "the agent cannot edit the test it is running"
+      // is already true here rather than being a separate rule.
+      const env = await authed(app)
+        .post("/environments")
+        .send({ name: "authoring-staging", baseUrl: "https://staging.acme.io" })
+        .expect(201);
+      const session = await mcpTool<{ runId: string }>(app, mcpToken(), "start_agent_run", {
+        testId,
+        environmentId: env.body.id,
+      });
+      expect(session.runId).toBeTruthy();
+
+      const duringRun = await addCp(testId, "mid-run");
+      expect(duringRun.isError).toBe(true);
+      expect((await checkpointsOf(testId)).map((c) => c.name)).toEqual(["landing"]);
+    });
+
+    it("refuses a Checkpoint aimed at a pinned Draft, whatever its status", async () => {
+      const pinned = await authed(app).post("/tests").send(PINNED).expect(201);
+      const res = await addCp(pinned.body.id as string, "hero");
+      expect(res.isError).toBe(true);
+      expect((await previewRows(pinned.body.id as string))).toEqual([]);
+    });
+
+    it("refuses both tools to an agent principal, and no capability grants them", async () => {
+      // Provisioned with the RUN capability — the strongest credential Varys issues — so this
+      // proves the authoring tools are outside it rather than merely off by default.
+      const provisioned = await authed(app)
+        .post("/settings/agent-credentials")
+        .send({ label: "authoring-drainer", expiresInDays: 7, canStartAgentRuns: true })
+        .expect(201);
+      const agentToken = (provisioned.body as CreatedAgentCredential).token;
+      expect((provisioned.body as CreatedAgentCredential).credential.canStartAgentRuns).toBe(true);
+
+      const names = await mcpToolNames(app, agentToken);
+      expect(names).not.toContain("create_agent_test");
+      expect(names).not.toContain("add_agent_checkpoint");
+      // The run capability it DOES hold is visible, so the absence above is a boundary and not a
+      // credential that simply cannot see anything.
+      expect(names).toContain("start_agent_run");
+
+      const created = await mcpCallTool(app, agentToken, "create_agent_test", {
+        name: "written by a machine at 3am",
+        instructions: AUTHORED,
+      });
+      expect(created.isError).toBe(true);
+      expect(created.content[0]?.text).toMatch(/Unknown tool/);
+
+      const { testId } = await create("agent may not extend this");
+      const added = await mcpCallTool(app, agentToken, "add_agent_checkpoint", {
+        testId,
+        name: "snuck-in",
+        instructions: "Drive there.",
+        comparePrompt: "It looks fine.",
+        image: pngBase64("snuck-in"),
+      });
+      expect(added.isError).toBe(true);
+      expect(added.content[0]?.text).toMatch(/Unknown tool/);
+      expect(await checkpointsOf(testId)).toEqual([]);
+
+      // Nothing was created under either refusal.
+      const queue = await authed(app).get("/drafts").expect(200);
+      expect(
+        queue.body.some((d: { name: string }) => d.name === "written by a machine at 3am"),
+      ).toBe(false);
+    });
+
+    it("promotes into a test that runs exactly like a hand-written one", async () => {
+      const authoredId = (await create("authored journey")).testId;
+      for (const name of ["step-one", "step-two"]) await addCp(authoredId, name);
+      await authed(app).post(`/drafts/${authoredId}/promote`).send({}).expect(201);
+
+      // The hand-written control, built through the editor's own routes with the same content.
+      const handId = await createAgentTest("hand-written journey", AUTHORED);
+      for (const name of ["step-one", "step-two"]) {
+        await addCheckpoint(handId, {
+          name,
+          instructions: `Drive to ${name}.`,
+          comparePrompt: `The ${name} state is on screen.`,
+        });
+      }
+
+      const env = await authed(app)
+        .post("/environments")
+        .send({ name: "promotion-parity", baseUrl: "https://parity.acme.io" })
+        .expect(201);
+      const environmentId = env.body.id as string;
+
+      interface Session {
+        instructions: string;
+        manifest: { step: number; name: string; instructions: string; comparePrompt: string }[];
+      }
+      const authoredRun = await mcpTool<Session>(app, mcpToken(), "start_agent_run", {
+        testId: authoredId,
+        environmentId,
+      });
+      const handRun = await mcpTool<Session>(app, mcpToken(), "start_agent_run", {
+        testId: handId,
+        environmentId,
+      });
+
+      expect(authoredRun.manifest).toEqual(handRun.manifest);
+      // The only difference between the two documents is the test's own name in the heading.
+      expect(authoredRun.instructions.replace("authored journey", "hand-written journey")).toBe(
+        handRun.instructions,
+      );
+
+      expect(await versionCount(authoredId)).toBe(1);
+    });
   });
 });

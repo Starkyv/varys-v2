@@ -19,11 +19,20 @@ import {
 import type { AgentCheckpoint, CreatedAgentCredential } from "@varys/review-contract";
 import { LocalFsAdapter } from "@varys/storage-adapter";
 import { and, asc, eq } from "drizzle-orm";
-import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
 import { authed, mcpToken, prepareAuth } from "./auth-harness";
 import { startTestDb, type TestDb } from "./db-harness";
+import {
+  type McpContent,
+  type McpToolResult,
+  mcpCallTool,
+  mcpRpc,
+  mcpTool,
+  mcpToolNames,
+  pngBase64,
+  pngFixture,
+} from "./mcp-harness";
 
 /**
  * Starting an **Agent Run Session** — the moment a run begins, and the reason its honesty does
@@ -116,29 +125,11 @@ describe("Agent Run Session — red before the agent does anything", () => {
     if (storageDir) await rm(storageDir, { recursive: true, force: true });
   });
 
-  /** JSON-RPC on `/mcp` as whoever holds `token`. */
-  const rpc = (token: string, method: string, params: unknown) =>
-    request(app.getHttpServer())
-      .post("/mcp")
-      .set("Authorization", `Bearer ${token}`)
-      .send({ jsonrpc: "2.0", id: 1, method, params });
-
-  interface McpContent {
-    type: string;
-    text?: string;
-    data?: string;
-    mimeType?: string;
-  }
-  interface McpToolResult {
-    isError?: boolean;
-    content: McpContent[];
-  }
-
-  const callTool = async (token: string, name: string, args: unknown): Promise<McpToolResult> => {
-    const res = await rpc(token, "tools/call", { name, arguments: args }).expect(200);
-    expect(res.body.error).toBeUndefined();
-    return res.body.result as McpToolResult;
-  };
+  // The `/mcp` transport, from the shared harness — bound to this suite's app so each call
+  // names only the principal it acts as.
+  const rpc = (token: string, method: string, params: unknown) => mcpRpc(app, token, method, params);
+  const callTool = (token: string, name: string, args: unknown): Promise<McpToolResult> =>
+    mcpCallTool(app, token, name, args);
 
   interface StartedSession {
     runId: string;
@@ -167,19 +158,9 @@ describe("Agent Run Session — red before the agent does anything", () => {
     return { session: JSON.parse(text) as StartedSession, content: raw.content, raw };
   };
 
-  const toolNames = async (token: string): Promise<string[]> => {
-    const res = await rpc(token, "tools/list", {}).expect(200);
-    return (res.body.result.tools as { name: string }[]).map((t) => t.name);
-  };
-
-  /** A PNG, as far as anything in this path is concerned: the real 8-byte signature plus a
-   *  marker, so two captures are distinguishable without pulling in an encoder. */
-  const png = (marker: string): Buffer =>
-    Buffer.concat([
-      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-      Buffer.from(marker),
-    ]);
-  const b64 = (marker: string): string => png(marker).toString("base64");
+  const toolNames = (token: string): Promise<string[]> => mcpToolNames(app, token);
+  const png = pngFixture;
+  const b64 = pngBase64;
 
   interface SubmitResult {
     runId: string;
@@ -200,12 +181,8 @@ describe("Agent Run Session — red before the agent does anything", () => {
     note: string;
   }
 
-  /** Call a tool and parse its JSON payload, asserting it was not an error. */
-  const ok = async <T>(token: string, name: string, args: unknown): Promise<T> => {
-    const res = await callTool(token, name, args);
-    expect(res.isError, res.content[0]?.text).toBeFalsy();
-    return JSON.parse(res.content.find((c) => c.type === "text")?.text ?? "{}") as T;
-  };
+  const ok = <T>(token: string, name: string, args: unknown): Promise<T> =>
+    mcpTool<T>(app, token, name, args);
 
   const submit = (runId: string, name: string, extra: Record<string, unknown> = {}) =>
     ok<SubmitResult>(mcpToken(), "submit_checkpoint", {

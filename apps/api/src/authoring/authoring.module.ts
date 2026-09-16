@@ -6,6 +6,7 @@ import { SettingsModule } from "../settings/settings.module";
 import { TestsModule } from "../tests/tests.module";
 import { AuthoringInstructionsController } from "./authoring-instructions.controller";
 import { AuthoringInstructionsService } from "./authoring-instructions.service";
+import { AgentAuthoringService } from "./agent-authoring.service";
 import { AgentRunService } from "./agent-run.service";
 import { AuthoringSessionService } from "./authoring-session.service";
 import { BridgeController } from "./bridge.controller";
@@ -42,6 +43,7 @@ import { RunToolService } from "./run-tool.service";
     AuthoringInstructionsService,
     RunToolService,
     AgentRunService,
+    AgentAuthoringService,
   ],
 })
 export class AuthoringModule {}
