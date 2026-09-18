@@ -5,7 +5,7 @@ import { eq } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
 import { AgentTestsService } from "../tests/agent-tests.service";
 import { TestsService } from "../tests/tests.service";
-import { decodePng } from "./png";
+import { decodePng, type CallerContext, type ImageArg } from "./png";
 
 /**
  * **Claude authoring an Agent-Driven Test** — the write half of the kind whose run half is
@@ -90,13 +90,15 @@ export class AgentAuthoringService {
    * prompt — is what makes that separation real, and a refusal that left the row behind would be
    * no refusal at all.
    */
-  async addCheckpoint(input: {
-    testId: string;
-    name: string;
-    instructions: string;
-    comparePrompt: string;
-    image: string;
-  }): Promise<{
+  async addCheckpoint(
+    input: {
+      testId: string;
+      name: string;
+      instructions: string;
+      comparePrompt: string;
+    } & ImageArg,
+    ctx: CallerContext,
+  ): Promise<{
     testId: string;
     checkpoint: AgentCheckpoint;
     checkpoints: string[];
@@ -105,7 +107,7 @@ export class AgentAuthoringService {
     const testId = input.testId?.trim();
     await this.assertWritableDraft(testId);
     // Decoded BEFORE the row is written, so a bad or absent image leaves nothing behind.
-    const bytes = decodePng(input.image, "add_agent_checkpoint");
+    const bytes = decodePng(input, "add_agent_checkpoint", ctx);
 
     const checkpoint = await this.agentTests.addCheckpoint(testId, {
       name: input.name,

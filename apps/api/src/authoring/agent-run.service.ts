@@ -28,7 +28,7 @@ import { viewportKeyOf } from "../runs/runs.service";
 import { SettingsService } from "../settings/settings.service";
 import { AgentInstructionsService } from "../tests/agent-instructions.service";
 import { STORAGE } from "../storage/storage.module";
-import { decodePng } from "./png";
+import { decodePng, type CallerContext, type ImageArg } from "./png";
 
 /** The environment name a run with no environment is keyed under — the same fallback
  *  `RunsService` uses, so an env-less agent run and an env-less replay find the same baselines. */
@@ -345,16 +345,17 @@ export class AgentRunService {
    * `pending-baseline` whatever the verdict said. There was nothing to compare against, so the
    * verdict is inert — a first run cannot be talked into reporting success.
    */
-  async submitCheckpoint(input: {
-    runId: string;
-    name: string;
-    /** The capture, base64 PNG. A `data:` URL prefix is tolerated and stripped. */
-    image: string;
-    verdict: AgentVerdict;
-    /** Why the verdict is what it is. Required, and stored as the checkpoint's judge reasoning. */
-    reasoning: string;
-    capture?: AgentCaptureMeta;
-  }): Promise<AgentSubmitResult> {
+  async submitCheckpoint(
+    input: {
+      runId: string;
+      name: string;
+      verdict: AgentVerdict;
+      /** Why the verdict is what it is. Required, and stored as the checkpoint's judge reasoning. */
+      reasoning: string;
+      capture?: AgentCaptureMeta;
+    } & ImageArg,
+    ctx: CallerContext,
+  ): Promise<AgentSubmitResult> {
     const session = await this.openRun(input.runId);
     const name = (input.name ?? "").trim();
     const reasoning = (input.reasoning ?? "").trim();
@@ -402,7 +403,7 @@ export class AgentRunService {
       );
     }
 
-    const bytes = decodePng(input.image, "submit_checkpoint");
+    const bytes = decodePng(input, "submit_checkpoint", ctx);
     const actualKey = `runs/${session.runId}/${artifactSegment(name)}.png`;
     await this.storage.put(actualKey, bytes);
 
@@ -465,13 +466,12 @@ export class AgentRunService {
    * Manifest requires forbidding it. Namelessness is what keeps the two apart: evidence cannot be
    * mistaken for a slot, promoted to a baseline, or counted toward what the run verified.
    */
-  async submitEvidence(input: {
-    runId: string;
-    image: string;
-    note?: string;
-  }): Promise<{ runId: string; attached: number; note: string }> {
+  async submitEvidence(
+    input: { runId: string; note?: string } & ImageArg,
+    ctx: CallerContext,
+  ): Promise<{ runId: string; attached: number; note: string }> {
     const session = await this.openRun(input.runId);
-    const bytes = decodePng(input.image, "submit_evidence");
+    const bytes = decodePng(input, "submit_evidence", ctx);
     // Keyed by a fresh uuid rather than by position: evidence is unlimited and unordered-by-name,
     // and a counter would collide the moment two attachments raced.
     const key = `runs/${session.runId}/evidence/${randomUUID()}.png`;

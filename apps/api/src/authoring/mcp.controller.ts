@@ -1,5 +1,5 @@
 import type { IncomingHttpHeaders } from "node:http";
-import { BadRequestException, Body, Controller, Get, Headers, HttpException, Inject, Post, Res } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Headers, HttpException, Inject, Post, Req, Res } from "@nestjs/common";
 import { Public } from "../auth/public.decorator";
 import { RepairJobsService } from "../repair-jobs/repair-jobs.service";
 import type { PinAssertionInput } from "./authoring-session.service";
@@ -17,6 +17,7 @@ import {
 } from "./agent-run.service";
 import { McpAuthService, type McpPrincipal, McpUnauthorized } from "./mcp-auth.service";
 import { McpStatusService } from "./mcp-status.service";
+import type { CallerContext } from "./png";
 import { RunToolService } from "./run-tool.service";
 
 /** The slice of the HTTP response we touch — avoids depending on express types directly
@@ -24,6 +25,66 @@ import { RunToolService } from "./run-tool.service";
 interface HttpRes {
   status(code: number): unknown;
   setHeader(name: string, value: string): unknown;
+}
+
+/** The slice of the HTTP request we touch, for the same reason. Only the peer address: the
+ *  headers already arrive separately, and the socket is the one thing a caller cannot forge. */
+interface HttpReq {
+  socket?: { remoteAddress?: string | undefined } | undefined;
+}
+
+/**
+ * The screenshot arguments every capture-taking tool shares, and the order of preference they
+ * teach.
+ *
+ * `imagePath` is listed FIRST and described as preferred for a reason that is not stylistic: a
+ * screenshot sent as `image` travels through the model's own output, where a megabyte of base64
+ * is a megabyte of tokens, and base64 that gets cut short decodes without complaint into a
+ * perfectly-formed half-image. Varys now refuses those (the IEND check in `decodePng`) — but
+ * refusing is recovery, and a path is prevention: the bytes never enter the conversation at all.
+ *
+ * `sha256` exists for the times a path is impossible. It costs one shell command and turns
+ * "corrupted and stored" into "corrupted and refused".
+ *
+ * The path's description changes with the caller because its availability does: a client that is
+ * not on this machine would be naming a file on the server, so it is refused there, and a tool
+ * schema that offered it anyway would be sending the model at a wall.
+ */
+function imageArgs(subject: string, ctx: CallerContext): Record<string, unknown> {
+  return {
+    imagePath: {
+      type: "string",
+      description: ctx.local
+        ? `PREFERRED — the absolute path to ${subject} on this machine, which Varys opens itself. Use it whenever the capture is on disk, and write it to disk if it is not: bytes read from a file cannot be truncated on the way here, and a truncated screenshot is not something anyone can spot afterwards. \`~\` is expanded; a \`file://\` URL is accepted.`
+        : `Not available on this connection — you are not on the same machine as Varys, so a path here would name a file on the server rather than one of yours. Send \`image\` with \`sha256\`.`,
+    },
+    image: {
+      type: "string",
+      description: `${subject}, as base64-encoded PNG bytes (a \`data:\` URL is fine too). Needed only when you cannot give \`imagePath\`. Send \`sha256\` with it: a long base64 string is easy to cut short and impossible to recognise as cut short.`,
+    },
+    sha256: {
+      type: "string",
+      description:
+        "Hex SHA-256 of the PNG file's own bytes (`shasum -a 256 shot.png`). Optional, and worth it with `image` — it is the difference between a corrupted upload being refused and being stored for a human to puzzle over.",
+    },
+  };
+}
+
+/**
+ * Is the client a process on THIS machine?
+ *
+ * It decides one thing only: whether `imagePath` is honoured, i.e. whether "the file at
+ * /Users/…/shot.png" names the caller's file or a stranger's. The peer address is the
+ * authority because it is the one property of a request nobody can assert — and a forwarding
+ * header is treated as disqualifying rather than as evidence, because a proxy hop means the
+ * socket peer is the proxy and the real client is somewhere else entirely. Varys sets no
+ * `trust proxy`, so there is no configured hop to make an exception for.
+ */
+function callerContext(req: HttpReq, headers: IncomingHttpHeaders): CallerContext {
+  const forwarded = headers["x-forwarded-for"] ?? headers.forwarded;
+  const addr = req?.socket?.remoteAddress ?? "";
+  const loopback = addr === "::1" || addr === "127.0.0.1" || addr.startsWith("::ffff:127.");
+  return { local: loopback && !forwarded };
 }
 
 /**
@@ -291,6 +352,7 @@ export class McpController {
   async rpc(
     @Body() body: JsonRpcMessage | JsonRpcMessage[],
     @Headers() headers: IncomingHttpHeaders,
+    @Req() req: HttpReq,
     @Res({ passthrough: true }) res: HttpRes,
   ): Promise<unknown> {
     // Authenticate BEFORE anything else — including before touching the status service, so
@@ -304,14 +366,15 @@ export class McpController {
     }
 
     this.mcpStatus.touch(user.id); // record activity so THIS user's web app shows "active"
+    const ctx = callerContext(req, headers);
     let result: unknown;
     if (Array.isArray(body)) {
-      const out = (await Promise.all(body.map((m) => this.handle(m, user)))).filter(
+      const out = (await Promise.all(body.map((m) => this.handle(m, user, ctx)))).filter(
         (r): r is JsonRpcResponse => r !== undefined,
       );
       result = out.length ? out : undefined;
     } else {
-      result = await this.handle(body, user);
+      result = await this.handle(body, user, ctx);
     }
     // Streamable HTTP: a POST carrying only notifications/responses (nothing to answer)
     // gets 202 Accepted with no body; a request gets its JSON-RPC response with 200.
@@ -345,11 +408,12 @@ export class McpController {
   private async handle(
     msg: JsonRpcMessage,
     user: McpPrincipal,
+    ctx: CallerContext,
   ): Promise<JsonRpcResponse | undefined> {
     const id = msg?.id ?? null;
     const isNotification = msg?.id === undefined || msg?.id === null;
     try {
-      const result = await this.dispatch(msg?.method, msg?.params ?? {}, user);
+      const result = await this.dispatch(msg?.method, msg?.params ?? {}, user, ctx);
       return isNotification ? undefined : { jsonrpc: "2.0", id, result };
     } catch (err) {
       if (isNotification) return undefined;
@@ -362,6 +426,7 @@ export class McpController {
     method: string | undefined,
     params: Record<string, unknown>,
     user: McpPrincipal,
+    ctx: CallerContext,
   ): Promise<unknown> {
     switch (method) {
       case "initialize": {
@@ -383,14 +448,14 @@ export class McpController {
         return {};
       case "tools/list":
         return {
-          tools: this.tools(user).map((t) => ({
+          tools: this.tools(user, ctx).map((t) => ({
             name: t.name,
             description: t.description,
             inputSchema: t.inputSchema,
           })),
         };
       case "tools/call":
-        return this.callTool(params, user);
+        return this.callTool(params, user, ctx);
       default:
         throw new MethodNotFound(`Method not found: ${method}`);
     }
@@ -398,7 +463,11 @@ export class McpController {
 
   /** Run a tool; tool-execution failures surface as an `isError` result (not a JSON-RPC
    *  error), per the MCP spec, so Claude sees the message and can recover. */
-  private async callTool(params: Record<string, unknown>, user: McpPrincipal): Promise<unknown> {
+  private async callTool(
+    params: Record<string, unknown>,
+    user: McpPrincipal,
+    ctx: CallerContext,
+  ): Promise<unknown> {
     const name = params.name as string | undefined;
     // Checked BEFORE the lookup, so a credential without the run capability is told what it is
     // missing instead of being handed the "Unknown tool" that hides another user's resources.
@@ -417,7 +486,7 @@ export class McpController {
         isError: true,
       };
     }
-    const tool = this.tools(user).find((t) => t.name === name);
+    const tool = this.tools(user, ctx).find((t) => t.name === name);
     if (!tool) {
       // For an agent principal, a tool outside its scope is reported exactly like a tool that
       // does not exist — the same reasoning as the not-found on another user's session id.
@@ -550,13 +619,13 @@ export class McpController {
    *  Slice 2 = open/finish; Slices 3/4 add perception, interaction, and checkpoint tools to this
    *  list. Promotion is deliberately NOT a tool (web-UI only; Claude must not be able to
    *  self-promote — ADR 0001 / PRD safety). */
-  private tools(user: McpPrincipal): McpTool[] {
-    const all = this.allTools(user);
+  private tools(user: McpPrincipal, ctx: CallerContext): McpTool[] {
+    const all = this.allTools(user, ctx);
     if (user.kind !== "agent") return all.filter((t) => !AGENT_ONLY_TOOLS.includes(t.name));
     return all.filter((t) => AGENT_TOOLS.includes(t.name) || grantedByCapability(user, t.name));
   }
 
-  private allTools(user: McpPrincipal): McpTool[] {
+  private allTools(user: McpPrincipal, ctx: CallerContext): McpTool[] {
     const a = this.authoring;
     return [
       {
@@ -1027,7 +1096,7 @@ export class McpController {
       {
         name: "add_agent_checkpoint",
         description:
-          "Add one **Checkpoint** to a Draft you created with create_agent_test: a state on the journey, how to get back to it, what counts as still being right — and the screenshot proving you actually reached it.\n\nCall it once per state, in journey order. The rows are cumulative: each Checkpoint's `instructions` continue from where the previous one left the app, so write them as the next thing to do and not as a fresh start from the login page.\n\n**The image is required and there is no way around it.** Prose about a state you reached and prose about one you imagined read identically on the page, so the picture is the only thing separating them — which is why Varys refuses the write rather than asking you nicely. Capture the state you are looking at, right now, before you move on. If you could not reach a state, do not write a Checkpoint for it: say so to the user instead. A Checkpoint nobody can reach is `unreached` in every future run, and because the Manifest is a closed set the only fix is editing the test.\n\n`comparePrompt` is what a future run judges its screenshot against, and both directions of it are worth writing. Say what must hold, and say what is allowed to vary — figures that move, dates, avatars, anything seeded per-environment. Too tight and the test goes red on legitimate change; too loose and it passes through a regression. You have just seen the page, so you know which is which better than the author will.\n\nYour capture is stored as a REFERENCE image, never a baseline. The first run against an environment proposes the baselines and a human approves them there — nothing you submit here can pass a future run on its own.\n\nOnly Drafts can be written to. Once a human promotes the test it is in service and these tools no longer reach it; make the Draft right before it is promoted, because there is no second pass.",
+          "Add one **Checkpoint** to a Draft you created with create_agent_test: a state on the journey, how to get back to it, what counts as still being right — and the screenshot proving you actually reached it.\n\nCall it once per state, in journey order. The rows are cumulative: each Checkpoint's `instructions` continue from where the previous one left the app, so write them as the next thing to do and not as a fresh start from the login page.\n\n**The image is required and there is no way around it.** Prose about a state you reached and prose about one you imagined read identically on the page, so the picture is the only thing separating them — which is why Varys refuses the write rather than asking you nicely. Capture the state you are looking at, right now, before you move on.\n\n**Save the capture to a file and send `imagePath`.** Base64 in `image` still works, but it goes through your own output, and base64 that gets cut short decodes into a valid-looking half-image rather than an error — Varys refuses those now, which costs you the call. A path cannot be truncated. If you must send `image`, send `sha256` with it. A Checkpoint's name is permanent and taken once, so a rejected capture is a slot you cannot retry. If you could not reach a state, do not write a Checkpoint for it: say so to the user instead. A Checkpoint nobody can reach is `unreached` in every future run, and because the Manifest is a closed set the only fix is editing the test.\n\n`comparePrompt` is what a future run judges its screenshot against, and both directions of it are worth writing. Say what must hold, and say what is allowed to vary — figures that move, dates, avatars, anything seeded per-environment. Too tight and the test goes red on legitimate change; too loose and it passes through a regression. You have just seen the page, so you know which is which better than the author will.\n\nYour capture is stored as a REFERENCE image, never a baseline. The first run against an environment proposes the baselines and a human approves them there — nothing you submit here can pass a future run on its own.\n\nOnly Drafts can be written to. Once a human promotes the test it is in service and these tools no longer reach it; make the Draft right before it is promoted, because there is no second pass.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1047,22 +1116,23 @@ export class McpController {
               description:
                 "What counts as this state still being right, and what is allowed to differ. Both halves — the second is what stops the test going red on data that was always going to move.",
             },
-            image: {
-              type: "string",
-              description:
-                "The screenshot of the state you reached: base64-encoded PNG bytes (a data: URL is fine too). Required — a Checkpoint with no picture is refused.",
-            },
+            ...imageArgs("the screenshot of the state you reached", ctx),
           },
-          required: ["testId", "name", "instructions", "comparePrompt", "image"],
+          required: ["testId", "name", "instructions", "comparePrompt"],
         },
         handler: (args) =>
-          this.agentAuthoring.addCheckpoint({
-            testId: String(args.testId ?? ""),
-            name: String(args.name ?? ""),
-            instructions: String(args.instructions ?? ""),
-            comparePrompt: String(args.comparePrompt ?? ""),
-            image: String(args.image ?? ""),
-          }),
+          this.agentAuthoring.addCheckpoint(
+            {
+              testId: String(args.testId ?? ""),
+              name: String(args.name ?? ""),
+              instructions: String(args.instructions ?? ""),
+              comparePrompt: String(args.comparePrompt ?? ""),
+              image: String(args.image ?? ""),
+              imagePath: String(args.imagePath ?? ""),
+              sha256: String(args.sha256 ?? ""),
+            },
+            ctx,
+          ),
       },
       {
         name: "start_agent_run",
@@ -1093,7 +1163,7 @@ export class McpController {
       {
         name: "submit_checkpoint",
         description:
-          "Fill ONE slot of the Checkpoint Manifest of a run you started with start_agent_run: the screenshot you captured, your verdict on it, and your reasoning.\n\n`name` must be one of the Manifest's own names, spelled exactly. The Manifest is a closed set and anything else is refused — not to be awkward, but because a name that drifts between runs (`Dashboard loaded` this week, `dashboard-empty` last week) makes a test red forever for reasons that have nothing to do with the application.\n\n`reasoning` is REQUIRED and there is no polite default. You drove, and you are also the judge — Varys watched none of it, makes no model call of its own here, and holds no second opinion. Your rationale is the entire audit trail a human will read next to the two pictures, so write what you compared, what matched, and what you decided to overlook. \"Looks right\" is not reviewable.\n\nRead back what Varys actually RECORDED, because it is not always what your verdict asked for. A `pass` on a slot with no approved baseline is stored as `pending-baseline`: there was no golden to compare against, so the verdict is inert and your capture is a proposal awaiting a human's approval. Do not report such a slot as passing, however carefully you looked. A `fail` against a real baseline is stored as `diff` and stands — nothing retries it, and you must not re-capture the slot hoping for a kinder answer.\n\nCapture however you like; say how you did it in `capture` so a reviewer puzzling over two very different pictures can see whether they were even taken the same way.",
+          "Fill ONE slot of the Checkpoint Manifest of a run you started with start_agent_run: the screenshot you captured, your verdict on it, and your reasoning.\n\n`name` must be one of the Manifest's own names, spelled exactly. The Manifest is a closed set and anything else is refused — not to be awkward, but because a name that drifts between runs (`Dashboard loaded` this week, `dashboard-empty` last week) makes a test red forever for reasons that have nothing to do with the application.\n\n`reasoning` is REQUIRED and there is no polite default. You drove, and you are also the judge — Varys watched none of it, makes no model call of its own here, and holds no second opinion. Your rationale is the entire audit trail a human will read next to the two pictures, so write what you compared, what matched, and what you decided to overlook. \"Looks right\" is not reviewable.\n\nRead back what Varys actually RECORDED, because it is not always what your verdict asked for. A `pass` on a slot with no approved baseline is stored as `pending-baseline`: there was no golden to compare against, so the verdict is inert and your capture is a proposal awaiting a human's approval. Do not report such a slot as passing, however carefully you looked. A `fail` against a real baseline is stored as `diff` and stands — nothing retries it, and you must not re-capture the slot hoping for a kinder answer.\n\nCapture however you like; say how you did it in `capture` so a reviewer puzzling over two very different pictures can see whether they were even taken the same way. Write it to a file and send `imagePath` rather than base64 — a slot is filled exactly once, so a capture corrupted in transit is not something this run gets a second go at.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1103,10 +1173,7 @@ export class McpController {
               description:
                 "The Manifest slot this capture is for — exactly as start_agent_run named it.",
             },
-            image: {
-              type: "string",
-              description: "The screenshot: base64-encoded PNG bytes (a data: URL is fine too).",
-            },
+            ...imageArgs("the screenshot you captured", ctx),
             verdict: {
               type: "string",
               enum: ["pass", "fail"],
@@ -1128,17 +1195,22 @@ export class McpController {
               },
             },
           },
-          required: ["runId", "name", "image", "verdict", "reasoning"],
+          required: ["runId", "name", "verdict", "reasoning"],
         },
         handler: (args) =>
-          this.agentRun.submitCheckpoint({
-            runId: String(args.runId ?? ""),
-            name: String(args.name ?? ""),
-            image: String(args.image ?? ""),
-            verdict: args.verdict as AgentVerdict,
-            reasoning: String(args.reasoning ?? ""),
-            capture: (args.capture ?? undefined) as AgentCaptureMeta | undefined,
-          }),
+          this.agentRun.submitCheckpoint(
+            {
+              runId: String(args.runId ?? ""),
+              name: String(args.name ?? ""),
+              image: String(args.image ?? ""),
+              imagePath: String(args.imagePath ?? ""),
+              sha256: String(args.sha256 ?? ""),
+              verdict: args.verdict as AgentVerdict,
+              reasoning: String(args.reasoning ?? ""),
+              capture: (args.capture ?? undefined) as AgentCaptureMeta | undefined,
+            },
+            ctx,
+          ),
       },
       {
         name: "submit_evidence",
@@ -1148,20 +1220,25 @@ export class McpController {
           type: "object",
           properties: {
             runId: { type: "string", description: "The run start_agent_run gave you." },
-            image: { type: "string", description: "The screenshot: base64-encoded PNG bytes." },
+            ...imageArgs("the screenshot", ctx),
             note: {
               type: "string",
               description: "What this shows and why you kept it — the caption a reviewer reads first.",
             },
           },
-          required: ["runId", "image"],
+          required: ["runId"],
         },
         handler: (args) =>
-          this.agentRun.submitEvidence({
-            runId: String(args.runId ?? ""),
-            image: String(args.image ?? ""),
-            note: args.note === undefined ? undefined : String(args.note),
-          }),
+          this.agentRun.submitEvidence(
+            {
+              runId: String(args.runId ?? ""),
+              image: String(args.image ?? ""),
+              imagePath: String(args.imagePath ?? ""),
+              sha256: String(args.sha256 ?? ""),
+              note: args.note === undefined ? undefined : String(args.note),
+            },
+            ctx,
+          ),
       },
       {
         name: "finish_agent_run",

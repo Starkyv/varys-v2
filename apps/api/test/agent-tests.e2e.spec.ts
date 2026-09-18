@@ -1,5 +1,5 @@
 import "reflect-metadata";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { INestApplication } from "@nestjs/common";
@@ -12,7 +12,16 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
 import { authed, mcpToken, prepareAuth } from "./auth-harness";
 import { startTestDb, type TestDb } from "./db-harness";
-import { mcpCallTool, mcpRpc, mcpTool, mcpToolNames, pngBase64, pngFixture } from "./mcp-harness";
+import {
+  mcpCallTool,
+  mcpRpc,
+  mcpTool,
+  mcpToolNames,
+  pngBase64,
+  pngFixture,
+  pngSha256,
+  pngTruncated,
+} from "./mcp-harness";
 
 /**
  * Agent-Driven Tests — the authoring surface (no agent involved).
@@ -499,6 +508,177 @@ describe("Agent-Driven Tests — authoring", () => {
       expect(res.isError).toBe(true);
       expect(res.content[0]?.text).toMatch(/PNG/i);
       expect(await checkpointsOf(testId)).toEqual([]);
+    });
+
+    /**
+     * The capture arrives whole, or not at all.
+     *
+     * This is a regression suite for a real, silent data loss: a 10,871-byte screenshot was stored
+     * as 2,345 bytes with no error anywhere. `Buffer.from(s, "base64")` does not throw on a
+     * mangled string — Node decodes up to the first character outside the alphabet and returns
+     * the prefix — and the PNG SIGNATURE, the only thing then checked, lives in the first eight
+     * bytes and survives every truncation there is. So the artifact stored perfectly, passed
+     * every check, and rendered as half a picture.
+     *
+     * Two things made it unrecoverable rather than annoying. Nothing verified the bytes end to
+     * end; and a Checkpoint name is taken exactly once, so there was no second attempt at the
+     * slot. Hence both halves below: `imagePath`, which keeps the bytes out of the model's output
+     * altogether, and the end-to-end checks that make a corrupt upload a refusal instead of a row.
+     */
+    describe("the capture arrives whole, or not at all", () => {
+      /** The bytes as they exist on the agent's own disk, before any encoding. */
+      const capture = pngFixture("dashboard");
+
+      const writeCapture = async (name: string, bytes = capture): Promise<string> => {
+        const path = join(storageDir, `${name}.png`);
+        await writeFile(path, bytes);
+        return path;
+      };
+
+      it("refuses base64 that was cut short, which the signature alone cannot detect", async () => {
+        const { testId } = await create("truncated in transit");
+
+        // A valid header, real content, and no end — byte for byte what a clipped base64 string
+        // decodes to. Before the IEND check this was stored, and looked entirely fine.
+        const half = pngTruncated("dashboard");
+        expect(half.subarray(0, 8)).toEqual(capture.subarray(0, 8)); // the signature survived
+
+        const res = await addCp(testId, "dashboard", { image: half.toString("base64") });
+        expect(res.isError).toBe(true);
+        expect(res.content[0]?.text).toMatch(/TRUNCATED/);
+
+        expect(await checkpointsOf(testId)).toEqual([]);
+        expect(await storage.get(`drafts/${testId}/dashboard/preview.png`)).toBeNull();
+      });
+
+      it("refuses base64 carrying a stray character rather than decoding the part before it", async () => {
+        const { testId } = await create("corrupt in transit");
+        const b64 = capture.toString("base64");
+
+        const res = await addCp(testId, "dashboard", {
+          image: `${b64.slice(0, 4)}!${b64.slice(5)}`,
+        });
+        expect(res.isError).toBe(true);
+        expect(res.content[0]?.text).toMatch(/not valid base64/);
+        expect(await checkpointsOf(testId)).toEqual([]);
+      });
+
+      it("refuses base64 whose length cannot encode any whole number of bytes", async () => {
+        const { testId } = await create("length is wrong");
+        const res = await addCp(testId, "dashboard", {
+          image: `${capture.toString("base64").replace(/=+$/, "")}A`,
+        });
+        expect(res.isError).toBe(true);
+        expect(res.content[0]?.text).toMatch(/cut short/);
+        expect(await checkpointsOf(testId)).toEqual([]);
+      });
+
+      it("takes the file itself from imagePath, so the bytes never pass through the model", async () => {
+        const { testId } = await create("read it off disk");
+        const path = await writeCapture("from-disk");
+
+        const res = await addCp(testId, "dashboard", { image: "", imagePath: path });
+        expect(res.isError, res.content[0]?.text).toBeFalsy();
+
+        const stored = await storage.get(`drafts/${testId}/dashboard/preview.png`);
+        expect(stored?.equals(capture)).toBe(true);
+      });
+
+      it("refuses a relative imagePath, which would resolve against the server's cwd", async () => {
+        const { testId } = await create("relative path");
+        const res = await addCp(testId, "dashboard", { image: "", imagePath: "./shot.png" });
+        expect(res.isError).toBe(true);
+        expect(res.content[0]?.text).toMatch(/ABSOLUTE/);
+        expect(await checkpointsOf(testId)).toEqual([]);
+      });
+
+      it("refuses an imagePath that is not there, rather than writing a row about nothing", async () => {
+        const { testId } = await create("no such file");
+        const res = await addCp(testId, "dashboard", {
+          image: "",
+          imagePath: join(storageDir, "never-captured.png"),
+        });
+        expect(res.isError).toBe(true);
+        expect(res.content[0]?.text).toMatch(/no such file/);
+        expect(await checkpointsOf(testId)).toEqual([]);
+      });
+
+      it("refuses both sources at once — two of them is no answer to which was stored", async () => {
+        const { testId } = await create("one source only");
+        const path = await writeCapture("both");
+        const res = await addCp(testId, "dashboard", { image: pngBase64("other"), imagePath: path });
+        expect(res.isError).toBe(true);
+        expect(res.content[0]?.text).toMatch(/EITHER/);
+        expect(await checkpointsOf(testId)).toEqual([]);
+      });
+
+      it("refuses imagePath from a client that is not on this machine", async () => {
+        const { testId } = await create("not your filesystem");
+        const path = await writeCapture("someone-elses");
+
+        // A forwarding header means the socket peer is a proxy and the real client is elsewhere —
+        // so the path would name a file on the SERVER. Disqualifying, not merely unhelpful.
+        const res = await request(app.getHttpServer())
+          .post("/mcp")
+          .set("Authorization", `Bearer ${mcpToken()}`)
+          .set("X-Forwarded-For", "203.0.113.7")
+          .send({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "tools/call",
+            params: {
+              name: "add_agent_checkpoint",
+              arguments: {
+                testId,
+                name: "dashboard",
+                instructions: "Drive to dashboard.",
+                comparePrompt: "The dashboard is on screen.",
+                imagePath: path,
+              },
+            },
+          })
+          .expect(200);
+
+        const result = res.body.result as { isError?: boolean; content: { text?: string }[] };
+        expect(result.isError).toBe(true);
+        expect(result.content[0]?.text).toMatch(/same machine/);
+        expect(await checkpointsOf(testId)).toEqual([]);
+      });
+
+      it("verifies a sha256 the agent sends with its base64, and stores nothing when it differs", async () => {
+        const { testId } = await create("hash checked");
+
+        const wrong = await addCp(testId, "dashboard", {
+          image: pngBase64("dashboard"),
+          sha256: pngSha256(pngFixture("a different capture entirely")),
+        });
+        expect(wrong.isError).toBe(true);
+        expect(wrong.content[0]?.text).toMatch(/does not match the `sha256`/);
+        expect(await checkpointsOf(testId)).toEqual([]);
+
+        const right = await addCp(testId, "dashboard", {
+          image: pngBase64("dashboard"),
+          sha256: pngSha256(capture),
+        });
+        expect(right.isError, right.content[0]?.text).toBeFalsy();
+        expect((await checkpointsOf(testId)).map((c) => c.name)).toEqual(["dashboard"]);
+      });
+
+      it("offers the path and the hash in the tool schema, and requires neither source by name", async () => {
+        const res = await mcpRpc(app, mcpToken(), "tools/list", {}).expect(200);
+        const tools = res.body.result.tools as ToolDescriptor[];
+
+        for (const name of ["add_agent_checkpoint", "submit_checkpoint", "submit_evidence"]) {
+          const tool = tools.find((t) => t.name === name);
+          expect(tool, name).toBeDefined();
+          expect(Object.keys(tool!.inputSchema.properties ?? {}), name).toEqual(
+            expect.arrayContaining(["image", "imagePath", "sha256"]),
+          );
+          // `image` cannot be a required property once a path will do — the refusal for sending
+          // neither lives in `decodePng`, where it can say which of the two to send.
+          expect(tool!.inputSchema.required, name).not.toContain("image");
+        }
+      });
     });
 
     it("refuses two Checkpoints with the same name on one test, in the database", async () => {

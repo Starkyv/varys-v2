@@ -11,6 +11,7 @@ import { AppModule } from "../src/app.module";
 import { AgentTestsService } from "../src/tests/agent-tests.service";
 import { TestsService } from "../src/tests/tests.service";
 import { startTestDb, type TestDb } from "./db-harness";
+import { pngFixture } from "./mcp-harness";
 
 /**
  * Slice 14 (Issue 5) — the Draft lifecycle, chromium-free. Seeds a draft through the
@@ -133,11 +134,7 @@ describe("Draft lifecycle", () => {
    * Checkpoint journey would arrive wearing the badge of the thing it is furthest from.
    */
   describe("an Agent-Driven Draft in the queue", () => {
-    const png = (marker: string) =>
-      Buffer.concat([
-        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-        Buffer.from(marker),
-      ]);
+    const png = pngFixture;
 
     const AUTHORED = "App is on http://localhost:3000. Sign in as qa@acme.io / hunter2.";
 

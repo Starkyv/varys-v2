@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { INestApplication } from "@nestjs/common";
 import request from "supertest";
 import { expect } from "vitest";
@@ -82,13 +83,30 @@ export async function mcpToolNames(app: INestApplication, token: string): Promis
   return (res.body.result.tools as { name: string }[]).map((t) => t.name);
 }
 
-/** A PNG, as far as anything in these paths is concerned: the real 8-byte signature plus a
- *  marker, so two captures are distinguishable without pulling in an encoder. */
+/** A PNG, as far as anything in these paths is concerned: the real 8-byte signature, a marker so
+ *  two captures are distinguishable without pulling in an encoder, and the real IEND chunk.
+ *
+ *  The terminator is not decoration. `decodePng` requires it precisely because the SIGNATURE
+ *  survives truncation and IEND does not, so a fixture without one is a fixture that can only
+ *  exercise the refusal — see `pngTruncated`, which is that same fixture with the end cut off. */
 export function pngFixture(marker: string): Buffer {
   return Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     Buffer.from(marker),
+    Buffer.from([0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82]),
   ]);
+}
+
+/** What a capture cut short in transit looks like: a real header, real content, and no end —
+ *  byte-for-byte what `Buffer.from(truncatedBase64, "base64")` hands back without complaint. */
+export function pngTruncated(marker: string): Buffer {
+  const whole = pngFixture(marker);
+  return whole.subarray(0, whole.length - 12);
+}
+
+/** The hex SHA-256 an agent would compute over the file it is about to send. */
+export function pngSha256(bytes: Buffer): string {
+  return createHash("sha256").update(bytes).digest("hex");
 }
 
 /** {@link pngFixture} as the base64 an MCP tool argument carries. */
