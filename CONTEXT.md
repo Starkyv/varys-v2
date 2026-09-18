@@ -45,11 +45,13 @@ separate per-environment gate.
 _Avoid_: publish; approve (reserved for baseline/checkpoint approval)
 
 **Bridge Helper**:
-A small process the user runs locally that launches the Claude authoring agent (Claude
-Agent SDK) under their **own** Claude subscription and relays its conversation + tool
-activity to the Varys web app — so in-product authoring is billed to the user's
-subscription, not Varys. Distinct from the Authoring Session (the server-side browser it
-drives).
+A small process the user runs locally that launches Claude (Claude Agent SDK) under their
+**own** Claude subscription and relays its conversation + tool activity to the Varys web
+app — so what it does is billed to the user's subscription, not Varys. It launches Claude
+for two jobs: authoring a test, and walking an **Agent-Driven Test** when the person
+presses Run in Varys. Varys reaches it by pushing a command down a channel the helper
+itself opened, which is why running one is something the user can stop at any moment.
+Distinct from the Authoring Session (the server-side browser it drives).
 _Avoid_: agent, daemon, connector
 
 **Author with AI**:
@@ -150,8 +152,11 @@ _Avoid_: skipped, not captured, incomplete
 
 **Agent Run Session**:
 One execution of an Agent-Driven Test, started by a person asking their own local Claude to run
-it. Varys supplies no browser and sees no driving: Claude reaches each state with whatever it
-judges best — Chrome DevTools, Playwright, computer use — and captures however it likes.
+it — directly, or by asking Varys to ask it (the Run control on the test, which reaches their
+paired **Bridge Helper**). Either way it is still their Claude, their machine and their
+subscription; what differs is only which finger starts it. Varys supplies no browser and sees no
+driving: Claude reaches each state with whatever it judges best — Chrome DevTools, Playwright,
+computer use — and captures however it likes.
 Varys's surface is **reporting, not driving**: it hands over the composed AI Instructions, the
 Checkpoint Manifest and the approved baselines, and takes back an image, a verdict and a
 reasoning per slot. What Claude may not do is the bookkeeping it would be grading itself on:

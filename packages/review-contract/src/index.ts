@@ -1328,9 +1328,53 @@ export type BridgeEvent =
   | { type: "tool"; name: string; detail?: string }
   | { type: "status"; helperConnected: boolean; sessionId: string | null };
 
-/** A command the web sends down to the Bridge Helper (server → helper). Prompts only for now;
- *  cancel/interrupt arrive in a later slice. */
-export type BridgeCommand = { type: "prompt"; text: string };
+/**
+ * A command the web sends down to the Bridge Helper (server → helper).
+ *
+ *  - `prompt` — a chat turn for **Author with AI** (Slice 15).
+ *  - `run-agent-test` — start an **Agent Run Session** on an Agent-Driven Test (Slice 17). It
+ *    carries the test id and the chosen environment id and NOTHING else: no AI Instructions, no
+ *    Checkpoint Manifest, no baselines. Those are what `start_agent_run` returns, and a second
+ *    copy travelling down here is a second copy that can disagree with the first. Naming the test
+ *    by id rather than by a sentence is the whole point — it removes the class of failure where a
+ *    typed prompt reaches a different test than the one that was clicked.
+ *
+ * `environmentId` is `null` when the request named no environment. Null means "none was chosen",
+ * never "pick one" — the helper passes it straight through, and `start_agent_run` resolves the
+ * `default` fallback exactly as it does for a session started by hand.
+ *
+ * cancel/interrupt arrive in a later slice.
+ */
+export type BridgeCommand =
+  | { type: "prompt"; text: string }
+  | { type: "run-agent-test"; testId: string; environmentId: string | null };
+
+/**
+ * Whether the signed-in user has a **Bridge Helper** on the other end of a command stream right
+ * now — what the Run control on an Agent-Driven Test is live or disabled by.
+ *
+ * Owner-scoped and process-local, like the rest of the relay's state. A user with several chats
+ * open has several helpers; `chatId` names the one a run request would travel down (the most
+ * recently connected), so the answer and the destination cannot drift apart.
+ */
+export interface BridgeHelperPresence {
+  /** True when at least one bridge this user owns has a helper holding its command stream. */
+  helperConnected: boolean;
+  /** The chat a run request would reach, or null when no helper is paired. */
+  chatId: string | null;
+}
+
+/** Asking Varys to ask your own Claude to run an Agent-Driven Test (web → server). Omit
+ *  `environmentId` to run against no environment. */
+export interface AgentRunRequestBody {
+  testId: string;
+  environmentId?: string;
+}
+
+/** Which paired helper the run request was handed to. */
+export interface AgentRunRequestResult {
+  chatId: string;
+}
 
 /** What the Bridge Helper POSTs up to the relay (helper → server). `assistant`/`tool` are
  *  mirrored to the web verbatim; `session` correlates the Authoring Session and the relay turns

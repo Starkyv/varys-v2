@@ -98,6 +98,18 @@ export interface AgentFinishResult {
   note: string;
 }
 
+/** The test row `assertRunnable` proves is an Agent-Driven Test, as `start` goes on to use it. */
+type RunnableAgentTest = {
+  id: string;
+  name: string;
+  kind: string | null;
+  intent: string | null;
+  leaseSeconds: number;
+};
+
+/** One `agent_checkpoints` row, in Manifest order. */
+type AgentCheckpointRow = typeof agentCheckpoints.$inferSelect;
+
 /** What starting an Agent Run Session hands back: everything the run needs, in one call. */
 export interface AgentRunSession {
   runId: string;
@@ -169,19 +181,23 @@ export class AgentRunService {
     @Inject(AgentInstructionsService) private readonly instructions: AgentInstructionsService,
   ) {}
 
-  /** Open a session on an Agent-Driven Test against an environment. */
-  async start(
-    testId: string,
-    opts: {
-      environmentId?: string;
-      /** Who started it — an email for a person, a `Repair Agent "…"` label for a credential. */
-      actor: string;
-      /** Which issuer that actor came from, so the run records HOW it was triggered and not just
-       *  by whom. A drainer's run is a deliberately-granted machine action, and filing it under
-       *  `manual` would bury the one thing the run capability exists to make visible. */
-      actorKind: "user" | "agent";
-    },
-  ): Promise<AgentRunSession> {
+  /**
+   * The three things that make a test unrunnable by an agent, checked and reported — before any
+   * work is done and, on the request path, before a Claude is launched at all.
+   *
+   * Shared by `start` and by the Varys-side run request, deliberately: the request exists to fail
+   * early rather than to spend a person's subscription discovering what this method already
+   * knows, and two code paths answering "is this runnable?" differently is exactly the drift that
+   * would make the early refusal a lie.
+   *
+   * Every refusal names the test and says what to do instead, because the reader is as likely to
+   * be a person who clicked Run as an agent reading a tool error.
+   */
+  async assertRunnable(testId: string): Promise<{
+    id: string;
+    test: RunnableAgentTest;
+    checkpoints: AgentCheckpointRow[];
+  }> {
     const id = (testId ?? "").trim();
     if (!id) {
       throw new BadRequestException(
@@ -223,6 +239,24 @@ export class AgentRunService {
         `"${test.name}" has no checkpoints, so there is nothing for this run to reach or compare. Add at least one checkpoint to the test in Varys first.`,
       );
     }
+
+    return { id, test, checkpoints };
+  }
+
+  /** Open a session on an Agent-Driven Test against an environment. */
+  async start(
+    testId: string,
+    opts: {
+      environmentId?: string;
+      /** Who started it — an email for a person, a `Repair Agent "…"` label for a credential. */
+      actor: string;
+      /** Which issuer that actor came from, so the run records HOW it was triggered and not just
+       *  by whom. A drainer's run is a deliberately-granted machine action, and filing it under
+       *  `manual` would bury the one thing the run capability exists to make visible. */
+      actorKind: "user" | "agent";
+    },
+  ): Promise<AgentRunSession> {
+    const { id, test, checkpoints } = await this.assertRunnable(testId);
 
     const env = await this.instructions.resolveEnvironment(opts.environmentId);
 

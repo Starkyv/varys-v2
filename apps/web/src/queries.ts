@@ -19,6 +19,8 @@ import {
   deleteAgentCheckpoint,
   fetchAgentCheckpoints,
   fetchAgentInstructions,
+  fetchBridgeHelperPresence,
+  requestAgentRun,
   reorderAgentCheckpoints,
   updateAgentCheckpoint,
   approveAllInRun,
@@ -622,6 +624,42 @@ export function useAgentInstructions(
     queryKey: agentInstructionsQueryKey(testId, environmentId),
     queryFn: () => fetchAgentInstructions(testId, environmentId ?? undefined),
     enabled: opts?.enabled ?? true,
+  });
+}
+
+/** Whether a Bridge Helper is listening for this user's commands. */
+export function bridgeHelperQueryKey() {
+  return ["bridge-helper"] as const;
+}
+
+/**
+ * Whether this user has a Bridge Helper paired right now — what the Run control on an
+ * Agent-Driven Test is live or disabled by.
+ *
+ * Polled rather than streamed: the helper is a process on somebody's laptop that comes and goes,
+ * and a Run button that stays dead until a reload is the failure this exists to avoid. Fetched
+ * only where it is asked for, since most of the app has no use for it.
+ */
+export function useBridgeHelper(opts?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: bridgeHelperQueryKey(),
+    queryFn: () => fetchBridgeHelperPresence(),
+    enabled: opts?.enabled ?? true,
+    refetchInterval: 5000,
+  });
+}
+
+/**
+ * Ask your own Claude to run an Agent-Driven Test.
+ *
+ * Nothing is invalidated on success, and that is not an omission: pressing Run creates no Run, no
+ * reservation and no row. The run appears in the list when Claude calls `start_agent_run`, which
+ * the runs list is already polling for.
+ */
+export function useRequestAgentRun() {
+  return useMutation({
+    mutationFn: (vars: { testId: string; environmentId?: string }) =>
+      requestAgentRun(vars.testId, vars.environmentId),
   });
 }
 

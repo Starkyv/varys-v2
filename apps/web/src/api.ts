@@ -1,8 +1,10 @@
 import type {
   AgentCredentialSummary,
   AuthoringInstructionsView,
+  AgentRunRequestResult,
   AuthoringSessionSummary,
   BridgeChatState,
+  BridgeHelperPresence,
   CreateAgentCredentialRequest,
   CreatedAgentCredential,
   DashboardView,
@@ -135,6 +137,43 @@ export async function createBridge(): Promise<BridgeChatState> {
     throw new Error(`Failed to start an authoring session (${res.status})`);
   }
   return (await res.json()) as BridgeChatState;
+}
+
+/**
+ * Whether this user has a Bridge Helper listening right now (Slice 17).
+ *
+ * Owner-scoped and carries no chat id, because the Run control on a test page is nowhere near a
+ * chat: the server answers for whoever is signed in.
+ */
+export async function fetchBridgeHelperPresence(): Promise<BridgeHelperPresence> {
+  const res = await fetch(`${API_BASE}/authoring/bridge/helper`);
+  if (!res.ok) {
+    throw new Error(await errorMessage(res, "Failed to check for a Bridge Helper"));
+  }
+  return (await res.json()) as BridgeHelperPresence;
+}
+
+/**
+ * Ask your own Claude to run an Agent-Driven Test (Slice 17).
+ *
+ * This creates no Run. The Run comes into existence when Claude calls `start_agent_run` — so a
+ * resolved promise means the request reached a paired helper, not that anything has started.
+ * The server's refusal message is the whole content of a failure here (pinned test, empty
+ * Checkpoint Manifest, no helper paired), so it is surfaced verbatim.
+ */
+export async function requestAgentRun(
+  testId: string,
+  environmentId?: string,
+): Promise<AgentRunRequestResult> {
+  const res = await fetch(`${API_BASE}/authoring/bridge/run-agent-test`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ testId, environmentId }),
+  });
+  if (!res.ok) {
+    throw new Error(await errorMessage(res, "Failed to ask your Claude to run this test"));
+  }
+  return (await res.json()) as AgentRunRequestResult;
 }
 
 /** Send a prompt down to the paired Bridge Helper for this chat (Slice 15). */

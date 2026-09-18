@@ -1,8 +1,16 @@
 import { Body, Controller, Get, Headers, Inject, type MessageEvent, Param, Post, Sse } from "@nestjs/common";
-import type { BridgeChatState, BridgeHelperEvent, BridgePairResult } from "@varys/review-contract";
+import type {
+  AgentRunRequestBody,
+  AgentRunRequestResult,
+  BridgeChatState,
+  BridgeHelperEvent,
+  BridgeHelperPresence,
+  BridgePairResult,
+} from "@varys/review-contract";
 import { interval, map, merge, type Observable } from "rxjs";
 import { type AuthUser, CurrentUser } from "../auth/current-user.decorator";
 import { Public } from "../auth/public.decorator";
+import { AgentRunService } from "./agent-run.service";
 import { BridgeService } from "./bridge.service";
 
 /** Periodic SSE heartbeat (a `ping` the clients ignore) so idle proxies don't drop the stream. */
@@ -15,12 +23,24 @@ function heartbeat(): Observable<MessageEvent> {
  *  - helper side (`pair`, `helper/commands`, `helper/events`) — `@Public()` to the cookie guard
  *    because the helper has no browser session, but gated by the one-time pairing code → a
  *    chat-scoped bridge token. Declared first so the literal paths take precedence over `:chatId`.
- *  - web side (`POST /`, `:chatId`, `:chatId/prompt`, `:chatId/stream`) — cookie-authenticated and
- *    owner-scoped (the controller passes the better-auth user id to the service).
+ *  - web side (`POST /`, `helper`, `run-agent-test`, `:chatId`, `:chatId/prompt`, `:chatId/stream`)
+ *    — cookie-authenticated and owner-scoped (the controller passes the better-auth user id to
+ *    the service).
+ *
+ * Slice 17 adds the two web-side routes an Agent-Driven Test's Run control needs: `helper` (is
+ * one listening?) and `run-agent-test` (ask it to run this). Both are addressed by owner, never
+ * by chat id.
  */
 @Controller("authoring/bridge")
 export class BridgeController {
-  constructor(@Inject(BridgeService) private readonly bridge: BridgeService) {}
+  constructor(
+    @Inject(BridgeService) private readonly bridge: BridgeService,
+    // Answers "is this test runnable by an agent at all?" — the SAME method `start_agent_run`
+    // asks, so the refusal a person gets on the button and the refusal their Claude would have
+    // got a minute later cannot disagree. Checked here purely to fail before a Claude is
+    // launched and subscription time is spent discovering it.
+    @Inject(AgentRunService) private readonly agentRuns: AgentRunService,
+  ) {}
 
   // ── helper side (pairing-code / bridge-token gated) ──
 
@@ -50,10 +70,38 @@ export class BridgeController {
   }
 
   // ── web side (cookie-authenticated, owner-scoped) ──
+  // The literal paths below are declared BEFORE `:chatId`, or Nest would match `helper` and
+  // `run-agent-test` as chat ids.
 
   @Post()
   create(@CurrentUser() user: AuthUser): BridgeChatState {
     return this.bridge.create(user.id);
+  }
+
+  /** Whether this user has a helper listening — what the Run control on an Agent-Driven Test is
+   *  live or disabled by. */
+  @Get("helper")
+  helper(@CurrentUser() user: AuthUser): BridgeHelperPresence {
+    return this.bridge.helperPresence(user.id);
+  }
+
+  /**
+   * Ask your own Claude to run an Agent-Driven Test.
+   *
+   * There is no chat id in the request and deliberately so: the destination is derived from who
+   * is signed in, so a request cannot address a helper the sender did not pair. Refusals are
+   * distinguishable — 404 for an unknown test, 400 for a pinned one or an empty Checkpoint
+   * Manifest, 409 for no paired helper, 401 for no session at all.
+   */
+  @Post("run-agent-test")
+  async runAgentTest(
+    @CurrentUser() user: AuthUser,
+    @Body() body: AgentRunRequestBody,
+  ): Promise<AgentRunRequestResult> {
+    const testId = String(body?.testId ?? "");
+    await this.agentRuns.assertRunnable(testId);
+    const environmentId = String(body?.environmentId ?? "").trim() || null;
+    return this.bridge.requestAgentRun(user.id, { testId: testId.trim(), environmentId });
   }
 
   @Get(":chatId")

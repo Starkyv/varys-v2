@@ -1,10 +1,17 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { Injectable, Logger, NotFoundException, UnauthorizedException } from "@nestjs/common";
+import {
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  UnauthorizedException,
+} from "@nestjs/common";
 import type {
   BridgeChatState,
   BridgeCommand,
   BridgeEvent,
   BridgeHelperEvent,
+  BridgeHelperPresence,
   BridgePairResult,
 } from "@varys/review-contract";
 import { Observable, Subject } from "rxjs";
@@ -22,10 +29,13 @@ interface BridgeChat {
   /** Chat-scoped secret the paired helper presents; null until paired. */
   bridgeToken: string | null;
   helperConnected: boolean;
+  /** Unix ms the helper last took hold of the command stream — how the newest of several paired
+   *  helpers is picked when a run request has to choose one. */
+  helperConnectedAt: number | null;
   sessionId: string | null;
   /** Events to the web chat (mirrored conversation + relay-owned status). */
   toWeb: Subject<BridgeEvent>;
-  /** Commands down to the helper (prompts). */
+  /** Commands down to the helper (chat prompts, and requests to run an Agent-Driven Test). */
   toHelper: Subject<BridgeCommand>;
 }
 
@@ -40,6 +50,11 @@ interface BridgeChat {
  * Auth is split: the web side is owner-scoped by the better-auth session (the controller passes
  * the user id); the helper side is gated by a one-time pairing code (→ a chat-scoped bridge
  * token), so the helper needs no browser cookie — like `/mcp`, but scoped and authenticated.
+ *
+ * Slice 17 widens the downward channel from prompts to prompts-and-run-requests. No new
+ * credential and no new transport: a run request reuses both halves of that split unchanged, so
+ * it can only ever be sent by the signed-in owner and can only ever reach a helper they
+ * themselves paired.
  */
 @Injectable()
 export class BridgeService {
@@ -59,6 +74,7 @@ export class BridgeService {
       pairingExpiresAt: Date.now() + PAIRING_TTL_MS,
       bridgeToken: null,
       helperConnected: false,
+      helperConnectedAt: null,
       sessionId: null,
       toWeb: new Subject<BridgeEvent>(),
       toHelper: new Subject<BridgeCommand>(),
@@ -97,6 +113,47 @@ export class BridgeService {
     const trimmed = text.trim();
     if (!trimmed) return;
     chat.toHelper.next({ type: "prompt", text: trimmed });
+  }
+
+  /**
+   * Whether this user has a Bridge Helper listening right now, and which chat it is on.
+   *
+   * Addressed by OWNER rather than by chat id, because the Run control on a test page is nowhere
+   * near a chat and has no id to quote. That is also what makes reaching somebody else's helper
+   * unrepresentable rather than merely forbidden: there is no field in which to name one.
+   */
+  helperPresence(ownerId: string): BridgeHelperPresence {
+    const chat = this.newestConnected(ownerId);
+    return { helperConnected: chat != null, chatId: chat?.chatId ?? null };
+  }
+
+  /**
+   * Ask this user's own Claude to run an Agent-Driven Test (web side).
+   *
+   * Nothing durable is written here and none is meant to be: the Run comes into existence when
+   * Claude calls `start_agent_run`, which is where the `missing` rows are seeded and the
+   * Wall-Clock Lease is stamped. A Run created at the press would be a Run with no session behind
+   * it, and a wedged helper would leave it sitting as a failure nobody ever attempted.
+   *
+   * Returns the chat it was handed to, so the caller can say WHICH helper heard it.
+   */
+  requestAgentRun(
+    ownerId: string,
+    request: { testId: string; environmentId: string | null },
+  ): { chatId: string } {
+    const chat = this.newestConnected(ownerId);
+    if (!chat) {
+      throw new ConflictException(
+        "No Bridge Helper is paired, so there is nothing on your machine to run this. Start one from Author with AI and pair it, then press Run again.",
+      );
+    }
+    chat.toHelper.next({
+      type: "run-agent-test",
+      testId: request.testId,
+      environmentId: request.environmentId,
+    });
+    this.log.log(`bridge ${chat.chatId} asked to run agent test ${request.testId}`);
+    return { chatId: chat.chatId };
   }
 
   /** Events the web chat consumes: a current-status snapshot first, then live events. */
@@ -138,9 +195,20 @@ export class BridgeService {
 
   // ── internals ──────────────────────────────────────────────────────────────────────
 
+  /** The owner's most recently connected helper chat, or undefined when none is listening. */
+  private newestConnected(ownerId: string): BridgeChat | undefined {
+    let best: BridgeChat | undefined;
+    for (const chat of this.chats.values()) {
+      if (chat.ownerId !== ownerId || !chat.helperConnected) continue;
+      if (!best || (chat.helperConnectedAt ?? 0) > (best.helperConnectedAt ?? 0)) best = chat;
+    }
+    return best;
+  }
+
   private setHelperConnected(chat: BridgeChat, connected: boolean): void {
     if (chat.helperConnected === connected) return;
     chat.helperConnected = connected;
+    chat.helperConnectedAt = connected ? Date.now() : null;
     this.emitStatus(chat);
     this.log.log(`bridge ${chat.chatId} helper ${connected ? "connected" : "disconnected"}`);
   }

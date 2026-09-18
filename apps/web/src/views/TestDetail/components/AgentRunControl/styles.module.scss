@@ -1,0 +1,63 @@
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+  padding: var(--space-20);
+}
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-16);
+}
+
+.title {
+  margin: 0;
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+}
+
+.hint {
+  margin: var(--space-4) 0 0;
+  max-width: 62ch;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+/* Why the button is dead, said where the button is. A disabled control whose reason lives
+   elsewhere on the page is a control nobody finds the reason for. */
+.blocked {
+  display: flex;
+  align-items: center;
+  gap: var(--space-10);
+  padding: var(--space-12) var(--space-16);
+  border: 1px solid var(--color-warning-soft);
+  border-radius: var(--radius-lg);
+  background: var(--color-warning-soft);
+  color: var(--color-warning-fg);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+
+  > span {
+    flex: 1;
+  }
+}
+
+.field {
+  margin-bottom: var(--space-16);
+}
+
+.label {
+  display: block;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-strong);
+}
+
+.fieldHint {
+  margin: var(--space-4) 0 var(--space-8);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}

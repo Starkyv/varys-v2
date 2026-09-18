@@ -66,6 +66,7 @@ import {
   useUpdateTest,
   useVerifyLocator,
 } from "../../queries";
+import { AgentRunControl } from "./components/AgentRunControl";
 import { AgentTestEditor, AgentTestNotice } from "./components/AgentTestEditor";
 import styles from "./styles.module.scss";
 
@@ -186,6 +187,7 @@ export function TestDetail({ testId }: { testId: string }) {
           </Badge>
         </div>
         <AgentTestNotice />
+        <AgentRunControl config={config.data} />
         <AgentTestEditor key={config.data.id} config={config.data} />
       </div>
     );
