@@ -1,5 +1,4 @@
 import { Module } from "@nestjs/common";
-import { AgentCredentialsModule } from "./agent-credentials/agent-credentials.module";
 import { ArtifactsModule } from "./artifacts/artifacts.module";
 import { AuthModule } from "./auth/auth.module";
 import { AuthoringModule } from "./authoring/authoring.module";
@@ -34,7 +33,6 @@ import { TestsModule } from "./tests/tests.module";
     DashboardModule,
     AuthoringModule,
     SettingsModule,
-    AgentCredentialsModule,
     SchedulesModule,
   ],
 })

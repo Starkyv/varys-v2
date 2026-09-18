@@ -63,10 +63,10 @@ export interface McpRunResult {
  * out whether it worked. The fix and the proof of the fix were in different hands, which is a poor
  * place to leave a conversation that began "this test is broken, fix it".
  *
- * It is deliberately NOT on the Repair Agent's toolset. A drainer that could trigger runs could sit
- * in an unattended fix-and-retry loop, burning replays against a real app until something goes
- * green — and "went green eventually" is exactly the evidence the review gate refuses to accept.
- * An unattended repair's re-run is queued by Varys itself, once, after the repair is reported.
+ * Reachable by every caller, because there is only one: a person, asking their own Claude. The
+ * loop this closes is theirs to watch, and the thing that once made an automatic re-run dangerous
+ * — an unattended agent grinding fix-and-retry until something went green — has no principal left
+ * to be performed by (ADR-0008).
  *
  * Two things this can never do, and the `note` says both rather than leaving them to be inferred:
  * approve a baseline (a human's, per DESIGN §4 — approving deletes the previous golden with no

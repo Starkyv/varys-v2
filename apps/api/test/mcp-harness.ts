@@ -10,8 +10,8 @@ import { expect } from "vitest";
  *
  * It sits beside `auth-harness` (which mints the bearer token these calls carry) and
  * `db-harness` (which supplies the Postgres they write to), and holds no state of its own: every
- * function takes the app and the token, so one spec can drive `/mcp` as several principals —
- * a human, a Repair Agent, a second user — without any of them being implicit.
+ * function takes the app and the token, so one spec can drive `/mcp` as more than one person
+ * without either of them being implicit.
  *
  * The PNG fixture lives here for the same reason. Every `/mcp` surface that takes a screenshot
  * validates the signature bytes before storing anything, so a spec that hand-rolls a fake image

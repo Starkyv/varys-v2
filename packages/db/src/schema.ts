@@ -644,46 +644,6 @@ export const appSettings = pgTable("app_settings", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
-/**
- * A Repair Agent credential (Slice 19, slice 02 — ADR-0005): the long-lived secret an unattended
- * drainer presents on `/mcp` in place of the browser OAuth leg a human completes.
- *
- * The row stores only the SHA-256 of the token — provisioning is the one and only time the secret
- * exists in readable form, so a leaked database yields nothing presentable. `tokenHint` is the
- * token's last four characters, which is what lets an admin tell two credentials apart in the
- * management surface without the secret being recoverable.
- *
- * `expiresAt` is mandatory (ADR-0005 makes expiry load-bearing, not optional), `revokedAt` is the
- * one-click kill switch, and `lastUsedAt` is the only signal an admin has that a credential is
- * still in use — which is why it is written on every successful presentation.
- */
-export const agentCredentials = pgTable("agent_credentials", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  /** Human label — also the ATTRIBUTION a repaired version carries (`Repair Agent "<label>"`). */
-  label: text("label").notNull(),
-  /** SHA-256 hex of the presented token. Unique, and the only stored form of the secret. */
-  tokenHash: text("token_hash").notNull().unique(),
-  /** Last 4 characters of the token, for recognition in the management surface. */
-  tokenHint: text("token_hint").notNull(),
-  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-  revokedAt: timestamp("revoked_at", { withTimezone: true }),
-  lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
-  /**
-   * May this credential START an Agent Run Session? **Off by default, and re-provisioned rather
-   * than toggled** — a capability an admin grants deliberately, per credential.
-   *
-   * Default-off for the same reason `run_test` is absent from the repair toolset altogether: a
-   * drainer that can start runs can sit in a fix-and-retry loop until something goes green, and
-   * "went green eventually" is precisely the evidence the review gate exists to refuse. The
-   * capability exists because an operator may genuinely want a machine-driven agent run; it is
-   * off so that nobody gets one by accident.
-   */
-  canStartAgentRuns: boolean("can_start_agent_runs").notNull().default(false),
-  /** The admin who provisioned it (email) — provisioning is an audited human act. */
-  createdBy: text("created_by").notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-});
-
 export const schema = {
   folders,
   tests,
@@ -704,7 +664,6 @@ export const schema = {
   draftPreviews,
   testSchedules,
   appSettings,
-  agentCredentials,
   agentCheckpoints,
 };
 
@@ -1034,26 +993,6 @@ DELETE FROM run_results a USING run_results b
   WHERE a.run_id = b.run_id AND a.checkpoint_name = b.checkpoint_name
     AND (a.created_at < b.created_at OR (a.created_at = b.created_at AND a.id < b.id));
 CREATE UNIQUE INDEX IF NOT EXISTS run_results_run_checkpoint_uq ON run_results (run_id, checkpoint_name);
--- Repair Agent credentials (Slice 19, slice 02 / ADR-0005): the second issuer on /mcp, for an
--- unattended drainer that cannot complete the browser OAuth leg. Only the token's SHA-256 is
--- stored, so the secret is unrecoverable after provisioning; expiry is NOT NULL because ADR-0005
--- treats short expiry, visible last_used_at and one-click revocation as the safeguard.
-CREATE TABLE IF NOT EXISTS agent_credentials (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  label text NOT NULL,
-  token_hash text NOT NULL UNIQUE,
-  token_hint text NOT NULL,
-  expires_at timestamptz NOT NULL,
-  revoked_at timestamptz,
-  last_used_at timestamptz,
-  created_by text NOT NULL,
-  created_at timestamptz NOT NULL DEFAULT now()
-);
--- Whether this credential may START an Agent Run Session. DEFAULT false is load-bearing, not a
--- convenience: every credential that existed before this column keeps exactly the reach it was
--- provisioned with, and a drainer able to trigger runs could otherwise loop fix-and-retry until
--- something went green.
-ALTER TABLE agent_credentials ADD COLUMN IF NOT EXISTS can_start_agent_runs boolean NOT NULL DEFAULT false;
 -- Generic key/value store for runtime-editable app settings (no redeploy). First user:
 -- the AI authoring instructions, edited from the Author page.
 CREATE TABLE IF NOT EXISTS app_settings (
@@ -1187,4 +1126,9 @@ ALTER TABLE test_versions DROP COLUMN IF EXISTS justification_validated;
 ALTER TABLE test_versions DROP COLUMN IF EXISTS repair_screenshot_key;
 -- The circuit-breaker threshold was a project setting; with no breaker it configures nothing.
 DELETE FROM app_settings WHERE key = 'repair_breaker_threshold';
+-- And the second issuer on /mcp goes with the drainer that needed it (ADR-0008): there is one
+-- issuer again, a signed-in human over OAuth, so there is no provisioned token to inventory,
+-- rotate or revoke. Dropped rather than kept dormant — a live table of long-lived secrets that
+-- nothing accepts any more is worse than no table at all.
+DROP TABLE IF EXISTS agent_credentials;
 `;

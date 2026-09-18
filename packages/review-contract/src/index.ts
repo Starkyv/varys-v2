@@ -194,57 +194,6 @@ export type RunFailureKind =
 export type VersionReviewState = "reviewed" | "unreviewed" | "rejected";
 
 /**
- * One Repair Agent credential as the management surface sees it (Slice 19, slice 02 / ADR-0005).
- * Never carries the token: the secret is shown exactly once, at provisioning.
- */
-export interface AgentCredentialSummary {
-  id: string;
-  /** Human label — also what a repaired version's attribution reads. */
-  label: string;
-  /** The token's last 4 characters, so two credentials can be told apart. */
-  tokenHint: string;
-  expiresAt: string;
-  revokedAt: string | null;
-  /** When it was last accepted on `/mcp` — null if it has never been used. */
-  lastUsedAt: string | null;
-  /** `active`, or why it would be refused right now. */
-  status: AgentCredentialStatus;
-  /** Whether this credential may start an Agent Run Session. Off unless it was provisioned with
-   *  the capability, and not editable afterwards — widening a live machine secret is a decision
-   *  to re-provision for, so the audit trail says which credential was ever allowed to do it. */
-  canStartAgentRuns: boolean;
-  createdBy: string;
-  createdAt: string;
-}
-
-/** Whether a credential would be accepted, and if not, why. */
-export type AgentCredentialStatus = "active" | "expired" | "revoked";
-
-/** Provision a credential. Expiry is required by policy, so `expiresInDays` has a default
- *  rather than an "unlimited" option. */
-export interface CreateAgentCredentialRequest {
-  label: string;
-  expiresInDays?: number;
-  /**
-   * Grant this credential the ability to start an Agent Run Session. **Defaults to false.**
-   *
-   * Left off, the drainer sees the repair toolset and nothing else — which is the posture
-   * [ADR 0005](../../../docs/adr/0005-scoped-repair-agent-credential.md) argues for, and the
-   * reason `run_test` is absent from that toolset: an unattended agent that can trigger runs can
-   * grind fix-and-retry until something goes green. Turn it on only for a drainer whose whole
-   * job IS running agent-driven tests.
-   */
-  canStartAgentRuns?: boolean;
-}
-
-/** The provisioning response — the ONLY time the token is readable. */
-export interface CreatedAgentCredential {
-  credential: AgentCredentialSummary;
-  /** The bearer token to configure on the drainer. Not retrievable afterwards. */
-  token: string;
-}
-
-/**
  * A test's optional cron schedule (Slice 8 — Scheduling). Operational "when-to-run"
  * metadata, NOT part of the versioned definition: setting it writes no new test_version.
  * A row exists ⇒ the test is scheduled; `enabled` gates firing (pause without losing the

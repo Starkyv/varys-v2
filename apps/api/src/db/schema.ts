@@ -1,7 +1,6 @@
 // Re-export the shared schema so existing intra-app imports keep working.
 export {
   agentCheckpoints,
-  agentCredentials,
   appSettings,
   baselines,
   currentDefinition,

@@ -197,71 +197,6 @@ const LOCATOR_PATCH_SCHEMA = {
   },
 } as const;
 
-/**
- * The toolset a Repair Agent principal may reach (ADR-0005 / slice 02): the attended repair path
- * plus the perception and interaction tools needed to investigate a parked page. Everything else
- * is absent from `tools/list` AND unresolvable in `tools/call`, so this is a capability boundary,
- * not a hint.
- *
- * The deliberate exclusions:
- *  - `open_session`, `checkpoint`, `pin_assertion`, `declare_unpinnable_assertion`,
- *    `finish_session`, `discard_session` — authoring a NEW test is a human act; an agent that could
- *    open an Authoring Session could invent tests unattended. The two assertion tools sit here for
- *    a sharper reason than the rest: an agent able to DECLARE a check could answer a red run by
- *    writing a new assertion that passes, which is the failure the whole repair-safety story is
- *    built to prevent. An agent changes assertions only through `edit_test`, which refuses any id
- *    the test does not already declare.
- *  - `failed_runs` — a cross-test read, and no business of a principal that is handed one test.
- *  - `create_agent_test`, `add_agent_checkpoint` — authoring an Agent-Driven Test, for the same
- *    reason `open_session` is excluded and then some. The run surface has a capability because
- *    unattended running has a real use case; unattended AUTHORING has none, and an agent that can
- *    write a test can write one that passes. No capability grants these, so the absence here is
- *    the whole boundary.
- *  - `find_elements` — read-only perception, and arguably harmless. Withheld anyway: widening an
- *    agent's capability surface is a decision to take deliberately, not a side effect of the slice
- *    that introduced the tool.
- *  - baseline approval — not an MCP tool at anyone's disposal, and permanently off-limits to an
- *    agent per DESIGN.md §4 (approving deletes the previous baseline with no rollback).
- */
-const AGENT_TOOLS: readonly string[] = [
-  "open_repair_session",
-  "close_repair_session",
-  "read_test",
-  "edit_test",
-  "try_locator",
-  "apply_fix",
-  "goto_step",
-  "observe",
-  "click",
-  "hover",
-  "navigate",
-  "type",
-  "verify_locator",
-];
-
-/**
- * Tools an AGENT principal reaches only with the run capability on its credential — off by
- * default, granted at provisioning.
- *
- * The whole Agent Run Session surface is gated together, not just the verb that opens one. A
- * credential able to submit and finish but not start could still walk a session a human opened,
- * which is a capability nobody granted it and an audit trail that names the wrong actor.
- *
- * This is a capability boundary like `AGENT_TOOLS`, but it refuses DIFFERENTLY, and the
- * difference is deliberate. The other exclusions report as "Unknown tool" because they hide
- * something that is none of that principal's business — another user's session, another test's
- * failures — and a distinguishable refusal would let an agent probe for what exists. Nothing is
- * hidden here: any human's `tools/list` names this tool, so the only person a silent "Unknown
- * tool" would mislead is the operator debugging their own drainer. They are told which switch to
- * flip instead.
- */
-const RUN_CAPABILITY_TOOLS: readonly string[] = [
-  "start_agent_run",
-  "submit_checkpoint",
-  "submit_evidence",
-  "finish_agent_run",
-];
-
 // `@Public()` exempts this route from the COOKIE guard only — Claude Code is a separate
 // process with no browser cookie. It is not unauthenticated: `rpc` below requires an OAuth
 // bearer token on every request and 401s without one (Slice 16, superseding the earlier
@@ -416,27 +351,8 @@ export class McpController {
     ctx: CallerContext,
   ): Promise<unknown> {
     const name = params.name as string | undefined;
-    // Checked BEFORE the lookup, so a credential without the run capability is told what it is
-    // missing instead of being handed the "Unknown tool" that hides another user's resources.
-    if (
-      user.kind === "agent" &&
-      RUN_CAPABILITY_TOOLS.includes(name ?? "") &&
-      !grantedByCapability(user, name ?? "")
-    ) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${user.name} may not use ${name}: it is part of the Agent Run Session surface, and this credential was provisioned without the run capability, which is off by default. An unattended agent that can drive runs can retry until something goes green, so granting it is a deliberate act — ask an admin to re-provision the credential with it enabled.`,
-          },
-        ],
-        isError: true,
-      };
-    }
     const tool = this.tools(user, ctx).find((t) => t.name === name);
     if (!tool) {
-      // For an agent principal, a tool outside its scope is reported exactly like a tool that
-      // does not exist — the same reasoning as the not-found on another user's session id.
       return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
     }
     const args = (params.arguments as Record<string, unknown>) ?? {};
@@ -460,17 +376,16 @@ export class McpController {
     }
   }
 
-  /** The MCP tool surface for this principal. A human sees all of it; a Repair Agent sees only
-   *  `AGENT_TOOLS` (ADR-0005) — the same filter `tools/list` and `tools/call` read, so a tool an
-   *  agent cannot list is also a tool it cannot call.
+  /** The MCP tool surface. ONE list, the same for every caller (ADR-0008): `/mcp` authenticates
+   *  exactly one sort of principal, so there is nothing to filter by and no tool that exists for
+   *  some callers and not others. `tools/list` and `tools/call` read this same list, so a tool
+   *  that can be listed can be called.
    *
    *  Slice 2 = open/finish; Slices 3/4 add perception, interaction, and checkpoint tools to this
    *  list. Promotion is deliberately NOT a tool (web-UI only; Claude must not be able to
    *  self-promote — ADR 0001 / PRD safety). */
   private tools(user: McpPrincipal, ctx: CallerContext): McpTool[] {
-    const all = this.allTools(user, ctx);
-    if (user.kind !== "agent") return all;
-    return all.filter((t) => AGENT_TOOLS.includes(t.name) || grantedByCapability(user, t.name));
+    return this.allTools(user, ctx);
   }
 
   private allTools(user: McpPrincipal, ctx: CallerContext): McpTool[] {
@@ -631,7 +546,7 @@ export class McpController {
         },
         handler: (args) =>
           a.openRepair({
-            owner: { id: user.id, email: user.email, kind: user.kind },
+            owner: { id: user.id, email: user.email },
             runId: args.runId ? String(args.runId) : undefined,
             testId: args.testId ? String(args.testId) : undefined,
             stepIndex: args.stepIndex !== undefined ? Number(args.stepIndex) : undefined,
@@ -826,7 +741,7 @@ export class McpController {
         },
         handler: (args) =>
           a.editTest({
-            actor: { id: user.id, email: user.email, kind: user.kind },
+            actor: { id: user.id, email: user.email },
             sessionId: args.sessionId ? String(args.sessionId) : undefined,
             testId: args.testId ? String(args.testId) : undefined,
             ...(args.name !== undefined ? { name: String(args.name) } : {}),
@@ -939,7 +854,6 @@ export class McpController {
           const session = await this.agentRun.start(String(args.testId ?? ""), {
             environmentId: args.environmentId ? String(args.environmentId) : undefined,
             actor: user.email,
-            actorKind: user.kind,
           });
           // Close out a run request this user pressed in the web app, if there was one. Reporting
           // only — nothing about the session, its lease or its pre-seeded `missing` rows depends
@@ -1405,11 +1319,6 @@ export class McpController {
   }
 }
 
-/** Does this AGENT principal's credential grant the tool? Written once so `tools/list` and
- *  `tools/call` cannot drift into disagreeing about what the credential may reach. */
-function grantedByCapability(user: McpPrincipal, name: string): boolean {
-  return user.canStartAgentRuns && RUN_CAPABILITY_TOOLS.includes(name);
-}
 
 /**
  * Split a tool result into the JSON a model reads and the PNGs it LOOKS at.

@@ -282,12 +282,8 @@ export class AgentRunService {
     testId: string,
     opts: {
       environmentId?: string;
-      /** Who started it — an email for a person, a `Repair Agent "…"` label for a credential. */
+      /** Who started it — the email of the person whose Claude opened the session. */
       actor: string;
-      /** Which issuer that actor came from, so the run records HOW it was triggered and not just
-       *  by whom. A drainer's run is a deliberately-granted machine action, and filing it under
-       *  `manual` would bury the one thing the run capability exists to make visible. */
-      actorKind: "user" | "agent";
     },
   ): Promise<AgentRunSession> {
     const { id, test, checkpoints } = await this.assertRunnable(testId);
@@ -335,7 +331,10 @@ export class AgentRunService {
           // verify?" at every instant until a slot is actually filled.
           failureKind: "unreached",
           triggeredBy: opts.actor,
-          triggerSource: opts.actorKind === "agent" ? "api" : "manual",
+          // Always a person: `/mcp` has one issuer, so an Agent Run Session is only ever opened
+          // by someone's own Claude on their behalf (ADR-0008). A Run started by pressing Run in
+          // the web app is re-stamped `varys` when the relay matches it to the request.
+          triggerSource: "manual",
           agentInstructions: instructions,
           agentLeaseSeconds: leaseSeconds,
           agentLeaseExpiresAt: leaseExpiresAt,

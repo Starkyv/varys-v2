@@ -602,16 +602,11 @@ interface PendingHover {
   revealedRefs: Set<string>;
 }
 
-/** Which issuer an action came from — mirrors `McpPrincipalKind` without importing it, so the
- *  session service keeps no dependency on the MCP transport. */
-export type SessionActorKind = "user" | "agent";
-
 /** Who is driving one call, when there is no session to read it off (an `edit_test` addressed by
- *  `testId` alone). `kind` is what decides whether the version it writes needs review. */
+ *  `testId` alone). It supplies the email the version it writes is attributed to. */
 export interface SessionActor {
   id: string;
   email: string;
-  kind: SessionActorKind;
 }
 
 interface SessionState {
@@ -621,10 +616,6 @@ interface SessionState {
   ownerId: string;
   /** The owner's email — written as the draft's `createdBy` on finish. */
   ownerEmail: string;
-  /** Which ISSUER opened it (ADR-0005): a human who completed the browser OAuth leg, or an
-   *  unattended Repair Agent. Every version an `agent` session writes lands UNREVIEWED, so the
-   *  kind has to travel with the session rather than be re-derived at write time. */
-  ownerKind: SessionActorKind;
   browser: Browser;
   context: BrowserContext;
   page: Page;
@@ -938,7 +929,6 @@ export class AuthoringSessionService implements OnApplicationShutdown {
       ownerEmail: input.owner.email,
       // An AUTHORING session is always a human's: `open_session` is absent from the agent
       // toolset (ADR-0005), because an agent that could open one could invent tests unattended.
-      ownerKind: "user",
       browser,
       context,
       page,
@@ -1093,7 +1083,7 @@ export class AuthoringSessionService implements OnApplicationShutdown {
   }
 
   async openRepair(input: {
-    owner: { id: string; email: string; kind?: SessionActorKind };
+    owner: { id: string; email: string };
     runId?: string;
     /** Alternative entry point: diagnose this test's MOST RECENT failure. The test id is what a
      *  user has to hand (it is in the web app's URL); a run id usually means going to look one up. */
@@ -1201,7 +1191,6 @@ export class AuthoringSessionService implements OnApplicationShutdown {
     this.sessions.set(sessionId, {
       ownerId: input.owner.id,
       ownerEmail: input.owner.email,
-      ownerKind: input.owner.kind ?? "user",
       browser,
       context,
       page,

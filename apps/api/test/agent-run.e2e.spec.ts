@@ -16,7 +16,7 @@ import {
   suiteTests,
   testVersions,
 } from "@varys/db";
-import type { AgentCheckpoint, CreatedAgentCredential } from "@varys/review-contract";
+import type { AgentCheckpoint } from "@varys/review-contract";
 import { LocalFsAdapter } from "@varys/storage-adapter";
 import { and, asc, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -401,72 +401,6 @@ describe("Agent Run Session — red before the agent does anything", () => {
     });
     expect(refused.isError).toBe(true);
     expect(refused.content[0].text).toContain("not found");
-  });
-
-  describe("the Repair Agent run capability", () => {
-    let plainToken: string;
-    let runnerToken: string;
-
-    beforeAll(async () => {
-      const plain = await authed(app)
-        .post("/settings/agent-credentials")
-        .send({ label: "nightly-drainer", expiresInDays: 7 })
-        .expect(201);
-      plainToken = (plain.body as CreatedAgentCredential).token;
-      // Defaults to OFF — the field is not merely absent from the request, it is false on the row.
-      expect((plain.body as CreatedAgentCredential).credential.canStartAgentRuns).toBe(false);
-
-      const runner = await authed(app)
-        .post("/settings/agent-credentials")
-        .send({ label: "agent-run-drainer", expiresInDays: 7, canStartAgentRuns: true })
-        .expect(201);
-      runnerToken = (runner.body as CreatedAgentCredential).token;
-      expect((runner.body as CreatedAgentCredential).credential.canStartAgentRuns).toBe(true);
-    });
-
-    it("hides the tool from a credential without the capability, and says why when it is called", async () => {
-      expect(await toolNames(plainToken)).not.toContain("start_agent_run");
-
-      const refused = await callTool(plainToken, "start_agent_run", { testId, environmentId });
-      expect(refused.isError).toBe(true);
-      // Not "Unknown tool": nothing is hidden here, so the operator is told which switch to flip.
-      expect(refused.content[0].text).toContain("run capability");
-      expect(refused.content[0].text).toContain("off by default");
-
-      // And it really did not start one.
-      const rows = await handle.db
-        .select({ id: runs.id })
-        .from(runs)
-        .where(eq(runs.triggeredBy, 'Repair Agent "nightly-drainer"'));
-      expect(rows).toHaveLength(0);
-    });
-
-    it("lets a credential provisioned WITH the capability start a session", async () => {
-      expect(await toolNames(runnerToken)).toContain("start_agent_run");
-
-      const { session } = await start({ testId, environmentId }, runnerToken);
-      expect(session.manifest).toHaveLength(3);
-
-      const [run] = await handle.db
-        .select({
-          triggeredBy: runs.triggeredBy,
-          triggerSource: runs.triggerSource,
-          failureKind: runs.failureKind,
-        })
-        .from(runs)
-        .where(eq(runs.id, session.runId))
-        .limit(1);
-      // Attributed to the credential's label, not borrowed from a human — and red like any other.
-      expect(run.triggeredBy).toBe('Repair Agent "agent-run-drainer"');
-      // Recorded as a machine trigger, not as someone's manual run: the whole point of making the
-      // capability a deliberate grant is that its use stays visible afterwards.
-      expect(run.triggerSource).toBe("api");
-      expect(run.failureKind).toBe("unreached");
-    });
-
-    it("keeps the human path untouched: a person always may", async () => {
-      expect(await toolNames(mcpToken())).toContain("start_agent_run");
-    });
   });
 
   it("refuses to save masks or a threshold on one of its checkpoints", async () => {
@@ -957,34 +891,6 @@ describe("Agent Run Session — red before the agent does anything", () => {
       expect(refused.content[0].text).toContain("not a PNG");
     });
 
-    it("gates the whole session surface on the run capability, not just the verb that opens one", async () => {
-      const plain = await authed(app)
-        .post("/settings/agent-credentials")
-        .send({ label: "reporting-drainer", expiresInDays: 7 })
-        .expect(201);
-      const plainToken = (plain.body as CreatedAgentCredential).token;
-
-      const names = await toolNames(plainToken);
-      for (const tool of ["start_agent_run", "submit_checkpoint", "submit_evidence", "finish_agent_run"]) {
-        expect(names).not.toContain(tool);
-      }
-
-      // A credential that could report into a session a human opened would hold a capability
-      // nobody granted it, and would put the wrong actor on the record.
-      const { session } = await start({ testId: submitTestId, environmentId });
-      const refused = await callTool(plainToken, "submit_checkpoint", {
-        runId: session.runId,
-        name: "home",
-        image: b64("home"),
-        verdict: "pass",
-        reasoning: "Borrowed someone else's session.",
-      });
-      expect(refused.isError).toBe(true);
-      expect(refused.content[0].text).toContain("run capability");
-
-      const rows = await rowsOf(session.runId);
-      expect(rows.every((r) => r.reviewState === "missing")).toBe(true);
-    });
   });
 
   /**

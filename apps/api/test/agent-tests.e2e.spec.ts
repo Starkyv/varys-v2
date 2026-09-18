@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { createDb, type DbHandle, baselines } from "@varys/db";
-import type { AgentCheckpoint, CreatedAgentCredential } from "@varys/review-contract";
+import type { AgentCheckpoint } from "@varys/review-contract";
 import { LocalFsAdapter } from "@varys/storage-adapter";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -755,48 +755,6 @@ describe("Agent-Driven Tests — authoring", () => {
       expect((await previewRows(pinned.body.id as string))).toEqual([]);
     });
 
-    it("refuses both tools to an agent principal, and no capability grants them", async () => {
-      // Provisioned with the RUN capability — the strongest credential Varys issues — so this
-      // proves the authoring tools are outside it rather than merely off by default.
-      const provisioned = await authed(app)
-        .post("/settings/agent-credentials")
-        .send({ label: "authoring-drainer", expiresInDays: 7, canStartAgentRuns: true })
-        .expect(201);
-      const agentToken = (provisioned.body as CreatedAgentCredential).token;
-      expect((provisioned.body as CreatedAgentCredential).credential.canStartAgentRuns).toBe(true);
-
-      const names = await mcpToolNames(app, agentToken);
-      expect(names).not.toContain("create_agent_test");
-      expect(names).not.toContain("add_agent_checkpoint");
-      // The run capability it DOES hold is visible, so the absence above is a boundary and not a
-      // credential that simply cannot see anything.
-      expect(names).toContain("start_agent_run");
-
-      const created = await mcpCallTool(app, agentToken, "create_agent_test", {
-        name: "written by a machine at 3am",
-        instructions: AUTHORED,
-      });
-      expect(created.isError).toBe(true);
-      expect(created.content[0]?.text).toMatch(/Unknown tool/);
-
-      const { testId } = await create("agent may not extend this");
-      const added = await mcpCallTool(app, agentToken, "add_agent_checkpoint", {
-        testId,
-        name: "snuck-in",
-        instructions: "Drive there.",
-        comparePrompt: "It looks fine.",
-        image: pngBase64("snuck-in"),
-      });
-      expect(added.isError).toBe(true);
-      expect(added.content[0]?.text).toMatch(/Unknown tool/);
-      expect(await checkpointsOf(testId)).toEqual([]);
-
-      // Nothing was created under either refusal.
-      const queue = await authed(app).get("/drafts").expect(200);
-      expect(
-        queue.body.some((d: { name: string }) => d.name === "written by a machine at 3am"),
-      ).toBe(false);
-    });
 
     it("promotes into a test that runs exactly like a hand-written one", async () => {
       const authoredId = (await create("authored journey")).testId;
