@@ -65,6 +65,24 @@ export const tests = pgTable("tests", {
    *  different amounts. Defaulted for every existing and new row, so nothing is unbounded, and
    *  meaningless for a pinned test — which Varys runs itself and bounds by its own timeouts. */
   agentLeaseSeconds: integer("agent_lease_seconds").notNull().default(900),
+  /**
+   * **The test's definition** — the one answer to "what is this test?" (ADR 0008).
+   *
+   * Written beside the version row today and read by nobody: `test_versions` stays authoritative
+   * for reads until the ticket that drops it, at which point {@link currentDefinition} resolves
+   * here instead and every reader follows without changing. Nullable only so the column can be
+   * added to a live table; after the bootstrap backfill every pinned test carries one.
+   */
+  definition: jsonb("definition"),
+  /**
+   * Who last changed the definition, and when — the attribution that survives the history.
+   *
+   * With one definition per test there is no row to read "who wrote this" off, so the pair lives
+   * on the test itself. `updatedAt` doubles as the stale-editor token the config save compares
+   * against, in place of a version number.
+   */
+  updatedBy: text("updated_by"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -259,6 +277,22 @@ export const runs = pgTable("runs", {
    * correctly red.
    */
   agentLeaseExpiresAt: timestamp("agent_lease_expires_at", { withTimezone: true }),
+  /**
+   * The test this Run belongs to — reached DIRECTLY rather than through the version row it
+   * replayed (ADR 0008). Written beside `test_version_id` today and read by nobody until
+   * {@link replayedTestId} resolves here. Nullable only so the column can be added to a live
+   * table; after the bootstrap backfill every run carries one.
+   */
+  testId: uuid("test_id").references(() => tests.id),
+  /**
+   * **What this Run replayed** — a write-once copy of the definition as it read at launch.
+   *
+   * A copy for the same reason `agent_instructions` is one: the test moves on, and a timeline, a
+   * failed step index or a repair drive all stop meaning anything if they are read against
+   * today's steps. Read only by this Run's own surfaces, never treated as the test, and never
+   * restored from.
+   */
+  definition: jsonb("definition"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -713,6 +747,14 @@ ALTER TABLE tests ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'pinned';
 -- nobody has to opt in to being bounded. Fifteen minutes is deliberately modest: it is a stop on an
 -- agent grinding at a state that will never appear, not a budget anyone should be spending in full.
 ALTER TABLE tests ADD COLUMN IF NOT EXISTS agent_lease_seconds integer NOT NULL DEFAULT 900;
+-- One definition per test (ADR 0008). The definition itself, plus who last changed it and when —
+-- the attribution that has to survive the version rows, and the token a stale editor is refused
+-- against once baseVersion goes. Nullable because the column is added to a live table; the
+-- backfill below fills it from each test's highest-numbered version. Dual-written beside
+-- test_versions until the reads move over.
+ALTER TABLE tests ADD COLUMN IF NOT EXISTS definition jsonb;
+ALTER TABLE tests ADD COLUMN IF NOT EXISTS updated_by text;
+ALTER TABLE tests ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
 -- The ordered Checkpoints of an Agent-Driven Test. Relational and UNVERSIONED: editing the
 -- wording of an instruction is not an audit event, so no test_version is written. The row id is
 -- the durable identity and the name is only a label, which is what lets a rename carry the
@@ -820,6 +862,33 @@ ALTER TABLE runs ADD COLUMN IF NOT EXISTS agent_lease_expires_at timestamptz;
 -- the error text. Plain text with no CHECK: the known set is enforced in the API, which degrades
 -- an unrecognised value to null rather than shipping a class no surface can render.
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS failure_kind text;
+-- What this Run replayed, and which test it belongs to (ADR 0008). The definition is a write-once
+-- COPY, so a timeline, a failed step index and a repair drive keep meaning something after the
+-- test is edited; test_id is the direct link that replaces reaching the test THROUGH the version
+-- row. Both nullable because the columns are added to a live table; the backfill below fills them
+-- from the version each run actually pointed at.
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS test_id uuid REFERENCES tests(id);
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS definition jsonb;
+-- The backfill. Guarded on definition IS NULL, which is what makes booting twice a no-op: after
+-- the first pass every row already carries its copy, and a later save or run writes its own.
+-- A test's definition is its HIGHEST-NUMBERED version — the same rule currentDefinition applies.
+UPDATE tests t
+   SET definition = v.definition,
+       updated_by = v.created_by,
+       updated_at = v.created_at
+  FROM (
+    SELECT DISTINCT ON (test_id) test_id, definition, created_by, created_at
+      FROM test_versions
+     ORDER BY test_id, version DESC
+  ) v
+ WHERE v.test_id = t.id AND t.definition IS NULL;
+-- A Run's copy comes from the version that Run pointed at, NOT from its test's current one: the
+-- whole point of the column is that those two can differ.
+UPDATE runs r
+   SET definition = v.definition,
+       test_id = v.test_id
+  FROM test_versions v
+ WHERE v.id = r.test_version_id AND r.definition IS NULL;
 CREATE TABLE IF NOT EXISTS run_results (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   run_id uuid NOT NULL REFERENCES runs(id),

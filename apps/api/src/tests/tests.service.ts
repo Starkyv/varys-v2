@@ -319,7 +319,15 @@ export class TestsService {
     const definition = parseTestDefinition(input);
     const [created] = await this.db
       .insert(tests)
-      .values({ name: definition.name, createdBy: createdBy ?? null })
+      // Dual-write (ADR 0008): the definition lands on the test AND as version 1. The version row
+      // stays authoritative for reads until the ticket that drops it, so the two must not drift —
+      // every path that writes one writes the other, in the same statement or the same transaction.
+      .values({
+        name: definition.name,
+        createdBy: createdBy ?? null,
+        definition,
+        updatedBy: createdBy ?? null,
+      })
       .returning({ id: tests.id });
     await this.db
       .insert(testVersions)
@@ -425,6 +433,9 @@ export class TestsService {
         // promotes it is recorded separately as promotedBy.
         createdBy: opts?.createdBy ?? "ai",
         intent: opts?.intent ?? null,
+        // Dual-write (ADR 0008) — see `create`.
+        definition,
+        updatedBy: opts?.createdBy ?? "ai",
       })
       .returning({ id: tests.id });
     await this.db
@@ -1307,6 +1318,14 @@ export class TestsService {
           .returning({ id: testVersions.id });
         versionId = inserted?.id ?? "";
       }
+      // Dual-write (ADR 0008), inside the same transaction as the version write so the two cannot
+      // drift: the test's own definition, and the attribution pair that replaces the version row's
+      // createdBy/createdAt. `updatedAt` is the stale-editor token the save will compare against
+      // once `baseVersion` goes, so it is stamped on every save rather than left to a trigger.
+      await tx
+        .update(tests)
+        .set({ definition: validated, updatedBy: createdBy, updatedAt: new Date() })
+        .where(eq(tests.id, id));
       // A checkpoint's name IS its baseline key `(test, checkpoint, env, viewport)`. Renaming the
       // step without moving the rows would silently orphan every approved golden and send the next
       // run back to `pending-baseline`, so the rename travels with the version write — atomically,

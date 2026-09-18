@@ -98,6 +98,11 @@ export class AgentTestsService {
     if (!name) throw new BadRequestException("test name cannot be empty");
     const instructions = input.instructions?.trim() || null;
 
+    // Deliberately assembled rather than parsed: `testDefinition` requires at least one step, and
+    // an Agent-Driven Test has none by definition. Nothing replays this — it is a placeholder that
+    // keeps the run→version foreign key intact.
+    const definition = { name, viewport: { ...STUB_VIEWPORT }, steps: [] } as unknown as TestDefinition;
+
     return await this.db.transaction(async (tx) => {
       const [created] = await tx
         .insert(tests)
@@ -108,14 +113,15 @@ export class AgentTestsService {
           origin: opts.origin,
           intent: instructions,
           createdBy: opts.createdBy ?? null,
+          // Dual-write (ADR 0008): the same placeholder on the test itself. An Agent-Driven Test
+          // is unaffected in substance — it had exactly one version row before and carries
+          // exactly one definition now.
+          definition,
+          updatedBy: opts.createdBy ?? null,
         })
         .returning({ id: tests.id });
 
-      // The one and only version row, written here and never again. Deliberately assembled
-      // rather than parsed: `testDefinition` requires at least one step, and an Agent-Driven
-      // Test has none by definition. Nothing replays this — it is a placeholder that keeps the
-      // run→version foreign key intact.
-      const definition = { name, viewport: { ...STUB_VIEWPORT }, steps: [] } as unknown as TestDefinition;
+      // The one and only version row, written here and never again.
       await tx.insert(testVersions).values({ testId: created.id, version: 1, definition });
 
       return { id: created.id, version: 1 };

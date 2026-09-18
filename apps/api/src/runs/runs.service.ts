@@ -141,6 +141,10 @@ export class RunsService {
       .insert(runs)
       .values({
         testVersionId: version.id,
+        // Dual-write (ADR 0008): the Run's own write-once copy of what it is about to replay, and
+        // its direct link to the test — beside the version pointer that still answers both today.
+        testId,
+        definition: version.definition,
         environmentId: opts.environmentId ?? null,
         suiteRunId: opts.suiteRunId ?? null,
         trace: opts.trace ?? false,
@@ -1087,11 +1091,19 @@ export class RunsService {
       ),
     };
     const nextVersion = latest.version + 1;
-    await this.db.insert(testVersions).values({
-      testId: ctx.testId,
-      version: nextVersion,
-      definition: nextDefinition,
-      createdBy,
+    await this.db.transaction(async (tx) => {
+      await tx.insert(testVersions).values({
+        testId: ctx.testId,
+        version: nextVersion,
+        definition: nextDefinition,
+        createdBy,
+      });
+      // Dual-write (ADR 0008): the in-viewer mask/threshold persist is a definition write like
+      // any other, so it lands on the test too — in one transaction, so the two cannot drift.
+      await tx
+        .update(tests)
+        .set({ definition: nextDefinition, updatedBy: createdBy, updatedAt: new Date() })
+        .where(eq(tests.id, ctx.testId));
     });
 
     const threshold = input.threshold ?? ctx.threshold;

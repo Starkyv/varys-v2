@@ -324,6 +324,10 @@ export class AgentRunService {
         .insert(runs)
         .values({
           testVersionId: version.id,
+          // Dual-write (ADR 0008): the Run's own copy of the (placeholder) definition it was
+          // opened against, and its direct link to the test.
+          testId: id,
+          definition: version.definition,
           environmentId: env.id,
           status: "failed",
           // Red from the outset, and truthfully so: nothing has been reached yet. This is not a
