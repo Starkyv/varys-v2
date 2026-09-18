@@ -45,6 +45,33 @@
   }
 }
 
+/* The gap between the press and the Run appearing, shown rather than left to a spinner. Same
+   shape as `.blocked` because it is the same job: say what the button's state means, next to it. */
+.waiting {
+  display: flex;
+  align-items: center;
+  gap: var(--space-10);
+  padding: var(--space-12) var(--space-16);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-inset);
+  color: var(--color-text-subtle);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+
+  > span {
+    flex: 1;
+  }
+}
+
+/* Applied ALONGSIDE `.waiting`, not instead of it — same box, different colour, no second copy
+   of the box. */
+.started {
+  border-color: var(--color-success-soft);
+  background: var(--color-success-soft);
+  color: var(--color-success-fg);
+}
+
 .field {
   margin-bottom: var(--space-16);
 }

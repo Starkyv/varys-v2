@@ -2,6 +2,7 @@ import { Body, Controller, Get, Headers, Inject, type MessageEvent, Param, Post,
 import type {
   AgentRunRequestBody,
   AgentRunRequestResult,
+  AgentRunRequestState,
   BridgeChatState,
   BridgeHelperEvent,
   BridgeHelperPresence,
@@ -28,8 +29,9 @@ function heartbeat(): Observable<MessageEvent> {
  *    the service).
  *
  * Slice 17 adds the two web-side routes an Agent-Driven Test's Run control needs: `helper` (is
- * one listening?) and `run-agent-test` (ask it to run this). Both are addressed by owner, never
- * by chat id.
+ * one listening?) and `run-agent-test` (ask it to run this). Slice 18 adds the third,
+ * `run-request/:testId` (what became of the press?). All three are addressed by owner, never by
+ * chat id.
  */
 @Controller("authoring/bridge")
 export class BridgeController {
@@ -101,7 +103,27 @@ export class BridgeController {
     const testId = String(body?.testId ?? "");
     await this.agentRuns.assertRunnable(testId);
     const environmentId = String(body?.environmentId ?? "").trim() || null;
-    return this.bridge.requestAgentRun(user.id, { testId: testId.trim(), environmentId });
+    const { chatId, state } = this.bridge.requestAgentRun(user.id, {
+      testId: testId.trim(),
+      environmentId,
+    });
+    return { chatId, request: state };
+  }
+
+  /**
+   * What became of this user's request for this test (Slice 18).
+   *
+   * The press writes nothing durable, so between it and the Run appearing this endpoint is the
+   * only account of what is happening — including `lapsed`, which is how a paired-but-wedged
+   * helper stops being indistinguishable from a slow one.
+   *
+   * Owner-scoped like everything else on this side: a test id names a test, never somebody else's
+   * request for it. Answers `none` for a test that was never asked about, rather than 404 — "no
+   * request" is an answer, and the control asks on every poll.
+   */
+  @Get("run-request/:testId")
+  runRequest(@CurrentUser() user: AuthUser, @Param("testId") testId: string): AgentRunRequestState {
+    return this.bridge.runRequestState(user.id, String(testId ?? "").trim());
   }
 
   @Get(":chatId")

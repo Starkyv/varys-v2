@@ -15,6 +15,7 @@ import {
   type AgentCaptureMeta,
   type AgentVerdict,
 } from "./agent-run.service";
+import { BridgeService } from "./bridge.service";
 import { McpAuthService, type McpPrincipal, McpUnauthorized } from "./mcp-auth.service";
 import { McpStatusService } from "./mcp-status.service";
 import type { CallerContext } from "./png";
@@ -336,6 +337,9 @@ export class McpController {
     // Starting an Agent Run Session (Agent-Driven Tests) — the one MCP surface that hands work
     // OUT to the caller's own machine rather than driving anything here.
     @Inject(AgentRunService) private readonly agentRun: AgentRunService,
+    // Only so a Run STARTING can close out the web-app request that asked for it. The relay holds
+    // that request; nothing about the session depends on the relay knowing.
+    @Inject(BridgeService) private readonly bridge: BridgeService,
     // WRITING an Agent-Driven Test, as opposed to running one. Human principals only, and only
     // ever into a Draft — see `AgentAuthoringService`.
     @Inject(AgentAuthoringService) private readonly agentAuthoring: AgentAuthoringService,
@@ -1153,12 +1157,20 @@ export class McpController {
           },
           required: ["testId"],
         },
-        handler: (args) =>
-          this.agentRun.start(String(args.testId ?? ""), {
+        handler: async (args) => {
+          const session = await this.agentRun.start(String(args.testId ?? ""), {
             environmentId: args.environmentId ? String(args.environmentId) : undefined,
             actor: user.email,
             actorKind: user.kind,
-          }),
+          });
+          // Close out a run request this user pressed in the web app, if there was one. Reporting
+          // only — nothing about the session, its lease or its pre-seeded `missing` rows depends
+          // on it, and a session started straight from a terminal matches nothing and is
+          // unaffected. It is what turns the author's wait into `fulfilled` instead of a wait
+          // that quietly expires beside a run that did start.
+          this.bridge.noteAgentRunStarted(user.id, session.testId, session.runId);
+          return session;
+        },
       },
       {
         name: "submit_checkpoint",

@@ -2,6 +2,7 @@ import type {
   AgentCredentialSummary,
   AuthoringInstructionsView,
   AgentRunRequestResult,
+  AgentRunRequestState,
   AuthoringSessionSummary,
   BridgeChatState,
   BridgeHelperPresence,
@@ -174,6 +175,20 @@ export async function requestAgentRun(
     throw new Error(await errorMessage(res, "Failed to ask your Claude to run this test"));
   }
   return (await res.json()) as AgentRunRequestResult;
+}
+
+/**
+ * What became of a run request for this test (Slice 18).
+ *
+ * Polled, because the press writes nothing durable and there is no row to subscribe to. Answers
+ * `none` rather than 404 for a test nobody has asked about — "no request" is an answer.
+ */
+export async function fetchAgentRunRequest(testId: string): Promise<AgentRunRequestState> {
+  const res = await fetch(`${API_BASE}/authoring/bridge/run-request/${encodeURIComponent(testId)}`);
+  if (!res.ok) {
+    throw new Error(await errorMessage(res, "Failed to check on your run request"));
+  }
+  return (await res.json()) as AgentRunRequestState;
 }
 
 /** Send a prompt down to the paired Bridge Helper for this chat (Slice 15). */

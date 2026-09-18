@@ -19,6 +19,7 @@ import {
   deleteAgentCheckpoint,
   fetchAgentCheckpoints,
   fetchAgentInstructions,
+  fetchAgentRunRequest,
   fetchBridgeHelperPresence,
   requestAgentRun,
   reorderAgentCheckpoints,
@@ -649,17 +650,49 @@ export function useBridgeHelper(opts?: { enabled?: boolean }) {
   });
 }
 
+/** What became of a run request for one test. */
+export function agentRunRequestQueryKey(testId: string) {
+  return ["agent-run-request", testId] as const;
+}
+
+/**
+ * The life of a run request on this test — outstanding, acknowledged, fulfilled or lapsed.
+ *
+ * Polled, and deliberately polled by every tab rather than remembered by the one that pressed:
+ * the request lives on the relay, so a second tab sees it outstanding and offers no second press.
+ * Fast while something is in flight, slow otherwise — the point of the fast poll is to catch the
+ * Run appearing, and there is nothing to catch once it has.
+ */
+export function useAgentRunRequest(testId: string, opts?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: agentRunRequestQueryKey(testId),
+    queryFn: () => fetchAgentRunRequest(testId),
+    enabled: (opts?.enabled ?? true) && testId.length > 0,
+    refetchInterval: (query) => {
+      const phase = query.state.data?.phase;
+      return phase === "outstanding" || phase === "acknowledged" ? 1500 : 8000;
+    },
+  });
+}
+
 /**
  * Ask your own Claude to run an Agent-Driven Test.
  *
- * Nothing is invalidated on success, and that is not an omission: pressing Run creates no Run, no
- * reservation and no row. The run appears in the list when Claude calls `start_agent_run`, which
- * the runs list is already polling for.
+ * No run list is invalidated on success, and that is not an omission: pressing Run creates no Run,
+ * no reservation and no row. The run appears in the list when Claude calls `start_agent_run`,
+ * which the runs list is already polling for.
+ *
+ * The request's own state IS seeded from the response, so the wait is legible from the instant of
+ * the press rather than from whenever the next poll happens to land.
  */
 export function useRequestAgentRun() {
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: (vars: { testId: string; environmentId?: string }) =>
       requestAgentRun(vars.testId, vars.environmentId),
+    onSuccess: (result, vars) => {
+      qc.setQueryData(agentRunRequestQueryKey(vars.testId), result.request);
+    },
   });
 }
 

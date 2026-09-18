@@ -165,6 +165,19 @@ Distinct from an Authoring Session (which records into a Draft) and a Repair Ses
 edits an existing test) — both of which are Varys-hosted browsers.
 _Avoid_: agent session, run session, execution session
 
+**Run Request**:
+A press of the Run control on an Agent-Driven Test: Varys asking a person's paired **Bridge
+Helper** to start an **Agent Run Session**. It creates nothing — no Run, no reservation, no row —
+so it is not a Run in a pending state; it is the ask itself, held only in memory and only for as
+long as it has left. It ends in one of three ways: **acknowledged** (the helper says it has
+launched Claude), **fulfilled** (an Agent Run Session for that test was started, which is what
+was actually wanted), or **lapsed** (neither happened inside its bound, so Varys says plainly
+that it asked and cannot say whether anyone listened). One request at a time per person per test,
+refused by the relay rather than by a disabled button, so two browser tabs cannot each start a
+session on the same machine. Distinct from a **Claim**, which reserves durable work for a worker;
+a Run Request reserves nothing and leaves nothing behind when it lapses.
+_Avoid_: pending run, queued agent run, reservation
+
 **Wall-Clock Lease**:
 The bound on an Agent Run Session: how long it may run before Varys closes it, set per test with
 a modest default and enforced **server-side**, so it is a rule rather than something the AI

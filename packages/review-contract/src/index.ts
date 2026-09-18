@@ -1371,18 +1371,73 @@ export interface AgentRunRequestBody {
   environmentId?: string;
 }
 
-/** Which paired helper the run request was handed to. */
+/**
+ * Where a run request is in its short life (Slice 18). The press writes nothing durable, so this
+ * is the web app's only account of what is happening between the press and the Run appearing.
+ *
+ *  - `none` — no request on record for this test (never sent, or long since forgotten).
+ *  - `outstanding` — sent to a helper; nothing has come back yet.
+ *  - `acknowledged` — the helper reported that it has launched Claude. The press is known to have
+ *    landed somewhere, which is what distinguishes a slow helper from a wedged one.
+ *  - `fulfilled` — a Run for this test was started. The thing the author actually wanted.
+ *  - `lapsed` — neither happened inside the bound. Not an error condition of anything: it is the
+ *    honest report that Varys asked and cannot say whether anybody listened.
+ */
+export type AgentRunRequestPhase =
+  | "none"
+  | "outstanding"
+  | "acknowledged"
+  | "fulfilled"
+  | "lapsed";
+
+/**
+ * Whether a request is still open — the two phases during which a further press for the same test
+ * is refused, and the only two from which it can still become anything else. Shared rather than
+ * spelled out at each site, so the button's idea of "in flight" and the relay's cannot drift.
+ */
+export function isAgentRunRequestInFlight(phase: AgentRunRequestPhase): boolean {
+  return phase === "outstanding" || phase === "acknowledged";
+}
+
+/**
+ * The transient, owner-scoped state of one run request. Nothing here is durable and none of it
+ * survives a restart — a request that lapses leaves nothing behind, because nothing was created.
+ */
+export interface AgentRunRequestState {
+  testId: string;
+  phase: AgentRunRequestPhase;
+  /** Unix ms the request was sent; null when `phase` is `none`. */
+  requestedAt: number | null;
+  /** Unix ms this request lapses at if no Run appears. Null once it is `fulfilled` or `lapsed` —
+   *  there is no longer anything to count down to. */
+  lapsesAt: number | null;
+  /** Unix ms the helper said it had launched Claude, or null if it never did. Read alongside
+   *  `lapsed` it is the difference between "nobody answered" and "Claude was started and no run
+   *  came of it" — two different things to go and look at. */
+  acknowledgedAt: number | null;
+  /** The Run that fulfilled this request — where the web app takes the author. */
+  runId: string | null;
+}
+
+/** Which paired helper the run request was handed to, and the life that request now has. */
 export interface AgentRunRequestResult {
   chatId: string;
+  request: AgentRunRequestState;
 }
 
 /** What the Bridge Helper POSTs up to the relay (helper → server). `assistant`/`tool` are
  *  mirrored to the web verbatim; `session` correlates the Authoring Session and the relay turns
- *  it into a `status` event. */
+ *  it into a `status` event.
+ *
+ *  `agent-run-launched` is the helper saying it has started Claude on a run request. The relay
+ *  keeps it rather than mirroring it, because it answers a request rather than adding a line to
+ *  the conversation. It is a claim about the helper's own behaviour and nothing more: it says a
+ *  Claude was launched, never that a Run exists — only `start_agent_run` can say that. */
 export type BridgeHelperEvent =
   | { type: "assistant"; text: string }
   | { type: "tool"; name: string; detail?: string }
-  | { type: "session"; sessionId: string };
+  | { type: "session"; sessionId: string }
+  | { type: "agent-run-launched"; testId: string };
 
 /**
  * Whether Claude Code is driving the MCP authoring server (Slice 15). The MCP transport is
