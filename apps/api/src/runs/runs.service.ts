@@ -7,15 +7,19 @@ import {
 } from "@nestjs/common";
 import {
   baselines,
+  currentDefinitionOf,
+  currentVersionRow,
   environments,
+  replayedDefinition,
+  replayedTestId,
   runAssertions,
   runEvidence,
   runNetwork,
   runResults,
   runs,
   runSteps,
-  testVersions,
   tests,
+  testVersions,
 } from "@varys/db";
 import { diffPng } from "@varys/diff-engine";
 import { type Boss, enqueueRun } from "@varys/queue";
@@ -27,7 +31,6 @@ import type {
   CompareMode,
   CheckpointView,
   FingerprintSummary,
-  NeedsReviewItem,
   PersistResult,
   ReEvaluation,
   Rect,
@@ -46,7 +49,6 @@ import {
   deriveAgentSessionState,
   deriveRunOutcome,
   deriveUnreachedRootCause,
-  isRepairInReview,
   rollupRunStatus,
   type AgentSessionView,
   type RunFailureKind,
@@ -113,9 +115,7 @@ export class RunsService {
       trace?: boolean;
       /** Who triggered this run (email / sentinel) and how it was triggered. */
       triggeredBy?: string;
-      /** `repair` is slice 06's re-run: queued by Varys itself the moment a repair passed the
-       *  justification gate, so it is neither a human's "manual" nor a cron's "schedule". */
-      triggerSource?: "manual" | "suite" | "schedule" | "api" | "repair";
+      triggerSource?: "manual" | "suite" | "schedule" | "api";
     } = {},
   ): Promise<CreatedRun> {
     // An Agent-Driven Test is never executed by the worker: it has no steps, and its one version
@@ -134,12 +134,7 @@ export class RunsService {
       );
     }
 
-    const [version] = await this.db
-      .select({ id: testVersions.id })
-      .from(testVersions)
-      .where(eq(testVersions.testId, testId))
-      .orderBy(desc(testVersions.version))
-      .limit(1);
+    const version = await currentVersionRow(this.db, testId);
     if (!version) throw new NotFoundException(`Test ${testId} not found`);
 
     const [run] = await this.db
@@ -203,10 +198,9 @@ export class RunsService {
       })
       .from(runAssertions)
       .innerJoin(runs, eq(runs.id, runAssertions.runId))
-      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
       .where(
         and(
-          eq(testVersions.testId, testId),
+          eq(replayedTestId, testId),
           inArray(
             runAssertions.assertionId,
             rows.map((r) => r.assertionId),
@@ -257,27 +251,17 @@ export class RunsService {
         triggerSource: runs.triggerSource,
         notes: runs.notes,
         failureKind: runs.failureKind,
-        triageFinding: runs.triageFinding,
-        triageBy: runs.triageBy,
-        triageAt: runs.triageAt,
         agentSummary: runs.agentSummary,
         agentInstructions: runs.agentInstructions,
         agentLeaseSeconds: runs.agentLeaseSeconds,
         agentLeaseExpiresAt: runs.agentLeaseExpiresAt,
-        testId: testVersions.testId,
+        testId: replayedTestId,
         testName: tests.name,
         kind: tests.kind,
-        repairPolicy: tests.repairPolicy,
-        definition: testVersions.definition,
-        // The version this run REPLAYED — an unreviewed repair in it is what makes an otherwise
-        // green run `healed` (slice 06). Read from the run's own version, never the latest, or a
-        // later repair would retroactively recolour runs that never saw it.
-        versionRepairJobId: testVersions.repairJobId,
-        versionReviewState: testVersions.reviewState,
+        definition: replayedDefinition,
       })
       .from(runs)
-      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
-      .innerJoin(tests, eq(tests.id, testVersions.testId))
+      .innerJoin(tests, eq(tests.id, replayedTestId))
       .where(eq(runs.id, runId))
       .limit(1);
     if (!row) throw new NotFoundException(`Run ${runId} not found`);
@@ -508,6 +492,10 @@ export class RunsService {
       }),
     );
 
+    // Derived before the outcome, because the outcome depends on it: a session still inside its
+    // lease is not a run that has finished failing, however many slots are still empty.
+    const session = this.agentSessionOf(row);
+
     return {
       runId,
       status: row.status,
@@ -515,7 +503,7 @@ export class RunsService {
       outcome: deriveRunOutcome(checkpoints, {
         status: row.status,
         error: row.error,
-        repairApplied: isRepairInReview(row.versionRepairJobId, row.versionReviewState),
+        agentSession: session?.state ?? null,
       }),
       testId: row.testId,
       suiteRunId: row.suiteRunId,
@@ -536,16 +524,10 @@ export class RunsService {
       network,
       notes: row.notes ?? null,
       // Which class of failure this was (Slice 19), recorded by the runner rather than inferred.
-      // `locator` is still the only repairable one — the repair affordance keys on exactly that
-      // string, so widening the vocabulary (slice 08) cannot accidentally offer a repair for a
-      // crash. An unrecognised stored value degrades to null rather than through to the client.
+      // The run-detail repair affordance keys on exactly `locator`, so widening the vocabulary
+      // (slice 08) cannot accidentally offer a repair for a crash. An unrecognised stored value
+      // degrades to null rather than through to the client.
       failureKind: isRunFailureKind(row.failureKind) ? row.failureKind : null,
-      // The triage finding, shown beside the failure. An annotation: `outcome` above is derived
-      // without it, so a diagnosis can never read as a resolution.
-      triageFinding: row.triageFinding ?? null,
-      triageBy: row.triageBy ?? null,
-      triageAt: row.triageAt ? row.triageAt.toISOString() : null,
-      repairPolicy: row.repairPolicy === "auto" ? "auto" : "manual",
       checkpoints,
       // Each assertion separately, with its own history — never folded into the checkpoints, and
       // never collapsed to a single pass/fail: `extraction-failed` and `relation-false` say
@@ -567,30 +549,43 @@ export class RunsService {
       // this adds is the ability to SAY so: before the lease, a run with unfilled slots and no
       // summary could equally have been an agent still walking it, and the view had to word itself
       // around not knowing.
-      session:
-        row.agentLeaseExpiresAt && row.agentLeaseSeconds != null
-          ? ({
-              leaseSeconds: row.agentLeaseSeconds,
-              leaseExpiresAt: row.agentLeaseExpiresAt.toISOString(),
-              state: deriveAgentSessionState(
-                { summaryWritten: row.agentSummary != null, leaseExpiresAt: row.agentLeaseExpiresAt },
-                Date.now(),
-              ),
-            } satisfies AgentSessionView)
-          : null,
+      session,
     };
   }
 
-  /** The latest version's definition for a test (the source of "current" masks/threshold). */
+  /**
+   * The **Agent Run Session** behind a run row, or null for a pinned run (and for an agent run
+   * started before leases existed).
+   *
+   * Evaluated against the clock AT READ TIME — nothing writes the answer down, because an expired
+   * session needs no sweeper to be over: the run has been `failed`/`unreached` since its rows were
+   * seeded, and this only adds the ability to SAY which.
+   *
+   * Shared by the detail view and the list on purpose. That state decides whether a run is allowed
+   * to read `running`, so two surfaces deriving it separately would eventually disagree about the
+   * same run on the same screen.
+   */
+  private agentSessionOf(row: {
+    agentLeaseSeconds: number | null;
+    agentLeaseExpiresAt: Date | null;
+    agentSummary: string | null;
+  }): AgentSessionView | null {
+    if (!row.agentLeaseExpiresAt || row.agentLeaseSeconds == null) return null;
+    return {
+      leaseSeconds: row.agentLeaseSeconds,
+      leaseExpiresAt: row.agentLeaseExpiresAt.toISOString(),
+      state: deriveAgentSessionState(
+        { summaryWritten: row.agentSummary != null, leaseExpiresAt: row.agentLeaseExpiresAt },
+        Date.now(),
+      ),
+    };
+  }
+
+  /** The test's current definition (the source of "current" masks/threshold). */
   private async latestDefinition(testId: string): Promise<TestDefinition> {
-    const [row] = await this.db
-      .select({ definition: testVersions.definition })
-      .from(testVersions)
-      .where(eq(testVersions.testId, testId))
-      .orderBy(desc(testVersions.version))
-      .limit(1);
-    if (!row) throw new NotFoundException(`No versions for test ${testId}`);
-    return row.definition as TestDefinition;
+    const definition = await currentDefinitionOf(this.db, testId);
+    if (!definition) throw new NotFoundException(`No versions for test ${testId}`);
+    return definition as TestDefinition;
   }
 
   /**
@@ -632,16 +627,19 @@ export class RunsService {
         createdAt: runs.createdAt,
         triggeredBy: runs.triggeredBy,
         triggerSource: runs.triggerSource,
-        testId: testVersions.testId,
+        // The Agent Run Session's bound. Read by the LIST as well as the detail view, because a
+        // session walking the journey right now and one that ended red an hour ago are otherwise
+        // the same row of `missing` slots, and the list has no other signal to tell them apart.
+        agentLeaseSeconds: runs.agentLeaseSeconds,
+        agentLeaseExpiresAt: runs.agentLeaseExpiresAt,
+        agentSummary: runs.agentSummary,
+        testId: replayedTestId,
         testName: tests.name,
-        versionRepairJobId: testVersions.repairJobId,
-        versionReviewState: testVersions.reviewState,
       })
       .from(runs)
-      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
-      .innerJoin(tests, eq(tests.id, testVersions.testId))
+      .innerJoin(tests, eq(tests.id, replayedTestId))
       .where(
-        testId ? and(isNull(runs.suiteRunId), eq(testVersions.testId, testId)) : isNull(runs.suiteRunId),
+        testId ? and(isNull(runs.suiteRunId), eq(replayedTestId, testId)) : isNull(runs.suiteRunId),
       )
       .orderBy(desc(runs.createdAt))
       .limit(limit);
@@ -679,8 +677,9 @@ export class RunsService {
       }
     }
 
-    return rows.map(
-      (r): RunSummary => ({
+    return rows.map((r): RunSummary => {
+      const session = this.agentSessionOf(r);
+      return {
         runId: r.runId,
         testId: r.testId,
         testName: r.testName,
@@ -689,14 +688,15 @@ export class RunsService {
         outcome: deriveRunOutcome(checkpointsByRun.get(r.runId) ?? [], {
           status: r.status,
           error: r.error,
-          repairApplied: isRepairInReview(r.versionRepairJobId, r.versionReviewState),
+          agentSession: session?.state ?? null,
         }),
         runTimestamp: r.createdAt.toISOString(),
         error: r.error,
         triggeredBy: r.triggeredBy,
         triggerSource: r.triggerSource,
-      }),
-    );
+        session,
+      };
+    });
   }
 
   /** Set (or clear) a run's free-form note. Empty/whitespace clears it (→ null). 404 if
@@ -780,57 +780,6 @@ export class RunsService {
     return { ok: true };
   }
 
-  /** The flat "needs review" list: checkpoints awaiting a decision
-   *  (pending-baseline | diff, not yet resolved), newest run first. */
-  async needsReview(): Promise<NeedsReviewItem[]> {
-    const rows = await this.db
-      .select({
-        runId: runs.id,
-        testName: tests.name,
-        environmentId: runs.environmentId,
-        runTimestamp: runs.createdAt,
-        checkpointName: runResults.checkpointName,
-        reviewState: runResults.reviewState,
-      })
-      .from(runResults)
-      .innerJoin(runs, eq(runs.id, runResults.runId))
-      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
-      .innerJoin(tests, eq(tests.id, testVersions.testId))
-      .where(
-        and(
-          inArray(runResults.reviewState, ["pending-baseline", "diff"]),
-          isNull(runResults.resolution),
-        ),
-      )
-      .orderBy(desc(runs.createdAt));
-
-    // Resolve environment names in one batch ("default" when a run has no env).
-    const envIds = [
-      ...new Set(rows.map((r) => r.environmentId).filter((x): x is string => x != null)),
-    ];
-    const envNames = new Map<string, string>();
-    if (envIds.length) {
-      const envs = await this.db
-        .select({ id: environments.id, name: environments.name })
-        .from(environments)
-        .where(inArray(environments.id, envIds));
-      for (const e of envs) envNames.set(e.id, e.name);
-    }
-
-    return rows.map(
-      (r): NeedsReviewItem => ({
-        runId: r.runId,
-        testName: r.testName,
-        environment: r.environmentId ? (envNames.get(r.environmentId) ?? ENVIRONMENT) : ENVIRONMENT,
-        runTimestamp: r.runTimestamp.toISOString(),
-        checkpointName: r.checkpointName,
-        // Narrowed by the query above, which selects only these two — notably NOT `missing`,
-        // which is a failure with nothing to look at rather than work awaiting a human.
-        reviewState: r.reviewState as "pending-baseline" | "diff",
-      }),
-    );
-  }
-
   /**
    * Re-derive a run's review status from its checkpoints after a decision
    * (approve / reject) or a mask-threshold re-judge. The worker stamps `runs.status`
@@ -893,12 +842,11 @@ export class RunsService {
 
     const [ctx] = await this.db
       .select({
-        testId: testVersions.testId,
-        definition: testVersions.definition,
+        testId: replayedTestId,
+        definition: replayedDefinition,
         environmentId: runs.environmentId,
       })
       .from(runs)
-      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
       .where(eq(runs.id, runId))
       .limit(1);
     if (!ctx) throw new NotFoundException(`Run ${runId} not found`);
@@ -1049,8 +997,7 @@ export class RunsService {
       })
       .from(runResults)
       .innerJoin(runs, eq(runs.id, runResults.runId))
-      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
-      .innerJoin(tests, eq(tests.id, testVersions.testId))
+      .innerJoin(tests, eq(tests.id, replayedTestId))
       .where(and(eq(runResults.runId, runId), eq(runResults.checkpointName, checkpointName)))
       .limit(1);
     if (!r) {
@@ -1090,7 +1037,7 @@ export class RunsService {
    * Persist masks/threshold: write a NEW test_version (latest+1) with the named
    * screenshot step's masks/threshold updated (audited), then re-judge ONLY this
    * checkpoint's run_result against the stored artifacts. A now-within-threshold
-   * checkpoint flips to `passed` and leaves the needs-review list. Future runs use
+   * checkpoint flips to `passed` and no longer awaits a decision. Future runs use
    * the new version; no other historical run is touched.
    */
   async persistMasks(
@@ -1101,7 +1048,7 @@ export class RunsService {
   ): Promise<PersistResult> {
     const [ctx] = await this.db
       .select({
-        testId: testVersions.testId,
+        testId: replayedTestId,
         testKind: tests.kind,
         runResultId: runResults.id,
         baselineArtifactKey: runResults.baselineArtifactKey,
@@ -1110,8 +1057,7 @@ export class RunsService {
       })
       .from(runResults)
       .innerJoin(runs, eq(runs.id, runResults.runId))
-      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
-      .innerJoin(tests, eq(tests.id, testVersions.testId))
+      .innerJoin(tests, eq(tests.id, replayedTestId))
       .where(and(eq(runResults.runId, runId), eq(runResults.checkpointName, checkpointName)))
       .limit(1);
     if (!ctx) {
@@ -1128,13 +1074,9 @@ export class RunsService {
     );
 
     // 1. New audited test_version with the updated masks/threshold on this step.
-    const def = await this.latestDefinition(ctx.testId);
-    const [latest] = await this.db
-      .select({ version: testVersions.version })
-      .from(testVersions)
-      .where(eq(testVersions.testId, ctx.testId))
-      .orderBy(desc(testVersions.version))
-      .limit(1);
+    const latest = await currentVersionRow(this.db, ctx.testId);
+    if (!latest) throw new NotFoundException(`No versions for test ${ctx.testId}`);
+    const def = latest.definition as TestDefinition;
     const masks = (input.masks ?? []) as Rect[];
     const nextDefinition: TestDefinition = {
       ...def,
@@ -1144,7 +1086,7 @@ export class RunsService {
           : s,
       ),
     };
-    const nextVersion = (latest?.version ?? 1) + 1;
+    const nextVersion = latest.version + 1;
     await this.db.insert(testVersions).values({
       testId: ctx.testId,
       version: nextVersion,

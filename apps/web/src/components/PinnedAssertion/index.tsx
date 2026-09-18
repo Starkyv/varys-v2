@@ -133,7 +133,7 @@ export const OUTCOME_META: Record<AssertionOutcome, { label: string; tone: Inten
 
 /**
  * What FOLLOWS from the verdict (Slice 19, slice 10) — one sentence, so the reader learns the
- * consequence from the run rather than by noticing which jobs turned up in the queue.
+ * consequence from the run itself.
  *
  * The distinction is the whole slice: a target that no longer resolves is a broken locator and is
  * repaired like any other, while a false relation is never repaired by anything, because re-pinning
@@ -154,7 +154,7 @@ export function consequenceOf(
   }
   if (outcome !== "extraction-failed") return null;
   return cause === "unresolved"
-    ? "The target no longer resolves — a locator problem, and repairable like any other. Under an automatic Repair Policy this queues a repair job."
+    ? "The target no longer resolves — a locator problem, and repairable like any other."
     : "The value was read but couldn’t be used as this check asked. That is the assertion’s definition, not its locator, so re-pinning wouldn’t help — edit the check.";
 }
 

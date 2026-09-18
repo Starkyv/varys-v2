@@ -41,7 +41,7 @@ const STATUS_LEGEND: InfoTipBlock[] = [
   },
   {
     type: "para",
-    text: "The aggregate is derived from the children on every read — approving a checkpoint moves the suite immediately. A healed child counts as passed: it verified, just on a repair nobody has accepted yet.",
+    text: "The aggregate is derived from the children on every read — approving a checkpoint moves the suite immediately.",
   },
 ];
 

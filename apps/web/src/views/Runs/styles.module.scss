@@ -149,3 +149,12 @@
 .deleteBtn:hover:not(:disabled) {
   color: var(--color-danger);
 }
+
+/* Time left on an Agent Run Session's lease, under its status badge. Muted and small: it
+   qualifies the badge, it is not a second status of its own. */
+.lease {
+  margin-top: var(--space-4);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}

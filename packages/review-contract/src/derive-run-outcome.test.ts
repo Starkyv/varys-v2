@@ -4,7 +4,6 @@ import {
   deriveRunOutcome,
   describeLease,
   deriveUnreachedRootCause,
-  isRepairInReview,
   rollupRunStatus,
   type ReviewState,
   type Resolution,
@@ -66,101 +65,17 @@ describe("deriveRunOutcome", () => {
     expect(deriveRunOutcome([cp("passed"), cp("passed"), cp("diff", "approved")], { status: "passed" })).toBe("baseline");
   });
 
+  it("a run that captured nothing to compare is failed, not a queue item", () => {
+    // No error text, but nothing verified either — there is no reading of this that is green.
+    expect(deriveRunOutcome([], { status: "needs_review" })).toBe("failed");
+  });
+
   it("empty passed run falls back to passed", () => {
     expect(deriveRunOutcome([], { status: "passed" })).toBe("passed");
   });
 
   it("treats an empty-string error as no error", () => {
     expect(deriveRunOutcome([cp("passed")], { status: "passed", error: "" })).toBe("passed");
-  });
-});
-
-/**
- * `healed` (Slice 19, slice 06) — the rung a repair adds. It is not derivable from the
- * checkpoints: a clean re-run after a repair is pixel-for-pixel an ordinary pass, and the
- * difference — that its greenness rests on an edit no human has accepted — is a property of the
- * VERSION the run replayed. So it enters as its own input, and the only question worth pinning is
- * where it sits relative to everything else.
- *
- * Precedence, restated as the slice states it:
- *
- *     failed → regression → pending-baseline → healed → baseline → passed
- *
- * Every pairing below is one row of that order, asserted both ways round: with the repair in
- * play and without, so each case shows what the repair flag DID and did not change.
- */
-describe("deriveRunOutcome — the healed rung", () => {
-  /** Same checkpoints, once with an unaccepted repair in the definition and once without. */
-  const pair = (
-    checkpoints: RunOutcomeCheckpoint[],
-    run: { status: string; error?: string | null },
-  ) => ({
-    withRepair: deriveRunOutcome(checkpoints, { ...run, repairApplied: true }),
-    without: deriveRunOutcome(checkpoints, { ...run, repairApplied: false }),
-  });
-
-  it("a re-run where everything verified reads healed, not passed", () => {
-    const r = pair([cp("passed"), cp("passed")], { status: "passed" });
-    expect(r.withRepair).toBe("healed");
-    expect(r.without).toBe("passed");
-  });
-
-  it("healed outranks baseline — a repaired run that also re-baselined is still a queue item", () => {
-    const r = pair([cp("passed"), cp("diff", "approved")], { status: "passed" });
-    expect(r.withRepair).toBe("healed");
-    expect(r.without).toBe("baseline");
-  });
-
-  it("a pixel diff reads regression, NOT healed, even though a locator was re-pinned", () => {
-    // The rung that matters most: a re-pinned locator must never soften a real visual break.
-    const r = pair([cp("passed"), cp("diff")], { status: "needs_review" });
-    expect(r.withRepair).toBe("regression");
-    expect(r.without).toBe("regression");
-  });
-
-  it("a rejected diff reads regression, not healed", () => {
-    const r = pair([cp("diff", "rejected")], { status: "failed", error: null });
-    expect(r.withRepair).toBe("regression");
-  });
-
-  it("a re-run that crashes reads failed, not healed", () => {
-    const r = pair([], { status: "failed", error: "navigation timeout" });
-    expect(r.withRepair).toBe("failed");
-    expect(r.without).toBe("failed");
-  });
-
-  it("a crash AFTER some checkpoints passed is still failed, not healed", () => {
-    const r = pair([cp("passed")], { status: "failed", error: "boom" });
-    expect(r.withRepair).toBe("failed");
-  });
-
-  it("a repaired run that captured nothing to compare is failed, not healed", () => {
-    // No error text, but nothing verified either — a repair must not dress that up as amber.
-    const r = pair([], { status: "needs_review" });
-    expect(r.withRepair).toBe("failed");
-    expect(r.without).toBe("failed");
-  });
-
-  it("pending-baseline outranks healed — an unapproved first capture is the headline", () => {
-    const r = pair([cp("pending-baseline")], { status: "needs_review" });
-    expect(r.withRepair).toBe("pending-baseline");
-    expect(r.without).toBe("pending-baseline");
-  });
-
-  it("a repaired run whose seeds were all approved reads healed, not baseline", () => {
-    const r = pair([cp("pending-baseline", "approved")], { status: "passed" });
-    expect(r.withRepair).toBe("healed");
-    expect(r.without).toBe("baseline");
-  });
-
-  it("queued / running / cancelled are unchanged by a repair", () => {
-    expect(deriveRunOutcome([], { status: "queued", repairApplied: true })).toBe("queued");
-    expect(deriveRunOutcome([], { status: "running", repairApplied: true })).toBe("running");
-    expect(deriveRunOutcome([], { status: "cancelled", repairApplied: true })).toBe("cancelled");
-  });
-
-  it("an absent repairApplied behaves exactly as false (every pre-slice-06 caller)", () => {
-    expect(deriveRunOutcome([cp("passed")], { status: "passed" })).toBe("passed");
   });
 });
 
@@ -197,12 +112,6 @@ describe("deriveRunOutcome — a missing checkpoint", () => {
     expect(deriveRunOutcome([cp("pending-baseline", "approved"), cp("missing")], { status: "passed" })).toBe("failed");
   });
 
-  it("outranks healed — a repair can never dress an unreached checkpoint up as amber", () => {
-    expect(
-      deriveRunOutcome([cp("passed"), cp("missing")], { status: "passed", repairApplied: true }),
-    ).toBe("failed");
-  });
-
   it("is failed when every slot is missing", () => {
     expect(deriveRunOutcome([cp("missing"), cp("missing")], { status: "needs_review" })).toBe("failed");
   });
@@ -214,16 +123,63 @@ describe("deriveRunOutcome — a missing checkpoint", () => {
   });
 });
 
-describe("isRepairInReview", () => {
-  it("is true only for a repair version still awaiting a human", () => {
-    expect(isRepairInReview("job-1", "unreviewed")).toBe(true);
-    // Accepted: signed off, so runs against it are ordinary passes again — healed is a review
-    // marker, not a permanent scar on the test's history.
-    expect(isRepairInReview("job-1", "reviewed")).toBe(false);
-    expect(isRepairInReview("job-1", "rejected")).toBe(false);
-    // A human's own unreviewed-by-accident version is not a repair: no job behind it.
-    expect(isRepairInReview(null, "unreviewed")).toBe(false);
-    expect(isRepairInReview(null, null)).toBe(false);
+/**
+ * An Agent Run Session is created ALREADY RED, every Manifest slot `missing`, and stays that way
+ * until the agent reports one. That is the honest answer to "what has this run verified?" — but
+ * while the session is inside its lease it is not yet an answer to "how did this run END", and a
+ * runs list that says `failed` about a session currently walking the journey is asserting
+ * something that is not true yet.
+ *
+ * The rule is narrow on purpose: an OPEN session softens an UNFILLED slot and nothing else. It
+ * cannot rescue a diff, and it cannot outlive the lease.
+ */
+describe("deriveRunOutcome — an Agent Run Session still inside its lease", () => {
+  it("reads running rather than failed while slots are merely unreported", () => {
+    expect(
+      deriveRunOutcome([cp("passed"), cp("missing")], { status: "failed", agentSession: "open" }),
+    ).toBe("running");
+  });
+
+  it("reads running for a session that has reported nothing at all yet", () => {
+    expect(
+      deriveRunOutcome([cp("missing"), cp("missing")], { status: "failed", agentSession: "open" }),
+    ).toBe("running");
+  });
+
+  it("goes red the instant the lease is over — expired is a verdict, open is not", () => {
+    expect(
+      deriveRunOutcome([cp("passed"), cp("missing")], { status: "failed", agentSession: "expired" }),
+    ).toBe("failed");
+  });
+
+  it("goes red when the agent closed the session having left a slot unreported", () => {
+    expect(
+      deriveRunOutcome([cp("passed"), cp("missing")], { status: "failed", agentSession: "finished" }),
+    ).toBe("failed");
+  });
+
+  it("softens an unfilled slot and NOTHING else — an open session cannot hide a real diff", () => {
+    // Every slot reported, one of them differing: the session being open says nothing about that,
+    // and a run that found a regression should say so while it is still running.
+    expect(
+      deriveRunOutcome([cp("passed"), cp("diff")], { status: "failed", agentSession: "open" }),
+    ).toBe("regression");
+  });
+
+  it("still reports a real execution error over an open session", () => {
+    expect(
+      deriveRunOutcome([cp("missing")], { status: "failed", error: "boom", agentSession: "open" }),
+    ).toBe("failed");
+  });
+
+  it("leaves every caller that does not pass a session exactly as it was", () => {
+    // The compatibility guarantee: a pinned run, and every one of the callers that has no session
+    // to offer, must derive the same answer as before the parameter existed.
+    for (const session of [undefined, null] as const) {
+      expect(
+        deriveRunOutcome([cp("passed"), cp("missing")], { status: "passed", agentSession: session }),
+      ).toBe("failed");
+    }
   });
 });
 

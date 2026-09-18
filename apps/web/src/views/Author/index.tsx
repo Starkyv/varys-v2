@@ -22,11 +22,10 @@ import {
   Pencil,
   Skeleton,
   Sliders,
-  Sparkles,
   X,
 } from "@varys/ui";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
-import { API_BASE } from "../../api";
+import { API_BASE, API_ORIGIN } from "../../api";
 import { ZoomableImage } from "../../components/ZoomableImage";
 import { AgentDrivenAuthoring } from "./components/AgentDriven";
 import { useRouter } from "../../context/router";
@@ -39,13 +38,9 @@ import {
 } from "../../queries";
 import styles from "./styles.module.scss";
 
-/** Where the MCP server lives — it IS the API, served same-origin as this app (the Vite proxy
- *  in dev, the ingress in prod), so derive it from where this page is actually served instead of
- *  hardcoding a host. A split-origin deploy sets VITE_API_BASE (→ API_BASE) to the API origin; in
- *  local dev the SPA (:5174) and API (:4000) differ, so target the API port directly. */
-const MCP_BASE = API_BASE || (import.meta.env.DEV ? "http://localhost:4000" : window.location.origin);
-/** The shell command that points a user's own Claude Code at Varys's MCP server. */
-const CONNECT_CMD = `claude mcp add --transport http varys ${MCP_BASE}/mcp`;
+/** The shell command that points a user's own Claude Code at Varys's MCP server. The MCP server
+ *  IS the API, so it is named by the same origin a Bridge Helper would be pointed at. */
+const CONNECT_CMD = `claude mcp add --transport http varys ${API_ORIGIN}/mcp`;
 
 /** One captured step of a live session: the action Claude took + the screenshot taken right
  *  after it. A `checkpoint` name marks the steps that become the test's visual assertions. */
@@ -156,11 +151,11 @@ function ConnectionPill({ status }: { status?: McpStatus }) {
   );
 }
 
-/** One example line inside a mode card (a violet ›-chevron + text). */
+/** One example line of what to say to Claude (a violet ›-chevron + text). */
 function ExampleLine({ children }: { children: ReactNode }) {
   return (
-    <div className={styles.modeLine}>
-      <span className={styles.modeChevron}>›</span>
+    <div className={styles.briefLine}>
+      <span className={styles.briefChevron}>›</span>
       <span>{children}</span>
     </div>
   );
@@ -195,9 +190,9 @@ function ConnectState() {
           <div className={styles.connectTitle}>No active authoring session</div>
         </div>
         <p className={styles.connectDesc}>
-          Connect your Claude Code to Varys, then describe the flow in plain language — and name the
-          mode you want, since Claude won’t guess it. Claude drives a real browser on the server —
-          every step and checkpoint streams in here.
+          Connect your Claude Code to Varys, then describe the whole flow in plain language — or
+          point it at a plan file. Claude drives a real browser on the server, walks the brief end to
+          end and saves the draft itself; every step and checkpoint streams in here.
         </p>
       </div>
 
@@ -226,79 +221,32 @@ function ConnectState() {
         </div>
       </div>
 
-      {/* step 2 — what to test, two ways */}
+      {/* step 2 — hand over the brief */}
       <div className={styles.step}>
         <div className={styles.stepLabel}>
           <span className={styles.stepNum}>2</span>
           <span className={styles.stepLabelText}>Tell it what to test</span>
-          <span className={styles.stepLabelSub}>— two ways</span>
+          <span className={styles.stepLabelSub}>— the whole thing, up front</span>
         </div>
-        <div className={styles.twoUp}>
-          {/* step-by-step */}
-          <div className={styles.modeCard}>
-            <div className={styles.modeHead}>
-              <span className={styles.modeIcon}>
-                <MousePointer size={19} />
-              </span>
-              <div className={styles.modeTitleWrap}>
-                <div className={styles.modeTitle}>Step-by-step</div>
-                <div className={styles.modeTags}>
-                  <span className={styles.modeTag}>interactive</span>
-                  <span className={styles.modeTagSub}>default</span>
-                </div>
-              </div>
-            </div>
-            <div className={styles.modeDesc}>
-              One instruction at a time. Claude does a single action, then stops and reports what
-              changed. The session stays open until you explicitly tell it to finish — it never wraps
-              up on its own.
-            </div>
-            <div className={styles.modeExample}>
-              <ExampleLine>
-                Open the dashboard in <strong>interactive</strong> mode, log in as a standard user
-              </ExampleLine>
-              <ExampleLine>
-                Click <strong>Reports</strong>
-              </ExampleLine>
-              <ExampleLine>Screenshot the revenue chart as a checkpoint</ExampleLine>
-              <ExampleLine>
-                When you’re done: <strong>finish the session</strong>
-              </ExampleLine>
-            </div>
-            <div className={styles.modeShortcut}>
-              <span className={styles.modeShortcutLabel}>Shortcut</span>
-              <code className={styles.modeShortcutCode}>{"/varys-interactive <url>"}</code>
-            </div>
+        <div className={styles.briefCard}>
+          <div className={styles.briefDesc}>
+            Give Claude the entire brief in one go — typed out, or a plan file to read. It opens the
+            session, walks every step without stopping to check in, captures the checkpoints the
+            brief asks for, and finishes the draft on its own. There is nothing to choose before it
+            starts and nothing to say to make it stop.
           </div>
-
-          {/* batch */}
-          <div className={styles.modeCard}>
-            <div className={styles.modeHead}>
-              <span className={styles.modeIcon}>
-                <Sparkles size={19} />
-              </span>
-              <div className={styles.modeTitleWrap}>
-                <div className={styles.modeTitle}>Batch</div>
-                <div className={styles.modeTags}>
-                  <span className={styles.modeTag}>batch</span>
-                  <span className={styles.modeTagSub}>runs end-to-end</span>
-                </div>
-              </div>
-            </div>
-            <div className={styles.modeDesc}>
-              Point Claude at a plan file. It runs every step start to finish without pausing,
-              captures the checkpoints the plan asks for, and finishes the draft on its own.
-            </div>
-            <div className={styles.modeExample}>
-              <ExampleLine>
-                Author a Varys test from <strong>./plans/reports.md</strong> in <strong>batch</strong>{" "}
-                mode
-              </ExampleLine>
-            </div>
-            <div className={styles.modeShortcut}>
-              <span className={styles.modeShortcutLabel}>Shortcut</span>
-              <code className={styles.modeShortcutCode}>{"/varys-batch <plan-file>"}</code>
-            </div>
+          <div className={styles.briefExample}>
+            <ExampleLine>
+              Author a Varys test: open the dashboard, log in as a standard user, click{" "}
+              <strong>Reports</strong>, and screenshot the revenue chart as a checkpoint
+            </ExampleLine>
+            <ExampleLine>
+              …or: Author a Varys test from <strong>./plans/reports.md</strong>
+            </ExampleLine>
+          </div>
+          <div className={styles.briefShortcut}>
+            <span className={styles.briefShortcutLabel}>Shortcut</span>
+            <code className={styles.briefShortcutCode}>{"/varys-author <url-or-plan-file>"}</code>
           </div>
         </div>
       </div>
@@ -337,7 +285,8 @@ function CopyGlyph() {
  * Editor for the AI authoring instructions (the MCP `initialize` prompt), in two layers served to
  * Claude as base + additional. Edits are stored server-side and served on the next connect — no
  * redeploy. "Additional" (team guidance) is the prominent, frequently-edited field; "Base" (the
- * foundational prompt — modes, checkpoint discipline) sits in a collapsed advanced section since
+ * foundational prompt — the authoring discipline, checkpoint discipline) sits in a collapsed
+ * advanced section since
  * it changes rarely. When the additional layer is env-locked it's shown read-only.
  */
 function InstructionsEditor({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -438,7 +387,8 @@ function InstructionsEditor({ open, onClose }: { open: boolean; onClose: () => v
             {baseOpen && (
               <div className={styles.instrField}>
                 <p className={styles.instrHelp}>
-                  The core contract (the two modes, the checkpoint discipline). Changing this affects
+                  The core contract (the authoring discipline, the checkpoint discipline). Changing
+                  this affects
                   how every test is authored — edit with care.{" "}
                   {!data.baseUsingDefault && (
                     <button
@@ -794,9 +744,6 @@ export function Author() {
           <div className={styles.sessionHead}>
             <div className={styles.sessionTitleRow}>
               <span className={styles.sessionName}>{session.name}</span>
-              <Badge tone={session.mode === "batch" ? "primary" : "neutral"} appearance="soft" size="sm">
-                {session.mode === "batch" ? "Batch" : "Step-by-step"}
-              </Badge>
               <span className={styles.livePill}>
                 <span className={styles.livePillDot} />
                 Live

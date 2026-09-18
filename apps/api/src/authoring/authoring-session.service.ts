@@ -9,7 +9,12 @@ import {
 } from "@nestjs/common";
 import { captureFingerprint } from "@varys/capture";
 import {
+  currentDefinitionOf,
+  currentVersionRow,
   environments,
+  replayedDefinition,
+  replayedTestId,
+  replayedVersion,
   runAssertions,
   runNetwork,
   runResults,
@@ -83,7 +88,6 @@ import { type Observable, Subject } from "rxjs";
 import { DB, type Db } from "../db/db.module";
 import { applyFingerprintPatch, hasMatchableSignal } from "../fingerprint-patch";
 import { summarizeFingerprint } from "../fingerprint-summary";
-import { RepairJobsService } from "../repair-jobs/repair-jobs.service";
 import { STORAGE } from "../storage/storage.module";
 import { TestsService } from "../tests/tests.service";
 
@@ -548,8 +552,8 @@ export interface TestEditInsert {
 
 /** An arbitrary edit to a test: any step, any field, plus structure (add / remove / reorder). */
 export interface TestEditInput {
-  /** Who is making the edit. Only consulted when there is no `sessionId` to read the owner off:
-   *  an AGENT's write lands unreviewed wherever it comes from (Slice 19, slice 04). */
+  /** Who is making the edit. Only consulted when there is no `sessionId` to read the owner off —
+   *  it supplies the email the version is attributed to. */
   actor?: SessionActor;
   /** An open repair session — supplies the test being repaired, and the live page a `ref` names. */
   sessionId?: string;
@@ -655,9 +659,6 @@ export interface OpenSessionInput {
   startUrl: string;
   name?: string;
   intent?: string;
-  /** How Claude will drive this session. REQUIRED — no default; open() rejects a missing or
-   *  invalid mode so the choice is always explicit, never inferred. See AuthoringMode. */
-  mode?: AuthoringMode;
   viewport?: Partial<Viewport>;
 }
 
@@ -666,15 +667,15 @@ export interface OpenSessionResult {
   url: string;
   title: string;
   nodes: SnapshotNode[];
-  /** The mode this session was opened in (echoed so the agent can confirm it stuck). */
-  mode: AuthoringMode;
-  /** Mode-specific steering for the rest of this session — reasserted here because the MCP
-   *  `initialize` instructions are global/once, while this lands right when work begins. */
+  /** Steering for the rest of this session — reasserted here because the MCP `initialize`
+   *  instructions are global/once, while this lands right when work begins. */
   guidance: string;
 }
 
-/** Per-mode steering returned from open_session, anchoring how Claude proceeds. The checkpoint
- *  discipline (only on an explicit request) holds in BOTH modes — see authoring-instructions. */
+/** Steering returned when a session opens, anchoring how Claude proceeds. An Authoring Session
+ *  has one discipline, so there is nothing to choose between; a Repair Session gets its own
+ *  because it genuinely is a different kind of session. The checkpoint discipline (only on an
+ *  explicit request) holds in both — see authoring-instructions. */
 function modeGuidance(mode: AuthoringMode): string {
   if (mode === "repair") {
     return [
@@ -685,9 +686,7 @@ function modeGuidance(mode: AuthoringMode): string {
       "Do only what the user asked for, and say afterwards exactly what you changed and the new version number. edit_test is not verified against the page the way apply_fix is, so when you edit a locator through it, check it with try_locator (and goto_step to re-drive) rather than declaring it fixed.",
     ].join(" ");
   }
-  return mode === "batch"
-    ? "Batch mode: execute the whole plan to completion without pausing for confirmation between steps. Take a checkpoint ONLY where the plan explicitly asks for one (e.g. 'screenshot', 'capture', 'snapshot', 'checkpoint', 'verify this screen') — never add one on your own. When every step in the plan is done, call finish_session to save the draft."
-    : "Step-by-step mode: perform ONLY the single action just requested, then stop and report what you did and what the page now shows. Do not run ahead to later steps. Take a checkpoint only when explicitly told to. NEVER end the session on your own: it ends ONLY when the user explicitly tells you to finish or save it (e.g. \"finish the session\", \"we're done\", \"save it\"). When they do, call finish_session with confirm: true — the server refuses finish_session on an interactive session without that confirmation.";
+  return "You have the whole brief: walk it end to end without pausing for confirmation between steps. Take a checkpoint ONLY where the brief explicitly asks for one (e.g. 'screenshot', 'capture', 'snapshot', 'checkpoint', 'verify this screen') — never add one on your own. When every step in the brief is done, call finish_session to save the draft; nobody is waiting to tell you to.";
 }
 
 export interface FinishResult {
@@ -896,47 +895,20 @@ export class AuthoringSessionService implements OnApplicationShutdown {
   constructor(
     @Inject(TestsService) private readonly tests: TestsService,
     @Inject(DB) private readonly db: Db,
-    // Only ever asked one question: which Repair Job is this agent's write being made under?
-    // (Slice 19, slice 04 — a version awaiting review has to be traceable to the failure it
-    // claims to fix.) A human principal never reaches it.
-    @Inject(RepairJobsService) private readonly repairJobs: RepairJobsService,
     // Where a repair's page capture lands (Slice 19, slice 13) — the same artifact store every
     // run screenshot uses, so the review surface reads it through `/artifacts/:token` like any
     // other image.
     @Inject(STORAGE) private readonly storage: StorageAdapter,
   ) {}
 
-  /**
-   * The test an open repair session is addressing, or null. The MCP layer needs it to re-check an
-   * AGENT's claim on every session-addressed tool call: a session was opened under a claim, but
-   * that claim can be released or lapse while the browser is still parked, and a repair tool that
-   * kept working off the session id alone would outlive the licence it was opened under.
-   */
+  /** The test an open repair session is addressing, or null. */
   sessionTestId(sessionId: string): string | null {
     return this.sessions.get(sessionId)?.repair?.testId ?? null;
-  }
-
-  /**
-   * How a write by `actor` on `testId` should be recorded (Slice 19, slice 04): an unattended
-   * Repair Agent's version lands `unreviewed` and carries the job it was written under; a human's
-   * lands as it always has, because the person writing it has already reviewed it.
-   */
-  private async reviewFor(
-    actor: { id: string; kind: SessionActorKind } | undefined,
-    testId: string,
-  ): Promise<{ unreviewed: boolean; repairJobId: string | null } | undefined> {
-    if (actor?.kind !== "agent") return undefined;
-    return { unreviewed: true, repairJobId: await this.repairJobs.claimedJobId(actor.id, testId) };
   }
 
   async open(input: OpenSessionInput): Promise<OpenSessionResult> {
     const startUrl = (input.startUrl ?? "").trim();
     if (!startUrl) throw new BadRequestException("startUrl is required");
-    if (input.mode !== "interactive" && input.mode !== "batch") {
-      throw new BadRequestException(
-        'open_session requires an explicit mode: "interactive" (you carry out one user instruction at a time and end only when the user says so) or "batch" (you run a plan/instructions file end-to-end, then finish). Do not default — if the user did not make the mode clear, ask them which they want before opening the session.',
-      );
-    }
     const viewport: Viewport = { ...DEFAULT_VIEWPORT, ...input.viewport };
 
     const browser = await chromium.launch({ headless: true, args: browserLaunchArgs() });
@@ -961,7 +933,6 @@ export class AuthoringSessionService implements OnApplicationShutdown {
     rec.push(buildEntryNavigate(href, new URL(href).origin));
 
     const sessionId = randomUUID();
-    const mode: AuthoringMode = input.mode;
     this.sessions.set(sessionId, {
       ownerId: input.owner.id,
       ownerEmail: input.owner.email,
@@ -975,18 +946,16 @@ export class AuthoringSessionService implements OnApplicationShutdown {
       viewport,
       name: input.name?.trim() || "authored test",
       intent: input.intent?.trim() || null,
-      mode,
+      mode: "record",
       pendingWaits: [],
       lastActivityAt: Date.now(),
       previews: new Map(),
       frameSeq: 0,
     });
-    this.log.log(
-      `opened authoring session ${sessionId} on ${href} (${mode}) for ${input.owner.email}`,
-    );
+    this.log.log(`opened authoring session ${sessionId} on ${href} for ${input.owner.email}`);
     const { nodes } = await page.evaluate(collectSnapshot);
     await this.emitFrame(sessionId, { type: "navigate" });
-    return { sessionId, url: href, title: await page.title(), nodes, mode, guidance: modeGuidance(mode) };
+    return { sessionId, url: href, title: await page.title(), nodes, guidance: modeGuidance("record") };
   }
 
   /** The newest failed Run for a test — how `openRepair` accepts a test id instead of a run id.
@@ -1000,9 +969,8 @@ export class AuthoringSessionService implements OnApplicationShutdown {
     const [row] = await this.db
       .select({ runId: runs.id, name: testsTable.name })
       .from(runs)
-      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
-      .innerJoin(testsTable, eq(testsTable.id, testVersions.testId))
-      .where(and(eq(testVersions.testId, id), eq(runs.status, "failed")))
+      .innerJoin(testsTable, eq(testsTable.id, replayedTestId))
+      .where(and(eq(replayedTestId, id), eq(runs.status, "failed")))
       .orderBy(desc(runs.updatedAt))
       .limit(1);
     if (!row) {
@@ -1033,20 +1001,19 @@ export class AuthoringSessionService implements OnApplicationShutdown {
     const rows = await this.db
       .select({
         runId: runs.id,
-        testId: testVersions.testId,
+        testId: replayedTestId,
         testName: testsTable.name,
         failedAt: runs.updatedAt,
         failedStepIndex: runs.failedStepIndex,
         error: runs.error,
-        definition: testVersions.definition,
+        definition: replayedDefinition,
       })
       .from(runs)
-      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
-      .innerJoin(testsTable, eq(testsTable.id, testVersions.testId))
+      .innerJoin(testsTable, eq(testsTable.id, replayedTestId))
       .where(
         and(
           eq(runs.status, "failed"),
-          ...(forTest ? [eq(testVersions.testId, forTest)] : []),
+          ...(forTest ? [eq(replayedTestId, forTest)] : []),
           ...(name ? [ilike(testsTable.name, `%${name}%`)] : []),
         ),
       )
@@ -1140,14 +1107,13 @@ export class AuthoringSessionService implements OnApplicationShutdown {
         error: runs.error,
         failedStepIndex: runs.failedStepIndex,
         environmentId: runs.environmentId,
-        testId: testVersions.testId,
-        version: testVersions.version,
-        definition: testVersions.definition,
+        testId: replayedTestId,
+        version: replayedVersion,
+        definition: replayedDefinition,
         testName: testsTable.name,
       })
       .from(runs)
-      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
-      .innerJoin(testsTable, eq(testsTable.id, testVersions.testId))
+      .innerJoin(testsTable, eq(testsTable.id, replayedTestId))
       .where(eq(runs.id, runId))
       .limit(1);
     if (!row) throw new NotFoundException(`Run ${runId} not found`);
@@ -1157,13 +1123,13 @@ export class AuthoringSessionService implements OnApplicationShutdown {
     // ACTUALLY broke when the drive stops short), but by default it is the run's own verdict.
     //
     // A run can be red WITHOUT failing at a step: a pixel regression or a failed judge finishes
-    // every step and comes back `needs_review` with a red checkpoint. Those are exactly the
-    // failures a Triage Job diagnoses (Slice 19, slice 08), and "drive to the failure and look" has
-    // to mean something for them too — so fall back to the first red CHECKPOINT's screenshot step
-    // rather than making a drainer guess an index for a failure Varys already located.
+    // every step and comes back `needs_review` with a red checkpoint. "Drive to the failure and
+    // look" has to mean something for those too — so fall back to the first red CHECKPOINT's
+    // screenshot step rather than making the caller guess an index for a failure Varys already
+    // located.
     // An ASSERTION failure (Slice 19, slices 09/10) is a third shape again: every step ran, no
     // checkpoint is red, and the assertion was evaluated against the page as the LAST step left it.
-    // So that is where a drainer is parked — the page the assertion actually looked at — rather
+    // So that is where the session is parked — the page the assertion actually looked at — rather
     // than being told there is nothing to park on when Varys knows perfectly well where to look.
     const stepIndex =
       input.stepIndex ??
@@ -1506,12 +1472,7 @@ export class AuthoringSessionService implements OnApplicationShutdown {
 
     // Gate 2: the test may have changed since the run. Patch the LATEST version, and only if the
     // step at this index is still the one under repair.
-    const [latest] = await this.db
-      .select({ version: testVersions.version, definition: testVersions.definition })
-      .from(testVersions)
-      .where(eq(testVersions.testId, repair.testId))
-      .orderBy(desc(testVersions.version))
-      .limit(1);
+    const latest = await currentVersionRow(this.db, repair.testId);
     if (!latest) throw new NotFoundException(`Test ${repair.testId} not found`);
     const latestDef = latest.definition as TestDefinition;
     const target = latestDef.steps[repair.stepIndex];
@@ -1526,22 +1487,12 @@ export class AuthoringSessionService implements OnApplicationShutdown {
       repair.testId,
       { baseVersion: latest.version, steps: [{ index: repair.stepIndex, target: patch }] },
       `${s.ownerEmail} (Claude repair)`,
-      await this.reviewFor({ id: s.ownerId, kind: s.ownerKind }, repair.testId),
     );
 
     // Keep the session honest about what the test now says, so a second fix in the same session
     // patches the new state rather than the one that failed.
-    const [written] = await this.db
-      .select({ definition: testVersions.definition })
-      .from(testVersions)
-      .where(and(eq(testVersions.testId, repair.testId), eq(testVersions.version, version)))
-      .limit(1);
-    if (written) repair.definition = written.definition as TestDefinition;
-
-    // The page this fix was made against, for whoever reviews it (slice 13). Captured AFTER the
-    // write, off the live page `try_locator` just resolved against — so the reviewer sees the
-    // screen the re-pinned control actually lives on, not a reconstruction of it.
-    await this.captureRepairPage(s, versionId);
+    const written = await currentDefinitionOf(this.db, repair.testId);
+    if (written) repair.definition = written as TestDefinition;
 
     // A fix can resolve and still be built on something that will not last. Say so rather than
     // let "applied" read as "fixed for good".
@@ -1564,31 +1515,6 @@ export class AuthoringSessionService implements OnApplicationShutdown {
       warning,
       summary: `Step ${repair.stepIndex + 1} of "${repair.testName}" now matches on ${tried.matchedSignal}. Saved as v${version} (was v${latest.version}); the previous version is retained.`,
     };
-  }
-
-  /**
-   * The page a repair was written against, stored beside the version for review (Slice 19, slice
-   * 13).
-   *
-   * Failure is logged and SWALLOWED. A screenshot is context for a human, not part of the repair:
-   * a capture that fails — the page navigated, the browser died — must never turn a verified fix
-   * into an error, and the review surface already treats a missing image as "none available".
-   */
-  private async captureRepairPage(s: SessionState, versionId: string): Promise<void> {
-    if (!versionId) return;
-    try {
-      const png = await s.page.screenshot({ fullPage: true });
-      const key = `repairs/${versionId}.png`;
-      await this.storage.put(key, png);
-      await this.db
-        .update(testVersions)
-        .set({ repairScreenshotKey: key })
-        .where(eq(testVersions.id, versionId));
-    } catch (err) {
-      this.log.warn(
-        `could not capture the repair page for version ${versionId}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
   }
 
   // ── editing the test itself (any step, any field) ──────────────────────────────────
@@ -1893,7 +1819,6 @@ export class AuthoringSessionService implements OnApplicationShutdown {
       testId,
       patch,
       `${session?.ownerEmail ?? input.actor?.email ?? "mcp"} (Claude edit)`,
-      await this.reviewFor(session ? { id: session.ownerId, kind: session.ownerKind } : input.actor, testId),
     );
     await applyRowEdits();
 
@@ -1903,19 +1828,10 @@ export class AuthoringSessionService implements OnApplicationShutdown {
     const after = await this.tests.getConfig(testId);
     const repair = session?.repair;
     if (repair && repair.testId === testId) {
-      const [written] = await this.db
-        .select({ definition: testVersions.definition })
-        .from(testVersions)
-        .where(and(eq(testVersions.testId, testId), eq(testVersions.version, version)))
-        .limit(1);
-      if (written) repair.definition = written.definition as TestDefinition;
+      const written = await currentDefinitionOf(this.db, testId);
+      if (written) repair.definition = written as TestDefinition;
       repair.version = version;
       repair.stepIndex = Math.min(repair.stepIndex, repair.definition.steps.length - 1);
-      // Same context an `apply_fix` review gets (slice 13). Worth saying plainly: unlike
-      // `apply_fix`, a general edit is not verified against this page, so the capture is the page
-      // the session is PARKED on — which is exactly what a reviewer needs to notice that the edit
-      // was made without driving there.
-      await this.captureRepairPage(session, versionId);
     }
     this.log.log(
       `edit_test: wrote v${version} of test ${testId} (${changes.length} change(s)) for ${session?.ownerEmail ?? "mcp"}`,
@@ -2594,22 +2510,15 @@ export class AuthoringSessionService implements OnApplicationShutdown {
   }
 
   /**
-   * End the session and persist the draft. Deterministic per-mode discipline: an INTERACTIVE
-   * session may be finished ONLY on the user's explicit instruction — the caller passes
-   * `confirm: true` to attest that, and the server refuses otherwise, so the model can never
-   * wrap up an interactive session on its own. A BATCH session runs its plan to completion and
-   * finishes freely (no confirm needed).
+   * End the session and persist the draft. An Authoring Session ends itself: Claude was handed the
+   * whole brief, so a walked brief is the only signal an ending needs and there is nothing for the
+   * author to confirm. A Repair Session is refused here — it records nothing to save.
    */
-  async finish(sessionId: string, opts?: { confirm?: boolean }): Promise<FinishResult> {
+  async finish(sessionId: string): Promise<FinishResult> {
     const s = this.require(sessionId);
     if (s.repair) {
       throw new BadRequestException(
         `This is a repair session on run ${s.repair.runId} — there is no draft to save, and saving one would fork the test you are trying to fix. Edits here are written straight onto test ${s.repair.testId} by apply_fix / edit_test (each one a new audited version), so there is nothing left to finish: report what you changed, then call close_repair_session.`,
-      );
-    }
-    if (s.mode === "interactive" && !opts?.confirm) {
-      throw new BadRequestException(
-        "This is an interactive session — it ends ONLY when the user explicitly tells you to finish or save it. Do not finish on your own. Once the user says so, call finish_session again with confirm: true.",
       );
     }
     const definition = s.rec.getDefinition(s.name, s.viewport);
@@ -2707,7 +2616,6 @@ export class AuthoringSessionService implements OnApplicationShutdown {
         sessionId,
         name: s.name,
         intent: s.intent,
-        mode: s.mode,
         url: s.page.url(),
         title: await s.page.title().catch(() => ""),
         stepCount: s.rec.stepCount(),

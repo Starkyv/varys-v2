@@ -25,8 +25,8 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * label alone sends a reader to edit selectors for a backend fault. These tests drive that exact
  * confusion against the fixture and assert the run now carries the evidence that resolves it.
  *
- * They also pin the promise that this is capture and display ONLY: the run's status, its
- * `failureKind` and the repair queue are all untouched by what the network record contains.
+ * They also pin the promise that this is capture and display ONLY: the run's status and its
+ * `failureKind` are untouched by what the network record contains.
  */
 describe("Run network capture", () => {
   let app: INestApplication;
@@ -157,19 +157,16 @@ describe("Run network capture", () => {
     expect(view.network.some((e) => e.url.includes("/api/rows") && e.status === 200)).toBe(true);
   }, 120_000);
 
-  it("does not change how a failure is classified or queued", async () => {
+  it("does not change how a failure is classified", async () => {
     fixture.setVariant("apiDown");
     const testId = await createTest("api down — classification");
     const view = await runToCompletion(testId);
 
     // Capture and display only. A failed data call is evidence for a reader; it does not
-    // re-label the run, and it must not quietly divert it out of the repair path either.
+    // re-label the run. The run-detail repair affordance keys on `failureKind === "locator"`,
+    // so it is still offered.
     expect(view.failureKind).toBe("locator");
     expect(problems(view.network).length).toBeGreaterThan(0);
-
-    // The repair affordance keys on `failureKind === "locator"`, so it is still offered.
-    const queue = await authed(app).get("/repair-jobs").expect(200);
-    expect(Array.isArray(queue.body)).toBe(true);
   }, 120_000);
 
   it("purges the record with the run", async () => {

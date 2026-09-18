@@ -32,7 +32,7 @@ export function TopBar() {
       </div>
 
       <div className={styles.bell}>
-        <IconButton icon={<Bell />} label="Alerts" onClick={() => navigate({ name: "needsReview" })} />
+        <IconButton icon={<Bell />} label="Alerts" onClick={() => navigate({ name: "runs" })} />
         <span className={styles.bellDot} />
       </div>
 

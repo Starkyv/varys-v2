@@ -14,7 +14,6 @@ import type {
   TestConfigStepPatch,
   TestConfigView,
   TestSchedule,
-  RepairPolicy,
 } from "@varys/review-contract";
 import {
   Activity,
@@ -780,17 +779,15 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
             schedule={config.schedule}
           />
 
-          <RepairPolicyCard testId={config.id} policy={config.repairPolicy} />
-
-          {/* The Brief — what this test is FOR, in the author's words. Editable here, and shown
-              beside the policy on purpose: an automated repair has to be justified against a
-              clause of it (slice 05), so a vague Brief is what a refused repair sends you to fix.
-              It lives on the test row, so editing it writes no version and touches no baseline. */}
+          {/* The Brief — what this test is FOR, in the author's words. It is what a Repair
+              Session diagnoses against, so a vague Brief is what a stalled repair sends you to
+              fix. It lives on the test row, so editing it writes no version and touches no
+              baseline. */}
           <NotesCard
             label="Brief"
             notes={config.brief}
             saving={briefUpdate.isPending}
-            placeholder="What is this test for? An automated repair must justify itself against a clause of this."
+            placeholder="What is this test for? Claude diagnoses a repair against this."
             onSave={(text) =>
               briefUpdate.mutateAsync({ id: config.id, body: { brief: text } }).then(
                 () => toast("Brief saved"),
@@ -1237,67 +1234,6 @@ function RecentRunsCard({ testId }: { testId: string }) {
  * timezone set the cadence, with an optional environment + keep-trace. A scheduled run
  * is an ordinary run (it only fires once the scheduler tick ships — PRD 1, Issue 2).
  */
-/**
- * The test's Repair Policy (Slice 19) — visible on test detail so an author can always tell
- * whether a change they are looking at could have been made without them, and settable here
- * per test. Writes through the structural `PATCH /tests/:id`, so flipping it never touches the
- * definition, a baseline, or any review state.
- */
-function RepairPolicyCard({ testId, policy }: { testId: string; policy: RepairPolicy }) {
-  const { toast } = useToast();
-  const update = useUpdateTest();
-  const auto = policy === "auto";
-
-  function setPolicy(next: RepairPolicy) {
-    if (next === policy) return;
-    update.mutate(
-      { id: testId, body: { repairPolicy: next } },
-      {
-        onSuccess: () =>
-          toast(
-            next === "auto"
-              ? "Auto-repair on — a broken locator will queue a repair"
-              : "Auto-repair off — a broken locator stays for you to fix",
-          ),
-        onError: (e) => toast(e instanceof Error ? e.message : "Couldn’t change the policy"),
-      },
-    );
-  }
-
-  return (
-    <Card>
-      <div className={styles.cardHead}>
-        <span className={styles.cardIcon}>
-          <Sparkles size={15} />
-        </span>
-        <div className={styles.cardHeadText}>
-          <div className={styles.cardTitle}>Repair policy</div>
-          <div className={styles.cardSub}>
-            What happens when a run can’t find an element any more. <strong>Manual</strong> leaves
-            the run red for you to fix. <strong>Auto</strong> queues a repair for Claude to pick
-            up — the fix still lands as an unreviewed version, never a silent green.
-          </div>
-        </div>
-      </div>
-      <SegmentedControl<RepairPolicy>
-        ariaLabel="Repair policy"
-        size="sm"
-        options={[
-          { value: "manual", label: "Manual" },
-          { value: "auto", label: "Auto" },
-        ]}
-        value={policy}
-        onValueChange={setPolicy}
-      />
-      <div className={styles.policyNote}>
-        {auto
-          ? "A locator this test can no longer resolve enters the repair queue."
-          : "Nothing is queued; a broken locator surfaces on the failed run."}
-      </div>
-    </Card>
-  );
-}
-
 function ScheduleCard({ testId, schedule }: { testId: string; schedule: TestSchedule | null }) {
   const { toast } = useToast();
   const update = useUpdateTest();

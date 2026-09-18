@@ -16,9 +16,12 @@ import { startTestDb, type TestDb } from "./db-harness";
  * What is pinned here is the identity and the REFUSALS, because those are the safeguard: the
  * credential's scope is what makes a long-lived machine secret acceptable. So this asserts the
  * agent can authenticate, sees only the repair toolset, and is refused for opening an Authoring
- * Session, for touching any test it holds no claim on, and for approving a baseline — plus that
- * expiry and revocation bite, that an unknown agent token is indistinguishable from an unknown
- * OAuth one, and that the human OAuth path is untouched.
+ * Session and for approving a baseline — plus that expiry and revocation bite, that an unknown
+ * agent token is indistinguishable from an unknown OAuth one, and that the human OAuth path is
+ * untouched.
+ *
+ * The per-claim test scoping this used to pin went with the repair queue (ADR-0008): there are no
+ * jobs to claim, so there is nothing for a claim to scope. The issuer itself goes next.
  *
  * No browser here on purpose: every refusal lands before a session would ever launch, and the
  * live repair drive is slices 03/04.
@@ -28,7 +31,6 @@ describe("Repair Agent credential — a second issuer on /mcp", () => {
   let db: TestDb;
   let agentToken: string;
   let credential: AgentCredentialSummary;
-  let testId: string;
 
   beforeAll(async () => {
     db = await startTestDb();
@@ -47,17 +49,6 @@ describe("Repair Agent credential — a second issuer on /mcp", () => {
     agentToken = body.token;
     credential = body.credential;
 
-    // A real test row, so "refused for reading or editing any test" is refused on a test that
-    // genuinely exists rather than passing by accident on a not-found.
-    const test = await authed(app)
-      .post("/tests")
-      .send({
-        name: "agent-scope target",
-        viewport: { width: 1280, height: 720, deviceScaleFactor: 1 },
-        steps: [{ type: "navigate", url: "http://fixture.local/" }],
-      })
-      .expect(201);
-    testId = test.body.id as string;
   }, 120_000);
 
   afterAll(async () => {
@@ -99,15 +90,12 @@ describe("Repair Agent credential — a second issuer on /mcp", () => {
     expect(JSON.stringify(rows)).not.toContain(agentToken);
   });
 
-  it("resolves on /mcp to a service principal with a stable id and the agent's label", async () => {
-    // `initialize` proves authentication succeeded; the principal itself is observed through the
-    // refusal messages below, which quote the agent's label rather than any human's name.
+  it("resolves on /mcp to a service principal, not to any human", async () => {
+    // `initialize` proves authentication succeeded. The principal itself is observed through the
+    // TOOL SURFACE below — an agent sees a different list from a human, which no other identity
+    // on this server does.
     const init = await rpc(agentToken, "initialize", { protocolVersion: "2024-11-05" }).expect(200);
     expect(init.body.result.serverInfo).toBeDefined();
-
-    const refused = await agentCall("read_test", { testId });
-    expect(refused.isError).toBe(true);
-    expect(refused.content[0].text).toContain('Repair Agent "nightly-drainer"');
   });
 
   it("sees the repair toolset and nothing else — no authoring, no cross-test browsing", async () => {
@@ -134,7 +122,6 @@ describe("Repair Agent credential — a second issuer on /mcp", () => {
   it("is refused for opening an Authoring Session", async () => {
     const res = await agentCall("open_session", {
       startUrl: "http://fixture.local/",
-      mode: "batch",
       name: "should never exist",
     });
     expect(res.isError).toBe(true);
@@ -143,28 +130,12 @@ describe("Repair Agent credential — a second issuer on /mcp", () => {
     expect(res.content[0].text).toContain("Unknown tool");
   });
 
-  it("is refused for reading or editing any test while it holds no claim", async () => {
-    for (const [name, args] of [
-      ["read_test", { testId }],
-      ["edit_test", { testId, name: "renamed by an unclaimed agent" }],
-      ["open_repair_session", { testId }],
-    ] as const) {
-      const res = await agentCall(name, args);
-      expect(res.isError).toBe(true);
-      expect(res.content[0].text).toContain("no claimed repair job");
-    }
-
-    // …and the refusal is real: the test is untouched.
-    const after = await authed(app).get(`/tests/${testId}`).expect(200);
-    expect(after.body.name).toBe("agent-scope target");
-  });
-
-  it("is refused for approving a baseline — permanently, not pending a claim", async () => {
+  it("is refused for approving a baseline — permanently", async () => {
     // Baseline approval is not on the MCP surface at all…
     const agentTools = await toolNames(agentToken);
     expect(agentTools.some((t) => /approve|baseline|promote/.test(t))).toBe(false);
 
-    // …and the credential cannot authenticate the web API that does it, claim or no claim.
+    // …and the credential cannot authenticate the web API that does it either.
     const runId = "00000000-0000-0000-0000-000000000000";
     await request(app.getHttpServer())
       .post(`/runs/${runId}/approve-all`)

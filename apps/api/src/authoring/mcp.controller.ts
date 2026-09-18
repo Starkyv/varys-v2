@@ -1,7 +1,6 @@
 import type { IncomingHttpHeaders } from "node:http";
 import { BadRequestException, Body, Controller, Get, Headers, HttpException, Inject, Post, Req, Res } from "@nestjs/common";
 import { Public } from "../auth/public.decorator";
-import { RepairJobsService } from "../repair-jobs/repair-jobs.service";
 import type { PinAssertionInput } from "./authoring-session.service";
 import { AuthoringInstructionsService } from "./authoring-instructions.service";
 import {
@@ -199,38 +198,32 @@ const LOCATOR_PATCH_SCHEMA = {
 } as const;
 
 /**
- * The toolset a Repair Agent principal may reach (ADR-0005 / slice 02): the repair path plus the
- * perception and interaction tools needed to investigate a parked page. Everything else is absent
- * from `tools/list` AND unresolvable in `tools/call`, so this is a capability boundary, not a hint.
+ * The toolset a Repair Agent principal may reach (ADR-0005 / slice 02): the attended repair path
+ * plus the perception and interaction tools needed to investigate a parked page. Everything else
+ * is absent from `tools/list` AND unresolvable in `tools/call`, so this is a capability boundary,
+ * not a hint.
  *
- * Three deliberate exclusions:
+ * The deliberate exclusions:
  *  - `open_session`, `checkpoint`, `pin_assertion`, `declare_unpinnable_assertion`,
  *    `finish_session`, `discard_session` — authoring a NEW test is a human act; an agent that could
  *    open an Authoring Session could invent tests unattended. The two assertion tools sit here for
  *    a sharper reason than the rest: an agent able to DECLARE a check could answer a red run by
  *    writing a new assertion that passes, which is the failure the whole repair-safety story is
- *    built to prevent. A drainer changes assertions only through `edit_test`, which refuses any id
+ *    built to prevent. An agent changes assertions only through `edit_test`, which refuses any id
  *    the test does not already declare.
- *  - `failed_runs` — a cross-test read. A drainer is handed its work by the job it claimed; it has
- *    no business browsing every other test's failures.
+ *  - `failed_runs` — a cross-test read, and no business of a principal that is handed one test.
  *  - `create_agent_test`, `add_agent_checkpoint` — authoring an Agent-Driven Test, for the same
  *    reason `open_session` is excluded and then some. The run surface has a capability because
  *    unattended running has a real use case; unattended AUTHORING has none, and an agent that can
  *    write a test can write one that passes. No capability grants these, so the absence here is
- *    the whole boundary — deliberately stricter than the pinned path, where `edit_test` is
- *    reachable under a repair claim. Nothing comparable exists for this kind: there is no repair
- *    path at all, so there is no claim that could scope the write.
- *  - `find_elements` — read-only perception, and arguably harmless for a drainer diagnosing why an
- *    assertion could not read a value. Withheld anyway: widening an agent's capability surface is
- *    a decision to take deliberately, not a side effect of the slice that introduced the tool.
+ *    the whole boundary.
+ *  - `find_elements` — read-only perception, and arguably harmless. Withheld anyway: widening an
+ *    agent's capability surface is a decision to take deliberately, not a side effect of the slice
+ *    that introduced the tool.
  *  - baseline approval — not an MCP tool at anyone's disposal, and permanently off-limits to an
  *    agent per DESIGN.md §4 (approving deletes the previous baseline with no rollback).
  */
 const AGENT_TOOLS: readonly string[] = [
-  "claim_repair_job",
-  "release_repair_job",
-  "report_repair",
-  "report_triage",
   "open_repair_session",
   "close_repair_session",
   "read_test",
@@ -245,38 +238,6 @@ const AGENT_TOOLS: readonly string[] = [
   "type",
   "verify_locator",
 ];
-
-/**
- * Tools only an AGENT principal may see (slice 03). Draining the queue is a machine's job: a
- * human who wants a test repaired opens a Repair Session on it directly, and a claim taken by a
- * person is a claim no drainer can finish and nothing can lapse. Filtered out of `tools/list` and
- * `tools/call` for a human exactly as `AGENT_TOOLS` filters the other way, so an out-of-scope
- * tool reads as "Unknown tool" for either principal.
- */
-const AGENT_ONLY_TOOLS: readonly string[] = [
-  "claim_repair_job",
-  "release_repair_job",
-  "report_repair",
-  "report_triage",
-];
-
-/**
- * Tools that CHANGE a test, and therefore need a claim on a `repair` job specifically (Slice 19,
- * slice 08).
- *
- * This is the enforcement half of "a triage claim grants observation only". It is structural rather
- * than advisory: a drainer holding a triage claim reaches the page, the definition and the failure
- * to READ them, and is refused here the moment it tries to write — no matter how convinced it is
- * that it knows the fix.
- *
- * `report_repair` is on the list because it is the act that makes a repair stand; it also refuses a
- * triage job on its own, so the two checks agree rather than one covering for the other.
- *
- * Baseline approval is absent for a different reason: it is not an MCP tool at all, for anyone.
- * Per DESIGN.md §4 approving deletes the previous baseline with no rollback, so an agent that could
- * approve one could permanently erase the evidence that a regression happened.
- */
-const REPAIR_CLAIM_TOOLS: readonly string[] = ["apply_fix", "edit_test", "report_repair"];
 
 /**
  * Tools an AGENT principal reaches only with the run capability on its credential — off by
@@ -301,23 +262,6 @@ const RUN_CAPABILITY_TOOLS: readonly string[] = [
   "finish_agent_run",
 ];
 
-/**
- * For an agent principal: which arguments of a tool name the TEST it would reach, and whether one
- * is mandatory. Declared per tool rather than sniffed off the argument names, because `testId` on
- * `try_locator`/`apply_fix` is the target's *data-testid* — treating that as a Varys test id would
- * check the scope of the wrong thing entirely.
- *
- * A tool listed here with none of its id arguments supplied is addressing an open SESSION instead;
- * that is covered separately, and twice over: `assertOwner` refuses a session this principal does
- * not own, and the claim on the session's test is re-checked on every call (slice 04) so a
- * released or lapsed claim cannot be outlived by a session opened under it.
- */
-const AGENT_TEST_SCOPE: Record<string, { args: readonly ("testId" | "runId")[]; required: boolean }> = {
-  open_repair_session: { args: ["runId", "testId"], required: true },
-  read_test: { args: ["testId"], required: false },
-  edit_test: { args: ["testId"], required: false },
-};
-
 // `@Public()` exempts this route from the COOKIE guard only — Claude Code is a separate
 // process with no browser cookie. It is not unauthenticated: `rpc` below requires an OAuth
 // bearer token on every request and 401s without one (Slice 16, superseding the earlier
@@ -330,7 +274,6 @@ export class McpController {
     @Inject(McpStatusService) private readonly mcpStatus: McpStatusService,
     @Inject(McpAuthService) private readonly mcpAuth: McpAuthService,
     @Inject(AuthoringInstructionsService) private readonly instructions: AuthoringInstructionsService,
-    @Inject(RepairJobsService) private readonly repairJobs: RepairJobsService,
     // Running a test and reading the verdict back (slice 14) — the half of "fix it" that proves
     // the fix. Human principals only; see `RunToolService` for why an agent may not reach it.
     @Inject(RunToolService) private readonly runTool: RunToolService,
@@ -504,11 +447,6 @@ export class McpController {
       if (args.sessionId !== undefined) {
         this.authoring.assertOwner(String(args.sessionId), user.id);
       }
-      // The scope half of ADR-0005: a Repair Agent reaches only the tests covered by a job it
-      // has claimed. A human principal is untouched by this.
-      if (user.kind === "agent") {
-        await this.assertAgentScope(name ?? "", args, user);
-      }
       const result = await tool.handler(args);
       const { json, pngs } = splitImages(result);
       return {
@@ -522,100 +460,6 @@ export class McpController {
     }
   }
 
-  /**
-   * Refuse a Repair Agent that is reaching for a test no claimed job of its own covers
-   * (ADR-0005). Thrown as a plain error, so it reaches the caller as an `isError` tool result
-   * with a message a drainer can act on.
-   *
-   * Two things are checked, because a claim can end in two ways: the test named by an argument
-   * must be covered by a claim this principal holds, and — for a call addressing an open repair
-   * SESSION — the claim that session was opened under must still hold. The second is what makes
-   * revocation immediate: releasing a job, or letting its lease lapse, stops the tools working on
-   * the next call rather than when the browser eventually closes.
-   */
-  private async assertAgentScope(
-    name: string,
-    args: Record<string, unknown>,
-    user: McpPrincipal,
-  ): Promise<void> {
-    // A session-addressed tool: the session was opened under a claim, but a claim can be released
-    // or lapse while the browser is still parked — so ownership of the session is NOT enough. The
-    // claim is re-checked on every call, which is what makes "losing the claim revokes tool
-    // access immediately" true rather than true-until-the-session-closes.
-    //
-    // `close_repair_session` is exempt on purpose: refusing it would leave a real browser running
-    // with no way for its owner to shut it down, which is a worse outcome than letting a drainer
-    // tidy up after a claim it no longer holds. It changes nothing about any test.
-    const sessionId = args.sessionId === undefined ? "" : String(args.sessionId);
-    if (sessionId && name !== "close_repair_session") {
-      const sessionTestId = this.authoring.sessionTestId(sessionId);
-      if (sessionTestId && !(await this.repairJobs.hasClaimOn(user.id, sessionTestId))) {
-        throw new Error(
-          `${user.name} no longer holds a claim on test ${sessionTestId} — the claim was released or has lapsed, so this session may no longer change it. Claim the job again, or close the session.`,
-        );
-      }
-      // A session opened under a TRIAGE claim may drive and observe, and may not write (slice 08).
-      if (sessionTestId) await this.assertMayMutate(name, sessionTestId, user);
-    }
-
-    const scope = AGENT_TEST_SCOPE[name];
-    // Nothing else a SCOPED tool does names a test, so the claim re-check above is the whole
-    // check for them. The Agent Run Session tools name a test (`start_agent_run`) or a run
-    // (`submit_checkpoint`, `submit_evidence`, `finish_agent_run`) and are all deliberately absent
-    // from the table: they are reached by a capability, not a claim, and a repair claim is exactly
-    // what a run-only drainer never holds — requiring one would make the capability unusable.
-    // Their boundary is `RUN_CAPABILITY_TOOLS` plus the Agent-Driven-Test kind check in
-    // `AgentRunService`, which refuses a pinned test's run outright, not per-test scope.
-    if (!scope) return;
-
-    const ids: string[] = [];
-    for (const arg of scope.args) {
-      const raw = args[arg];
-      if (raw === undefined || raw === null || String(raw) === "") continue;
-      const testId = arg === "runId" ? await this.repairJobs.testIdForRun(String(raw)) : String(raw);
-      // An unresolvable runId is left to the tool's own not-found; there is no test to scope to.
-      if (testId) ids.push(testId);
-    }
-    if (ids.length === 0) {
-      if (!scope.required) return;
-      throw new Error(
-        `${user.name} must name the test it has claimed a repair job for — pass the job's runId or testId.`,
-      );
-    }
-    for (const testId of ids) {
-      if (!(await this.repairJobs.hasClaimOn(user.id, testId))) {
-        throw new Error(
-          `${user.name} has no claimed repair job for test ${testId}. Claim the job for this test first — an agent credential may only touch tests covered by a claim it holds.`,
-        );
-      }
-      await this.assertMayMutate(name, testId, user);
-    }
-  }
-
-  /**
-   * Refuse a WRITE attempted under a triage claim (Slice 19, slice 08).
-   *
-   * A Triage Job's only output is a written finding on the run; it may not change the test, and
-   * that is enforced here rather than asked for in a prompt. The check is "does a REPAIR claim
-   * exist on this test?" rather than "what kind is the claim?", because a drainer can hold both —
-   * a repair claim on a broken locator and a triage claim on the same test's pixel regression — and
-   * only the first of those grants the write.
-   *
-   * The message says what to do instead, because the drainer is not misbehaving: it has correctly
-   * diagnosed something and reached for the wrong verb.
-   */
-  private async assertMayMutate(
-    name: string,
-    testId: string,
-    user: McpPrincipal,
-  ): Promise<void> {
-    if (!REPAIR_CLAIM_TOOLS.includes(name)) return;
-    if (await this.repairJobs.hasClaimOfKind(user.id, testId, "repair")) return;
-    throw new Error(
-      `${name} needs a REPAIR claim on test ${testId}, and ${user.name} holds a triage claim on it. A triage job diagnoses and never fixes: drive to the failure, look, and call report_triage with what you found. The run stays red — that is the point, not a shortcoming.`,
-    );
-  }
-
   /** The MCP tool surface for this principal. A human sees all of it; a Repair Agent sees only
    *  `AGENT_TOOLS` (ADR-0005) — the same filter `tools/list` and `tools/call` read, so a tool an
    *  agent cannot list is also a tool it cannot call.
@@ -625,7 +469,7 @@ export class McpController {
    *  self-promote — ADR 0001 / PRD safety). */
   private tools(user: McpPrincipal, ctx: CallerContext): McpTool[] {
     const all = this.allTools(user, ctx);
-    if (user.kind !== "agent") return all.filter((t) => !AGENT_ONLY_TOOLS.includes(t.name));
+    if (user.kind !== "agent") return all;
     return all.filter((t) => AGENT_TOOLS.includes(t.name) || grantedByCapability(user, t.name));
   }
 
@@ -635,32 +479,34 @@ export class McpController {
       {
         name: "open_session",
         description:
-          "Open a Varys authoring session: launch a browser, navigate to the start URL, and begin recording. Returns a sessionId used by every later tool, plus the session `mode` and mode-specific `guidance` — read the guidance and follow it for the rest of the session. The entry URL's origin becomes {{baseUrl}} so the test stays environment-agnostic.",
+          "Open a Varys authoring session: launch a browser, navigate to the start URL, and begin recording. Returns a sessionId used by every later tool, plus `guidance` — read it and follow it for the rest of the session. There is one way to drive a session and it is not a choice you make: you have the whole brief, so walk it end to end and call finish_session when it is done. The entry URL's origin becomes {{baseUrl}} so the test stays environment-agnostic.",
         inputSchema: {
           type: "object",
           properties: {
             startUrl: { type: "string", description: "The URL to open the session on (e.g. the app's login page)." },
             name: { type: "string", description: "A name for the test being authored." },
             intent: { type: "string", description: "What this test should verify — the steering instruction (shown in the review queue)." },
-            mode: {
-              type: "string",
-              enum: ["interactive", "batch"],
-              description:
-                "REQUIRED — how you'll drive this session; there is no default, so you must set it. Rule: use 'batch' ONLY when the user explicitly says 'batch' or points you at a plan/instructions file to run; use 'interactive' when the user is directing you one step at a time. Do NOT guess — if it is genuinely unclear which the user wants, ask them before opening the session. 'interactive': the user gives one instruction at a time — do that one action, then stop and wait; NEVER finish on your own — the session ends only when the user explicitly tells you to, and then you call finish_session with confirm: true. 'batch': run the whole plan/file end-to-end without pausing, then call finish_session. In BOTH modes, checkpoint only when explicitly asked.",
-            },
           },
-          required: ["startUrl", "mode"],
+          required: ["startUrl"],
         },
-        handler: (args) =>
-          a.open({
+        handler: (args) => {
+          // A session has no mode to declare. Refused rather than ignored: a stale instruction
+          // file or a cached tool list that still teaches `mode` would otherwise look accepted
+          // while steering nothing, and a wrong guess costs a draft to delete.
+          if ("mode" in args) {
+            throw new Error(
+              "open_session takes no `mode` — there is one way to author and it is not a choice. You have the whole brief: walk it end to end and call finish_session when it is done. Call open_session again without `mode`.",
+            );
+          }
+          return a.open({
             // Ownership comes from the bearer token, never from tool arguments — the model
             // has no way to open a session as somebody else.
             owner: { id: user.id, email: user.email },
             startUrl: String(args.startUrl ?? ""),
             name: args.name ? String(args.name) : undefined,
             intent: args.intent ? String(args.intent) : undefined,
-            mode: args.mode === "batch" ? "batch" : args.mode === "interactive" ? "interactive" : undefined,
-          }),
+          });
+        },
       },
       {
         name: "observe",
@@ -762,74 +608,6 @@ export class McpController {
             testName: args.testName ? String(args.testName) : undefined,
             limit: args.limit !== undefined ? Number(args.limit) : undefined,
           }),
-      },
-      {
-        name: "claim_repair_job",
-        description:
-          "Take the next queued job for yourself — a REPAIR job or a TRIAGE job; check `kind`. Returns the job id, the test, its Brief, the step that failed with the run's error, and `claimExpiresAt` — the instant your claim lapses.\n\n`kind: \"triage\"` is a READ-ONLY job, for a failure nobody may fix automatically — a pixel regression, a failed judge, a false assertion, a crash, a timeout. Drive to the failure, look, and call report_triage with what you found. apply_fix and edit_test are refused under a triage claim, and the run stays red on purpose: the value is the explanation, not a green. `kind: \"repair\"` is the fix path — report it with report_repair. Returns `job: null` when the queue is empty, which is the normal answer, not an error: stop and try again on your next drain rather than retrying in a loop.\n\nA claim is exclusive and first-claim-wins: nobody else can see or take this job while your claim holds, and while it holds you may read and edit THAT test (open_repair_session, read_test, edit_test, try_locator, apply_fix) — and no other. It is also a deadline: if you stop reporting before `claimExpiresAt`, the job returns to the queue for someone else and the attempt is counted against it. If you cannot fix it, call release_repair_job rather than going quiet — that returns it immediately. `attemptsRemaining` tells you how many tries the job has left before Varys abandons it.\n\nRead the `brief` before you repair anything: every repair has to be justified against a clause of it when you call report_repair, and one that cannot be is refused and reverted. A test with no Brief cannot be repaired automatically at all.\n\n`failingAssertion` is set when an ASSERTION is what made the run red — and then `failingStep` is null, because every step of that run passed. Read `repairable`: `true` means the assertion's extraction target no longer resolves, which is a broken locator like any other — re-pin that side with edit_test (`assertions: [{id, left|right: {...}}]`) and report it as a repair. `false` means the values were both read and they DISAGREE, or one could not be used as asked; there is nothing to re-pin, the job you are holding will be a triage job, and re-pinning an assertion until its numbers agree would hide the exact bug it exists to catch. `side` says which target to fix.\n\n`clusterTests` is the FAILURE CLUSTER: every test the same app change broke, and exactly what your claim reaches. Repair the anchor (`testId`) only — Varys fans your fix out across the rest when you report, as ONE reviewable change. Do not try to repair them individually, and do not describe the job as being about one test when it covers several.",
-        inputSchema: { type: "object", properties: {} },
-        handler: async () => ({ job: await this.repairJobs.claimNext(user.id) }),
-      },
-      {
-        name: "release_repair_job",
-        description:
-          "Give a job you claimed back to the queue, right away — 'I can't fix this one.' Use it whenever you stop working on a claimed job for any reason other than reporting a repair; it beats letting the claim lapse, which parks the work until the deadline passes. It counts as one attempt either way, so a job you keep claiming and releasing is eventually abandoned rather than draining you forever.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            jobId: { type: "string", description: "The `jobId` claim_repair_job handed you." },
-          },
-          required: ["jobId"],
-        },
-        handler: (args) => this.repairJobs.release(user.id, String(args.jobId ?? "")),
-      },
-      {
-        name: "report_repair",
-        description:
-          "Report that you have repaired the test of a job you hold, and close the job. Call it AFTER the fix is written (apply_fix, or edit_test) — it records what you did against the version you wrote and finishes the job; it does not write anything itself, so a report with no version behind it is refused.\n\nEVERY repair is gated on its `justification`. You must name the clause of the test's BRIEF (claim_repair_job handed it to you) that the element you re-pinned to satisfies, and show it is the SAME control the step was always exercising — renamed, re-worded or re-marked-up, not a different control that happens to look right. A judge reads that claim against the Brief and the actual before/after signals. If it does not hold, the repair is ABANDONED: your version is reverted, the test goes back to what it said before, and the run stays failed. So if the control the test used is simply GONE, do not re-pin to the nearest plausible substitute — call release_repair_job instead.\n\nWhat it does NOT do, and what you must therefore not claim: it does not turn the failing run green. The version you wrote is saved UNREVIEWED and waits for a human to accept or reject it, and the run that failed is still failed. Report your work as a proposed fix awaiting review — never as fixed. The response carries the version number, the run's unchanged status, and the wording to use.\n\nIf this job covers a Failure Cluster, the fix you applied to the anchor is applied to every other test in it here, as one reviewable change accepted or rejected together — `clusterTestIds` says which. If the fix cannot be written across all of them, NONE of it stands: everything is reverted and the job goes back in the queue.\n\nA re-run IS queued for you against the repaired definition (one per repaired test), and the anchor's id comes back as `rerunId`. If it verifies it reads HEALED — amber, a review queue item — not passed. So \"a re-run is under way\" is accurate; \"the test passes now\" is not, however the re-run turns out.\n\nReporting ends your claim, so your access to that test stops here: do everything you need to do to the test first, then report. If you could NOT fix it, call release_repair_job instead.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            jobId: { type: "string", description: "The `jobId` claim_repair_job handed you." },
-            summary: {
-              type: "string",
-              description:
-                "What you changed and why, in a couple of sentences — this is what the reviewer reads beside the version, so name the element you re-pinned to and the signal it now matches on.",
-            },
-            justification: {
-              type: "string",
-              description:
-                "Which clause of the test's BRIEF the element you re-pinned to satisfies, and the evidence that it is the SAME control the step was exercising before — quote the clause, then say what changed about the element (its label, accessible name, test id, markup, position) and what shows it is still that control. Do NOT argue that a different element serves the same purpose: sameness of purpose is not sameness of control, and it is refused. This is judged, and a claim that does not hold abandons the repair.",
-            },
-          },
-          required: ["jobId", "summary", "justification"],
-        },
-        handler: (args) =>
-          this.repairJobs.reportRepair(
-            user.id,
-            String(args.jobId ?? ""),
-            String(args.summary ?? ""),
-            String(args.justification ?? ""),
-          ),
-      },
-      {
-        name: "report_triage",
-        description:
-          "Report what you found on a TRIAGE job you hold, and close it. This is the only output a triage job has, and the only write it is allowed: one paragraph, recorded on the failing run and shown to a human beside the failure.\n\nWrite the CAUSE, not the symptom. \"The chart is empty because /api/metrics returns 401 for the seeded user\" is the finding worth having; \"the chart did not render\" is what the run already said. Say what you saw, where you saw it, and what you think is responsible — and if you are not sure, say what you ruled out.\n\nWhat it does NOT do, and what you must therefore not claim: it changes NOTHING. The run is still red afterwards, no version of the test is written, and no baseline is touched. A diagnosis is not a fix. If you believe you know the repair, say so IN the finding and leave it to a human — do not attempt apply_fix or edit_test, which are refused under a triage claim.\n\nIf you could not work out why it failed, call release_repair_job instead: an empty finding is refused, because a triage job closed with nothing written is indistinguishable later from one that explained nothing.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            jobId: { type: "string", description: "The `jobId` claim_repair_job handed you." },
-            finding: {
-              type: "string",
-              description:
-                "What is actually wrong, in plain prose, for a human who has not looked at the page. Cause over symptom.",
-            },
-          },
-          required: ["jobId", "finding"],
-        },
-        handler: (args) =>
-          this.repairJobs.reportTriage(user.id, String(args.jobId ?? ""), String(args.finding ?? "")),
       },
       {
         name: "open_repair_session",
@@ -1031,7 +809,7 @@ export class McpController {
             assertions: {
               type: "array",
               description:
-                "Edits to the test's declared ASSERTIONS, each addressing one by its stable `id` (from read_test). This is the assertion REPAIR path: an assertion whose extraction target no longer resolves is a broken locator like any other, and `left`/`right` re-pin it.\n\nWhat you must NOT do here: an assertion that FAILED because its relation is false — both values were read and they disagree — is the application being wrong, and re-pinning it until the numbers agree hides the exact bug the assertion exists to catch. Never touch an assertion for that reason. `claim_repair_job` tells you which case you have (`failingAssertion.repairable`).",
+                "Edits to the test's declared ASSERTIONS, each addressing one by its stable `id` (from read_test). This is the assertion REPAIR path: an assertion whose extraction target no longer resolves is a broken locator like any other, and `left`/`right` re-pin it.\n\nWhat you must NOT do here: an assertion that FAILED because its relation is false — both values were read and they disagree — is the application being wrong, and re-pinning it until the numbers agree hides the exact bug the assertion exists to catch. Never touch an assertion for that reason: `open_repair_session` shows you which case you have.",
               items: {
                 type: "object",
                 properties: {
@@ -1168,7 +946,15 @@ export class McpController {
           // on it, and a session started straight from a terminal matches nothing and is
           // unaffected. It is what turns the author's wait into `fulfilled` instead of a wait
           // that quietly expires beside a run that did start.
-          this.bridge.noteAgentRunStarted(user.id, session.testId, session.runId);
+          //
+          // When it DID close one out, the Run is also stamped as having been requested from
+          // Varys, so a reader puzzling over it later can tell which of the two doors it came
+          // through. The relay's own record of the press decides that, and only it can: `args`
+          // carries no such claim and is never consulted, because an agent's account of how it
+          // came to be running is not evidence of anything.
+          if (this.bridge.noteAgentRunStarted(user.id, session.testId, session.runId)) {
+            await this.agentRun.markRequestedFromVarys(session.runId);
+          }
           return session;
         },
       },
@@ -1277,7 +1063,7 @@ export class McpController {
       {
         name: "run_test",
         description:
-          "Run a test for real and wait for the verdict — the ONLY thing that proves a repair worked.\n\nUse it to close your own loop: after apply_fix or edit_test, run the test and read what came back, then tell the user what you changed AND whether it now works. A locator that resolves against a parked page is not the same claim as a test that replays end to end.\n\nIt queues a run of the test's LATEST version — so the fix you just wrote is what executes — against the same worker a human's Run button uses, and waits up to `waitSeconds`. If the wait elapses the answer says `finished: false`; call run_status with the runId rather than reporting anything.\n\nRead `outcome`, not `status`, and report it in those terms — three of them are NOT passes and are easy to misreport:\n · `passed` — verified against its baseline. This is the evidence a repair worked.\n · `pending-baseline` — there was no baseline, so NOTHING was compared. A human must approve the capture in Needs review. You cannot approve it and must not call this passing.\n · `baseline` — this run set the golden. It verified nothing.\n · `regression` — the capture differs from the baseline. A human decides; this is not something to fix by re-pinning a locator.\n · `healed` — it verified, but on a repair nobody has accepted yet.\n · `failed` — read `failureKind`: `locator` is the one class a re-pin fixes (open a repair session on this run), anything else is a crash, a timeout, a failed judge or an assertion that does not hold, and re-pinning must not be used to make it go away.\n\n`failingAssertions` lists only the checks that did not hold, with both values that were read — often the fastest way to see what is actually wrong.\n\nBe honest about cost and effect: this drives a real browser against the real app, and every run is visible to the user in Varys. Run it when you need the answer, not as a reflex after every edit.",
+          "Run a test for real and wait for the verdict — the ONLY thing that proves a repair worked.\n\nUse it to close your own loop: after apply_fix or edit_test, run the test and read what came back, then tell the user what you changed AND whether it now works. A locator that resolves against a parked page is not the same claim as a test that replays end to end.\n\nIt queues a run of the test's LATEST version — so the fix you just wrote is what executes — against the same worker a human's Run button uses, and waits up to `waitSeconds`. If the wait elapses the answer says `finished: false`; call run_status with the runId rather than reporting anything.\n\nRead `outcome`, not `status`, and report it in those terms — three of them are NOT passes and are easy to misreport:\n · `passed` — verified against its baseline. This is the evidence a repair worked.\n · `pending-baseline` — there was no baseline, so NOTHING was compared. A human must approve the capture in Needs review. You cannot approve it and must not call this passing.\n · `baseline` — this run set the golden. It verified nothing.\n · `regression` — the capture differs from the baseline. A human decides; this is not something to fix by re-pinning a locator.\n · `failed` — read `failureKind`: `locator` is the one class a re-pin fixes (open a repair session on this run), anything else is a crash, a timeout, a failed judge or an assertion that does not hold, and re-pinning must not be used to make it go away.\n\n`failingAssertions` lists only the checks that did not hold, with both values that were read — often the fastest way to see what is actually wrong.\n\nBe honest about cost and effect: this drives a real browser against the real app, and every run is visible to the user in Varys. Run it when you need the answer, not as a reflex after every edit.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1580,25 +1366,20 @@ export class McpController {
       {
         name: "finish_session",
         description:
-          "Finish the session: assemble the recorded steps into a draft test and end the session. Returns the draft testId and a warning if it has no checkpoints. Finishing with zero checkpoints IS allowed (the draft just carries that warning) — do NOT invent a checkpoint to avoid the warning; only the user/plan decides what to assert. INTERACTIVE sessions end ONLY on the user's explicit instruction: do not call this until the user tells you to finish or save, and then pass confirm: true — the server refuses an interactive finish without it. BATCH sessions finish when the plan's steps are done; confirm is not required. A human reviews and promotes the draft in the Varys web app.",
+          "Finish the session: assemble the recorded steps into a draft test and end the session. Returns the draft testId and a warning if it has no checkpoints. Call it when the brief is walked — the session is yours to end and there is nothing to confirm first. Finishing with zero checkpoints IS allowed (the draft just carries that warning) — do NOT invent a checkpoint to avoid the warning; only the brief decides what to assert. A human reviews and promotes the draft in the Varys web app.",
         inputSchema: {
           type: "object",
           properties: {
             sessionId: { type: "string" },
-            confirm: {
-              type: "boolean",
-              description:
-                "Set true ONLY when the user has explicitly told you to finish/save the session. Required to finish an INTERACTIVE session; ignored in batch.",
-            },
           },
           required: ["sessionId"],
         },
-        handler: (args) => a.finish(String(args.sessionId ?? ""), { confirm: Boolean(args.confirm) }),
+        handler: (args) => a.finish(String(args.sessionId ?? "")),
       },
       {
         name: "discard_session",
         description:
-          "Throw the session away WITHOUT saving anything: close the browser and drop every recorded step. Use this instead of finish_session when the session went wrong and its steps are not worth keeping — the wrong app or page, a flow that turned out to be a dead end, or a restart after a mistake. Saving a junk draft just to end the session makes work for whoever reviews the queue, so discard it instead. This is NOT how you end a good session (use finish_session) and it cannot be undone. As with finishing, do not discard an interactive session on your own initiative — ask the user first.",
+          "Throw the session away WITHOUT saving anything: close the browser and drop every recorded step. Use this instead of finish_session when the session went wrong and its steps are not worth keeping — the wrong app or page, a flow that turned out to be a dead end, or a restart after a mistake. Saving a junk draft just to end the session makes work for whoever reviews the queue, so discard it instead. This is NOT how you end a good session (use finish_session) and it cannot be undone, so say what went wrong and what you are throwing away.",
         inputSchema: {
           type: "object",
           properties: {

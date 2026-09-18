@@ -94,11 +94,12 @@ Do not record the step anyway. In order of preference:
   c. For a control in a repeated row or card: pick the row by a stable identifier that is unique
      on the page and identical on every run, then act on the control inside it. Never pick by
      position ("the first row", "the top card").
-  d. If none of that works: **stop**. In interactive mode, tell the user exactly which control is
-     not addressable and why ("no accessible name", "one of six identical Edit buttons"), and ask
-     how to proceed — the real fix is usually a `data-testid` or an `aria-label` in the app. In
-     batch mode, record the closest deterministic alternative and list the concession explicitly
-     in your finish summary. Never record a coin-flip step to keep the plan moving.
+  d. If none of that works: record the closest deterministic alternative and list the concession
+     explicitly in your finish summary, naming which control is not addressable and why ("no
+     accessible name", "one of six identical Edit buttons") — the real fix is usually a
+     `data-testid` or an `aria-label` in the app, and the summary is where the author finds out
+     they need one. Never record a coin-flip step to keep the brief moving. If there is no honest
+     alternative at all, **stop** and say so rather than guessing.
 
 ### Targeting
 

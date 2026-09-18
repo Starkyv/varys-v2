@@ -198,10 +198,9 @@ npx vitest run test/repair-queue.e2e.spec.ts
 npx vitest run test/agent-credential.e2e.spec.ts
 npx vitest run test/repair-claim.e2e.spec.ts
 
-# heal-04/05/06/07/08: round trip, gate, healed, clustering, triage
+# heal-04/05/06/07/08: round trip, gate, clustering, triage
 npx vitest run test/repair-round-trip.e2e.spec.ts
 npx vitest run test/repair-justification-gate.e2e.spec.ts
-npx vitest run test/healed-outcome.e2e.spec.ts
 npx vitest run test/repair-cluster.e2e.spec.ts
 npx vitest run test/triage.e2e.spec.ts
 
@@ -312,17 +311,21 @@ absent. Restore the key afterwards to test A, B and D.
 **Case D — the happy path.** With `broken.html` and a good justification, the verdict is stored on
 the version and shown in review as *"Judge: …"* beside the Brief.
 
-### 2.6 heal-06 — `healed`, the re-run, and the digest
+### 2.6 heal-06 — the re-run and the digest
+
+There is no run-level `healed`: a re-run that verifies reads an ordinary **PASSED**, and the
+repaired version waits in the review queue regardless. Healing is reported in exactly one place —
+the step that healed (§ the run timeline's marker).
 
 | # | Do | Expect |
 |---|---|---|
 | A | After a successful `report_repair` (with `broken.html` still served) | A **re-run** was queued automatically against the repaired definition — the response carries `rerunId` |
-| B | Watch the re-run finish | Outcome reads **HEALED** (amber) on Run detail, Runs list, Test detail and the dashboard — not PASSED. It verified, but on a repair nobody has accepted |
-| C | Review queue | The item shows the re-run link and *"everything verified"*; the header counts *"N versions · M healed"* |
-| D | Accept the version, re-run again | Now an ordinary **PASSED** — `healed` is exactly "verified on an unaccepted repair" |
+| B | Watch the re-run finish | Outcome reads **PASSED** on Run detail, Runs list, Test detail and the dashboard. A green re-run is evidence the fix works, not an accepted repair |
+| C | Review queue | The item shows the re-run link and *"everything verified"*; the header counts *"N versions · M verified"* |
+| D | Accept the version | The repair is signed off; the run's outcome is unchanged, because accepting is a decision, not a re-run |
 | E | Reject instead, then re-run | Red again (the test is broken until you fix it) — a reject is not a fix |
-| F | Configurations → **Slack**: bot token + channel, notify on manual runs; re-run a healed repair | Message faced 🩹 **HEALED**, in the same weight class as needs-review — never ✅, never a page |
-| G | Suite runs (put the test in a suite, run it) | Healed children counted as a **subset** of passed, not a sibling; the suite is not failed by them |
+| F | Configurations → **Slack**: bot token + channel, notify on manual runs; re-run a repair | Message faced by the run's coarse status — ✅ for a clean re-run, with no separate repair face |
+| G | Suite runs (put the test in a suite, run it) | The re-run counts as an ordinary passed child |
 
 ### 2.7 heal-07 — Failure Clusters and the circuit breaker
 
@@ -465,7 +468,7 @@ State: at least one repaired version awaiting review (§2.4 G), ideally also a c
 
 Not code: a HITL measurement of how often Claude's repair is *wrong but plausible*. Case B of
 §2.5 is one instance of it. To do it properly, drain a batch of real failed runs and count how
-many proposals a human would reject — that number is what decides whether amber `healed` is a
+many proposals a human would reject — that number is what decides whether the repair queue is a
 useful signal or noise nobody reviews.
 
 ---
@@ -555,7 +558,7 @@ Repair page captures live under `$VARYS_STORAGE_DIR/repairs/<versionId>.png` (de
 | Assertions (read/edit wording, EXACT vs APPROXIMATE) | Test detail → **Assertions** |
 | Queue, breaker card, review items | **Repair queue** |
 | Manual enqueue, triage finding, assertion verdicts | **Run detail** |
-| `healed` outcome | Run detail, Runs list, Test detail, Dashboard, Suite runs |
+| Healed-step marker | Run detail → run timeline, checkpoint viewer |
 | Judge, Slack, breaker threshold, agent credentials | **Configurations** |
 | Repaired-versions pointer | **Review queue** (drafts) banner + sidebar badge |
 

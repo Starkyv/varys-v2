@@ -14,6 +14,7 @@ import {
   cx,
 } from "@varys/ui";
 import { useEffect, useId, useRef, useState } from "react";
+import { BridgeHelperPairing } from "../../../../components/BridgeHelperPairing";
 import { EnvironmentPicker } from "../../../../components/EnvironmentPicker";
 import { useRouter } from "../../../../context/router";
 import { useToast } from "../../../../context/toast";
@@ -188,17 +189,19 @@ export function AgentRunControl({ config }: { config: TestConfigView }) {
         </div>
       )}
 
+      {/* Not a signpost to somewhere else: the thing that fixes it is right here. Sending someone
+          to another page to "start a helper" was the old copy, and the page it named offers no
+          pairing — an instruction that cannot be followed is worse than none. */}
       {!paired && (
-        <div className={styles.blocked}>
-          <Sparkles size={15} />
-          <span>
-            <strong>No Bridge Helper is paired</strong>, so there is nothing on your machine to run
-            this. Open <strong>Author with AI</strong>, start a helper and enter its pairing code —
-            this button goes live as soon as it connects.
-          </span>
-          <Button variant="ghost" size="sm" onClick={() => navigate({ name: "author" })}>
-            Author with AI
-          </Button>
+        <div className={cx(styles.blocked, styles.pairing)}>
+          <div className={styles.blockedHead}>
+            <Sparkles size={15} />
+            <span>
+              <strong>No Bridge Helper is paired</strong>, so there is nothing on your machine to
+              run this. Pair one and this button goes live the moment it connects.
+            </span>
+          </div>
+          <BridgeHelperPairing />
         </div>
       )}
 

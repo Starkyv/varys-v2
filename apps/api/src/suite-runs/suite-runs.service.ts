@@ -5,7 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { environments, runResults, runs, suiteRuns, suites, tests, testVersions } from "@varys/db";
+import { environments, replayedTestId, runResults, runs, suiteRuns, suites, tests } from "@varys/db";
 import type {
   Resolution,
   ReviewState,
@@ -14,7 +14,7 @@ import type {
   SuiteRunSummary,
   SuiteRunView,
 } from "@varys/review-contract";
-import { deriveRunOutcome, isRepairInReview, type RunOutcome } from "@varys/review-contract";
+import { deriveRunOutcome, type RunOutcome } from "@varys/review-contract";
 import { asc, desc, eq, inArray } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
 import { RunsService } from "../runs/runs.service";
@@ -35,8 +35,6 @@ interface ChildRow {
   createdAt: Date;
   updatedAt: Date;
   triggeredBy: string | null;
-  versionRepairJobId: string | null;
-  versionReviewState: string | null;
 }
 
 /** A child that has not reached a terminal state — its `updatedAt` is not a finish time. */
@@ -45,14 +43,8 @@ const inFlight = (status: string): boolean => status === "queued" || status === 
 /**
  * Tally child statuses into the aggregate counts (unknown statuses only count toward total —
  * forward-compatible with new run states).
- *
- * `healed` is counted from the children's derived OUTCOMES, not their statuses, and deliberately
- * does not move any other number: a healed child's coarse status is `passed`, so it stays in
- * `passed` and the suite still reports passing (Slice 19, slice 06 — a healed run is a queue item,
- * not an alarm, and must not fail a suite). The healed count sits alongside as "and this much of
- * that pass is resting on repairs nobody has accepted yet".
  */
-function countStatuses(statuses: string[], outcomes: RunOutcome[] = []): SuiteRunCounts {
+function countStatuses(statuses: string[]): SuiteRunCounts {
   const counts: SuiteRunCounts = {
     total: statuses.length,
     queued: 0,
@@ -60,7 +52,6 @@ function countStatuses(statuses: string[], outcomes: RunOutcome[] = []): SuiteRu
     passed: 0,
     needsReview: 0,
     failed: 0,
-    healed: outcomes.filter((o) => o === "healed").length,
   };
   for (const s of statuses) {
     if (s === "queued") counts.queued += 1;
@@ -79,8 +70,6 @@ function deriveStatus(counts: SuiteRunCounts): string {
   if (counts.queued > 0 || counts.running > 0) return "running";
   if (counts.failed > 0) return "failed";
   if (counts.needsReview > 0) return "needs_review";
-  // `counts.healed` is intentionally absent from this ladder: a healed child does not fail or
-  // hold up a suite, it just leaves something in the repair review queue.
   return "passed";
 }
 
@@ -236,18 +225,15 @@ export class SuiteRunsService {
       .select({
         runId: runs.id,
         suiteRunId: runs.suiteRunId,
-        testId: testVersions.testId,
+        testId: replayedTestId,
         status: runs.status,
         error: runs.error,
         environmentId: runs.environmentId,
         createdAt: runs.createdAt,
         updatedAt: runs.updatedAt,
         triggeredBy: runs.triggeredBy,
-        versionRepairJobId: testVersions.repairJobId,
-        versionReviewState: testVersions.reviewState,
       })
       .from(runs)
-      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
       .where(
         inArray(
           runs.suiteRunId,
@@ -255,17 +241,12 @@ export class SuiteRunsService {
         ),
       );
     const envNames = await this.environmentNames(children.map((c) => c.environmentId));
-    // The history rows carry a healed count too, not just the report: a suite that reads "passed"
-    // while three of its tests are running on unaccepted repairs is exactly the thing you want to
-    // see WITHOUT opening it.
-    const checkpoints = await this.checkpointsByRun(children.map((c) => c.runId));
 
     return parents.map((p) =>
       this.summarize(
         p,
         children.filter((c) => c.suiteRunId === p.id),
         envNames,
-        checkpoints,
       ),
     );
   }
@@ -287,7 +268,7 @@ export class SuiteRunsService {
     const rows = await this.db
       .select({
         runId: runs.id,
-        testId: testVersions.testId,
+        testId: replayedTestId,
         status: runs.status,
         error: runs.error,
         environmentId: runs.environmentId,
@@ -296,19 +277,16 @@ export class SuiteRunsService {
         trace: runs.trace,
         triggeredBy: runs.triggeredBy,
         testName: tests.name,
-        versionRepairJobId: testVersions.repairJobId,
-        versionReviewState: testVersions.reviewState,
       })
       .from(runs)
-      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
-      .innerJoin(tests, eq(tests.id, testVersions.testId))
+      .innerJoin(tests, eq(tests.id, replayedTestId))
       .where(eq(runs.suiteRunId, suiteRunId))
       .orderBy(asc(tests.name));
     const envNames = await this.environmentNames(rows.map((r) => r.environmentId));
 
     // Each child's checkpoint verdicts, grouped per run, for the shared outcome derivation
-    // (baseline vs verified, …) and the per-child review-debt tally. The parent aggregate stays on
-    // coarse `status`; of the counts, only `healed` reads the derived outcome — see countStatuses.
+    // (baseline vs verified, …) and the per-child review-debt tally. The parent aggregate and its
+    // counts stay on coarse `status`.
     const checkpointsByRun = await this.checkpointsByRun(rows.map((r) => r.runId));
 
     const children: SuiteRunChild[] = rows
@@ -339,7 +317,7 @@ export class SuiteRunsService {
       );
 
     return {
-      ...this.summarize(parent, rows, envNames, checkpointsByRun),
+      ...this.summarize(parent, rows, envNames),
       children,
     };
   }
@@ -352,12 +330,8 @@ export class SuiteRunsService {
     parent: { id: string; suiteId: string | null; suiteName: string; createdAt: Date },
     children: ChildRow[],
     envNames: Map<string, string>,
-    checkpoints: Map<string, Verdict[]>,
   ): SuiteRunSummary {
-    const counts = countStatuses(
-      children.map((c) => c.status),
-      children.map((c) => this.outcomeOf(c, checkpoints)),
-    );
+    const counts = countStatuses(children.map((c) => c.status));
     const targetedEnvIds = [
       ...new Set(children.map((c) => c.environmentId).filter((x): x is string => x != null)),
     ];
@@ -411,22 +385,14 @@ export class SuiteRunsService {
     return byRun;
   }
 
-  /** A child's derived outcome, through the one shared derivation — including whether the version
-   *  it replayed carries a repair nobody has accepted (`healed`). */
+  /** A child's derived outcome, through the one shared derivation. */
   private outcomeOf(
-    row: {
-      runId: string;
-      status: string;
-      error: string | null;
-      versionRepairJobId: string | null;
-      versionReviewState: string | null;
-    },
+    row: { runId: string; status: string; error: string | null },
     checkpoints: Map<string, Verdict[]>,
   ): RunOutcome {
     return deriveRunOutcome(checkpoints.get(row.runId) ?? [], {
       status: row.status,
       error: row.error,
-      repairApplied: isRepairInReview(row.versionRepairJobId, row.versionReviewState),
     });
   }
 

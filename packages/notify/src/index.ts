@@ -2,13 +2,12 @@ import {
   appSettings,
   type Db,
   environments,
+  replayedTestId,
   runResults,
   runs,
   suiteRuns,
   tests,
-  testVersions,
 } from "@varys/db";
-import { deriveRunOutcome, isRepairInReview, type ReviewState } from "@varys/review-contract";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 
 /**
@@ -194,15 +193,9 @@ export async function uploadSlackFile(
   }
 }
 
-/** Emoji + human label for a coarse run/suite status — or, for a run, its derived outcome when
- *  that outcome is `healed` (Slice 19, slice 06). */
+/** Emoji + human label for a coarse run/suite status. */
 function statusFace(status: string): { emoji: string; label: string; tone: Tone } {
   switch (status) {
-    // A repair was applied and the re-run verified. Deliberately NOT ❌ and not ✅: it is a
-    // digest line — "here is something to review" — in the same weight class as needs-review,
-    // never a page. Whoever is on call must not be woken by a test that fixed itself.
-    case "healed":
-      return { emoji: "🩹", label: "HEALED", tone: "review" };
     case "passed":
       return { emoji: "✅", label: "PASSED", tone: "pass" };
     case "needs_review":
@@ -356,13 +349,9 @@ export async function notifyRunComplete(
       createdAt: runs.createdAt,
       updatedAt: runs.updatedAt,
       testName: tests.name,
-      // The version this run replayed — an unaccepted repair in it makes the run `healed`.
-      versionRepairJobId: testVersions.repairJobId,
-      versionReviewState: testVersions.reviewState,
     })
     .from(runs)
-    .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
-    .innerJoin(tests, eq(tests.id, testVersions.testId))
+    .innerJoin(tests, eq(tests.id, replayedTestId))
     .where(eq(runs.id, runId))
     .limit(1);
   if (!run) return { sent: false };
@@ -393,35 +382,19 @@ export async function notifyRunComplete(
   const avgMismatch = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
   const durationMs = (run.updatedAt ?? run.createdAt).getTime() - run.createdAt.getTime();
 
-  // The message is faced by the DERIVED outcome when that outcome is `healed`, and by the coarse
-  // status otherwise. Only `healed` is lifted, because it is the one outcome whose meaning the
-  // coarse status actively misreports: the run is stored `passed`, and posting ✅ PASSED for a
-  // test running on a repair nobody has accepted is the silent pass this whole slice exists to
-  // prevent. The rest of the outcome vocabulary refines what `passed`/`failed` already say
-  // truthfully, and is left to the app.
-  const outcome = deriveRunOutcome(
-    checkpoints.map((c) => ({
-      reviewState: c.reviewState as ReviewState,
-      resolution: c.resolution as "approved" | "rejected" | null,
-    })),
-    { status: run.status, error: run.error, repairApplied: isRepairInReview(run.versionRepairJobId, run.versionReviewState) },
-  );
-  const healed = outcome === "healed";
-  const face = statusFace(healed ? "healed" : run.status);
+  // The message is faced by the coarse status: the outcome vocabulary refines what
+  // `passed`/`failed` already say truthfully, and is left to the app.
+  const face = statusFace(run.status);
 
   const trigger = run.triggerSource === "schedule" ? " · scheduled" : "";
   const headline = `${face.emoji} ${esc(run.testName)} · ${esc(environment)} · ${face.label}${trigger}`;
-  const detail = healed
-    ? `A repair was applied and this re-run verified clean — ${passed}/${checkpoints.length} checkpoint${checkpoints.length === 1 ? "" : "s"} passed · ${humanDuration(durationMs)}.\n` +
-      "Nothing is broken and nothing is blocked: the repaired version is waiting for someone to accept or reject it."
-    : run.status === "failed" && run.error
+  const detail =
+    run.status === "failed" && run.error
       ? `Run failed: ${esc(run.error.slice(0, 300))}`
       : `${passed}/${checkpoints.length} checkpoint${checkpoints.length === 1 ? "" : "s"} passed` +
         (review > 0 ? ` · ${review} need review` : "") +
         ` · ${humanDuration(durationMs)}`;
-  const viewRun = healed
-    ? `${link(cfg.baseUrl, `?run=${encodeURIComponent(runId)}`, "View run")} · ${link(cfg.baseUrl, "?view=repair-queue", "Review the repair")}`
-    : link(cfg.baseUrl, `?run=${encodeURIComponent(runId)}`, "View run");
+  const viewRun = link(cfg.baseUrl, `?run=${encodeURIComponent(runId)}`, "View run");
   const message: SlackMessage = {
     text: `${face.emoji} ${run.testName} · ${environment} · ${face.label}`,
     blocks: [
@@ -458,65 +431,6 @@ export async function notifyRunComplete(
   });
 }
 
-/**
- * Alert that the repair circuit breaker has tripped (Slice 19, slice 07) — more tests are
- * simultaneously broken on a locator than the project's threshold allows, so NO repair jobs are
- * being created at all.
- *
- * This is the one notification in here that is NOT about a run, and it is not gated per-source for
- * that reason: `notifyManual` / `notifySchedule` / `notifySuite` say which RUNS you want to hear
- * about, and a tripped breaker is not a run — it is Varys declining to repair anything until a
- * human looks. Muting run notifications must not silently mute the guard.
- *
- * Best-effort like everything else here: never throws. A suppression is recorded before this is
- * called, so an unsendable alert costs visibility in Slack, not the record itself.
- *
- * The cluster spread is in the message on purpose. "40 tests, 1 cluster" is a rename somebody can
- * confirm and override in a minute; "40 tests, 31 clusters" is a broken deploy, and the answer is
- * to fix the app, not the tests.
- */
-export async function notifyBreakerTripped(
-  db: Db,
-  event: {
-    failingTests: number;
-    clusters: number;
-    threshold: number;
-    /** The test whose failure tripped it — context, not the cause. */
-    latestTestName?: string | null;
-  },
-): Promise<{ sent: boolean; error?: string }> {
-  const cfg = await readSlackConfig(db);
-  if (!cfg) return { sent: false };
-
-  const spread =
-    event.clusters === 1
-      ? "all of them on ONE broken locator — likely a single rename, which an override can repair in bulk once you have confirmed it"
-      : `spread across ${event.clusters} different broken locators — that looks like the app broke or was redesigned, not test drift`;
-  const headline = `🛑 Repair suppressed · circuit breaker tripped`;
-  const detail =
-    `*${event.failingTests}* tests are broken on a locator (threshold *${event.threshold}*), ${spread}.
-` +
-    "No repair jobs have been created. Nothing will be repaired automatically until someone overrides the breaker." +
-    (event.latestTestName ? `
-Most recent: ${esc(event.latestTestName)}.` : "");
-  const message: SlackMessage = {
-    text: `🛑 Repair suppressed — ${event.failingTests} tests broken on a locator (threshold ${event.threshold})`,
-    blocks: [
-      { type: "section", text: { type: "mrkdwn", text: `*${headline}*` } },
-      {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: `${detail}
-${link(cfg.baseUrl, "?view=repair-queue", "Review the suppressed failures")}`,
-        },
-      },
-    ],
-  };
-  const res = await sendSlackMessage(cfg, message);
-  return res.ok ? { sent: true } : { sent: false, error: res.error };
-}
-
 /** Fan-in: post the suite summary iff every child is terminal AND this call wins the one-shot
  *  claim on `suite_runs.notified_at`. */
 async function notifySuiteIfComplete(
@@ -534,8 +448,7 @@ async function notifySuiteIfComplete(
       runId: runs.id,
     })
     .from(runs)
-    .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
-    .innerJoin(tests, eq(tests.id, testVersions.testId))
+    .innerJoin(tests, eq(tests.id, replayedTestId))
     .where(eq(runs.suiteRunId, suiteRunId));
   if (children.length === 0) return { sent: false };
   const allTerminal = children.every((c) => (TERMINAL as readonly string[]).includes(c.status));

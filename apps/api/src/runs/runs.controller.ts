@@ -30,12 +30,6 @@ export class RunsController {
     return this.runs.listRuns(undefined, testId);
   }
 
-  // Declared before the `:id` param route so it isn't matched as a run id.
-  @Get("needs-review")
-  needsReview() {
-    return this.runs.needsReview();
-  }
-
   @Get(":id")
   get(@Param("id") id: string) {
     return this.runs.getById(id);

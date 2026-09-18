@@ -156,27 +156,16 @@ export type TestKind = "pinned" | "agent";
 export type TestStatus = "draft" | "active";
 
 /**
- * A test's Repair Policy (Slice 19) — what happens when a run fails on a locator it cannot
- * resolve: `manual` (surface it; a human opens a Repair Session — today's behaviour) or `auto`
- * (enqueue a Repair Job for a cloud Claude to drain). Available to EVERY test regardless of how
- * it was authored; `manual` is the default, so nothing an author recorded starts changing
- * behind their back. Mirrors `RepairPolicy` in `@varys/repair-policy`, kept as a plain type
- * here so the SPA needs no dependency on that package.
- */
-export type RepairPolicy = "manual" | "auto";
-
-/**
  * The class of failure that ended a red run, when it is classified.
  *
- * `locator` — an unresolvable fingerprint — is the ONLY repairable class. Everything else enqueues
- * a read-only **Triage Job** instead (Slice 19, slice 08): Claude drives to the failure, looks, and
- * writes a finding onto the run, and the run stays red. Recording the class rather than inferring it
- * from the error text is what makes "may a repair touch this?" a fact instead of a regex.
+ * Plain reporting, read by whoever opens the red run: it says what KIND of thing broke before they
+ * decide whether to open a Repair Session on it. Recording the class rather than inferring it from
+ * the error text is what makes it a fact instead of a regex.
  *
  *  - `pixel`     — a baseline existed and the capture differs. A visual change is not drift.
  *  - `judge`     — a `context` checkpoint the LLM judge failed, or could not be judged at all.
- *  - `assertion` — an assertion's relation came back false (Slice 19, slice 09/10). A false
- *                  relation is NEVER repairable: the test is right and the app is wrong.
+ *  - `assertion` — an assertion's relation came back false (Slice 19, slice 09/10). Nothing to
+ *                  re-pin: the test is right and the app is wrong.
  *  - `timeout`   — a step waited for something that never arrived.
  *  - `crash`     — the replay threw. An outage is not a broken locator.
  *  - `unreached` — an Agent-Driven Test left a Checkpoint Manifest slot unfilled. Not repairable
@@ -197,370 +186,12 @@ export type RunFailureKind =
   | "unreached"
   | null;
 
-/** The failure classes a Triage Job diagnoses — every red class except the repairable one. */
-export const TRIAGE_FAILURE_KINDS = ["pixel", "judge", "assertion", "timeout", "crash"] as const;
-export type TriageFailureKind = (typeof TRIAGE_FAILURE_KINDS)[number];
-
-/** A Repair Job's kind: `repair` may change the test; `triage` only diagnoses it (slice 08). */
-export type RepairJobKind = "repair" | "triage";
-
 /**
- * A Repair Job's lifecycle. `queued` means UNCLAIMED — no drainer has taken it. A project with
- * no repair agent accumulates these, which ADR-0003 accepts as a consequence of never letting
- * Varys spend a user's Claude subscription; the queue view's job is to make it visible rather
- * than mysterious, which is why "queued" and "claimed" are distinct states and not one
- * "pending".
- */
-export type RepairJobStatus = "queued" | "claimed" | "done" | "failed" | "cancelled";
-
-/** One row of the repair queue. */
-export interface RepairJobSummary {
-  id: string;
-  /** The test to be repaired, and its name for display without a second lookup. */
-  testId: string;
-  testName: string;
-  /** The run whose failure created the job — null once that run has been purged. */
-  runId: string | null;
-  kind: RepairJobKind;
-  status: RepairJobStatus;
-  /** Stable identity of the broken locator: failures sharing this key share a root cause. */
-  clusterKey: string;
-  /** How many TESTS this job's Failure Cluster covers, and their names (Slice 19, slice 07).
-   *  `testId`/`testName` above are the ANCHOR — the oldest failure, the one a drainer opens its
-   *  session on. `clusterSize` is 1 for an ordinary single-test break; anything more is one app
-   *  change that broke several tests and will be repaired as one reviewable fix. */
-  clusterSize: number;
-  clusterTestNames: string[];
-  /** How many times a drainer has attempted this job. */
-  attempts: number;
-  /** Who holds the claim, and since when (ISO) — both null while the job is unclaimed. */
-  claimedBy: string | null;
-  claimedAt: string | null;
-  /** When the current claim lapses (ISO), after which the job returns to the queue. Null while
-   *  unclaimed — a Claim is a lease, so an in-progress job always has one. */
-  claimExpiresAt: string | null;
-  createdAt: string;
-}
-
-/**
- * What a drainer gets back when it claims a job (Slice 19, slice 03): everything needed to start
- * repairing without a second lookup — the test, the step that broke, and the Brief the repair
- * will have to be justified against (slice 05).
- *
- * `claimExpiresAt` is the deadline, not a hint: past it the job returns to the queue and another
- * drainer may take it, so a claimer that is still working must report before then.
- */
-export interface ClaimedRepairJob {
-  jobId: string;
-  kind: RepairJobKind;
-  testId: string;
-  testName: string;
-  /** The run whose failure created the job — null once that run has been purged. */
-  runId: string | null;
-  /** The Brief the test states its intent as (`tests.intent`), or null if it has none. */
-  brief: string | null;
-  clusterKey: string;
-  /** Every test this job covers (Slice 19, slice 07) — the Failure Cluster, and precisely the set
-   *  the claim's credential reaches. `testId` above is the anchor and is always in here. A repair
-   *  applied through `apply_fix` is fanned out across all of them as ONE reviewable change, so a
-   *  drainer does not (and must not) repair them one at a time. */
-  clusterTests: Array<{ testId: string; testName: string; runId: string | null }>;
-  /** The step that failed, as recorded on the run — null when the run has been purged. */
-  failingStep: {
-    index: number;
-    /** Human description of the step, e.g. `click "Save changes"`. */
-    label: string;
-    /** The run's own error message for it. */
-    error: string | null;
-  } | null;
-  /**
-   * The ASSERTION that failed, when that is what made the run red (Slice 19, slice 10) — null
-   * otherwise, and null for a run that has been purged.
-   *
-   * `repairable` is the whole point: an assertion whose extraction target no longer resolved is a
-   * locator failure and is re-pinned like any other, while one whose relation is FALSE says the app
-   * is wrong and is never repairable. `side` names which target to re-pin.
-   */
-  failingAssertion: {
-    id: string;
-    /** The plain-language check, as it read on the run that failed. */
-    check: string;
-    outcome: AssertionOutcome;
-    cause: ExtractionCause | null;
-    /** Which side could not be read — the target a repair re-pins. Null when no single side is at fault. */
-    side: "left" | "right" | null;
-    /** The engine's one-line account of what happened. */
-    detail: string;
-    /** Whether a repair may touch it at all. False ⇒ this is a diagnosis, not a fix. */
-    repairable: boolean;
-  } | null;
-  /** Attempts INCLUDING this one, and how many remain before the job is abandoned. */
-  attempts: number;
-  attemptsRemaining: number;
-  claimedAt: string;
-  claimExpiresAt: string;
-}
-
-/**
- * What a drainer gets back when it REPORTS a repair (Slice 19, slice 04).
- *
- * The two fields that matter are the ones that say what did NOT happen: the version is
- * `unreviewed`, and `runOutcome` is still the failure that started this. A repair does not turn a
- * run green — a human accepting the version is what makes the repair real (slice 06 adds the
- * amber re-run, behind slice 05's justification gate). Saying so in the payload means a drainer
- * reports "proposed a fix, awaiting review" rather than "fixed".
- */
-export interface ReportedRepair {
-  ok: true;
-  jobId: string;
-  /** Terminal for the drainer: the job is `done` and the claim is over. */
-  status: RepairJobStatus;
-  testId: string;
-  /** The version number the repair was written as, and its id for the review surface. */
-  version: number;
-  versionId: string;
-  /** Always `unreviewed` — this is the whole point of the slice. */
-  reviewState: VersionReviewState;
-  /** The originating run and the status it still has: untouched by the repair. */
-  runId: string | null;
-  runStatus: string | null;
-  /** The RE-RUN this repair triggered (Slice 19, slice 06) — a fresh run of the test against the
-   *  repaired definition, queued the moment the justification gate let the repair stand. It is a
-   *  new run, not a resurrection of `runId`: the failure that started this is history. Null when
-   *  the re-run could not be queued (the repair still stands; nothing is retried automatically).
-   *  For a clustered repair this is the ANCHOR's re-run; see `rerunIds`. */
-  rerunId: string | null;
-  /** Every test the repair was applied to (Slice 19, slice 07) and the re-run queued for each.
-   *  A clustered job writes one unreviewed version per member test, all under this job, and they
-   *  are accepted or rejected together — one app change, one reviewable fix. */
-  clusterTestIds: string[];
-  rerunIds: string[];
-  /** The brief-clause justification the gate accepted, and the judge's one-line reasoning
-   *  (Slice 19, slice 05). A repair only reaches this payload by passing that gate. */
-  justification: string;
-  justificationReasoning: string;
-  note: string;
-}
-
-/**
- * What a drainer gets back when it reports a TRIAGE finding (Slice 19, slice 08).
- *
- * Every field here exists to stop a diagnosis reading as a resolution. `runOutcome` is the run's
- * outcome AFTER the finding was written — unchanged, and still red — and `versionsWritten` is
- * always 0, because a triage claim cannot write one. A drainer that reports "diagnosed" and a
- * drainer that reports "fixed" must not be able to make the same mistake.
- */
-export interface ReportedTriage {
-  ok: true;
-  jobId: string;
-  /** Terminal for the drainer: the job is `done` and the claim is over. */
-  status: RepairJobStatus;
-  testId: string;
-  /** The run the finding was written onto, and its outcome now — still red. */
-  runId: string | null;
-  runStatus: string | null;
-  runOutcome: RunOutcome | null;
-  /** The finding as stored. */
-  finding: string;
-  /** Always 0. Present so the payload states it rather than leaving it to be assumed. */
-  versionsWritten: 0;
-  note: string;
-}
-
-/**
- * Whether a `test_version` has been through human review (Slice 19, slice 04). Everything a
- * person writes is `reviewed` on arrival; only an unattended Repair Agent writes `unreviewed`,
- * and `rejected` marks one a reviewer threw away (the test having been reverted by appending its
- * previous definition as a new version).
+ * Whether a `test_version` has been through human review. Everything a person writes is
+ * `reviewed` on arrival; `rejected` marks one a reviewer threw away (the test having been
+ * reverted by appending its previous definition as a new version).
  */
 export type VersionReviewState = "reviewed" | "unreviewed" | "rejected";
-
-/**
- * One locator signal, on both sides of a repair (Slice 19, slice 13).
- *
- * `changed` is the whole point of the shape: a reviewer's question is never "what does this
- * locator say?" but "what did the repair MOVE?", and a signal that stayed put is the evidence
- * that it is still the same control. So both are carried, and the unchanged ones are marked as
- * such rather than dropped — a diff that only listed changes would leave a reviewer unable to
- * tell "role is still button" from "role was never recorded".
- */
-export interface RepairSignalChange {
-  /** Display label, e.g. `Accessible name` — the same vocabulary the locator panel uses. */
-  label: string;
-  /** The signal before and after, rendered flat for display. Null means "none recorded", which
-   *  is itself meaningful: a DROPPED signal is as telling as a replaced one. */
-  before: string | null;
-  after: string | null;
-  changed: boolean;
-}
-
-/** One step a repair touched, with its locator signals before and after (Slice 19, slice 13). */
-export interface RepairStepDiff {
-  /** 0-based index into the definition's steps — displayed as `Step n+1`. */
-  stepIndex: number;
-  /** What the step read as on each side (`describeStep`); equal when only signals moved. */
-  beforeLabel: string;
-  afterLabel: string;
-  /** Every locator signal, changed or not. Empty when neither side has an element target — a
-   *  navigate or a full-page checkpoint has no locator to diff. */
-  signals: RepairSignalChange[];
-  /** True when the step also changed OUTSIDE its locator signals (a url, a checkpoint name, a
-   *  typed value). Flagged rather than rendered: a locator repair should not be doing this, and a
-   *  reviewer who is only shown signals would never learn that it did. */
-  nonSignalChange: boolean;
-}
-
-/**
- * What a repair actually changed, computed from the two stored definitions (Slice 19, slice 13).
- *
- * Rendered from the definitions rather than from the agent's account of itself, on purpose: an
- * agent that re-pinned "Apply filter" to "Refresh" describes its own change generously, and the
- * review gate only works if the evidence and the claim can disagree in front of the reviewer.
- */
-export interface RepairChangeDiff {
-  /** Only the steps that actually differ, in index order. Empty means the two definitions are
-   *  identical — worth showing plainly, because a repair that changed nothing is a bug. */
-  steps: RepairStepDiff[];
-  /** Step counts on each side. A locator repair never adds or removes steps, so a mismatch is
-   *  the first thing a reviewer should see. */
-  stepCountBefore: number;
-  stepCountAfter: number;
-}
-
-/**
- * One repaired version awaiting a human decision — the repair review queue (Slice 19, slices 04
- * and 13). Everything needed to decide in seconds and without navigating away: which test, which
- * version, who wrote it, the signals it moved, the Brief and the justification it was checked
- * against, the blast radius, and the page it was repaired against.
- */
-export interface RepairReviewItem {
-  versionId: string;
-  testId: string;
-  testName: string;
-  /** The version awaiting review, and the version it was written on top of (what a reject
-   *  reverts to). */
-  version: number;
-  previousVersion: number | null;
-  /** Attribution — `Repair Agent "<label>" (Claude repair)` for an unattended repair. */
-  createdBy: string | null;
-  createdAt: string;
-  /** The job this repair was reported under, and its run — null if the link is gone. */
-  jobId: string | null;
-  runId: string | null;
-  /** What the drainer said it did, and the Brief it was meant to satisfy. */
-  report: string | null;
-  brief: string | null;
-  /** The clause of the Brief the agent claimed this repair satisfies, and the judge's one-line
-   *  verdict on that claim (Slice 19, slice 05). Shown BESIDE the brief, because a verdict is
-   *  meaningless to a reviewer who cannot see what it was checked against. Null for a version
-   *  written before the gate existed. */
-  justification: string | null;
-  justificationReasoning: string | null;
-  /** Whether an INDEPENDENT judge stood behind that reasoning (Slice 19, slice 14), or the repair
-   *  stands on the agent's own account because no judge is configured. Null for a version written
-   *  before the distinction existed. A reviewer must be able to tell the two apart at a glance:
-   *  unvalidated is not "worse", it is a different amount of evidence in front of the same
-   *  decision. */
-  justificationValidated: boolean | null;
-  /** True while this is still the test's LATEST version — i.e. the definition runs use. A
-   *  later edit having landed on top is why an accept is not automatically "this is live". */
-  isActiveDefinition: boolean;
-  /** The most recent run of this exact version — the re-run the repair triggered (Slice 19,
-   *  slice 06) — and its derived outcome. `healed` is the answer a reviewer is looking for: the
-   *  repair was exercised and everything verified. `regression`/`failed` say the repair did not
-   *  actually fix it, and `queued`/`running` that the re-run is still going. Null until the
-   *  re-run exists (or for a version written before re-runs did). */
-  rerunRunId: string | null;
-  rerunOutcome: RunOutcome | null;
-  /** The Failure Cluster this repair covers (Slice 19, slice 07). `testId`/`version` above are the
-   *  ANCHOR; accepting or rejecting this item decides every test named here, because one app change
-   *  is one reviewable fix. `clusterSize` is 1 for an ordinary single-test repair. */
-  clusterSize: number;
-  clusterTestNames: string[];
-  /** The side-by-side locator diff (Slice 19, slice 13), from this version's definition and the
-   *  one it was written on top of. Null when there is no previous version to compare against —
-   *  a first version cannot have been repaired, so this means the history was truncated. */
-  diff: RepairChangeDiff | null;
-  /** The page the repair was made against, captured live at the moment the fix was written
-   *  (Slice 19, slice 13) — an `/artifacts/:token` URL. It is the one piece of context that is
-   *  neither the agent's account nor the stored definition: a reviewer can see that the control
-   *  the repair re-pinned to is the one the Brief is talking about. Null for a version written
-   *  before the capture existed, or one written by `edit_test` with no live page behind it. */
-  pageScreenshotUrl: string | null;
-}
-
-/**
- * The repair circuit breaker's current state (Slice 19, slice 07) — read by the queue view, so a
- * project whose jobs have stopped appearing can see WHY.
- *
- * The distinction the whole view exists for: `tripped` means Varys is deliberately refusing to
- * repair anything because too much broke at once, which is a completely different situation from
- * "nothing is draining the queue" (slice 01's unclaimed-vs-slow distinction).
- */
-export interface RepairBreakerView {
-  /** True while the most recent census was over threshold — repair is suppressed right now. */
-  tripped: boolean;
-  /** The project threshold in force, and the built-in default it falls back to. */
-  threshold: number;
-  defaultThreshold: number;
-  /** How far back "simultaneous" reaches, in minutes. */
-  windowMinutes: number;
-  /** Distinct tests broken on a locator inside the window, and how many broken locators they are
-   *  spread across. One cluster of forty is a rename; forty clusters is a broken app. */
-  failingTests: number;
-  clusters: number;
-  /** Failures the breaker refused to enqueue and nobody has released yet. */
-  suppressed: SuppressedFailureItem[];
-}
-
-/** One locator failure the breaker refused to enqueue, awaiting a human's decision. */
-export interface SuppressedFailureItem {
-  id: string;
-  testId: string;
-  testName: string;
-  /** The run the failure was observed in — null once that run has been purged. */
-  runId: string | null;
-  clusterKey: string;
-  /** The threshold in force, and the count that breached it, AT SUPPRESSION TIME — so the record
-   *  still explains itself after somebody changes the setting. */
-  threshold: number;
-  failingTests: number;
-  createdAt: string;
-}
-
-/** What releasing a tripped breaker did: the suppressed failures became jobs, clustered. */
-export interface RepairBreakerOverride {
-  ok: true;
-  /** How many suppressed failures were released, and how many JOBS they collapsed into. The gap
-   *  between the two numbers is the clustering doing its work. */
-  released: number;
-  jobsCreated: number;
-  jobIds: string[];
-  note: string;
-}
-
-/** The circuit-breaker threshold as the Configurations page reads and writes it. */
-export interface RepairBreakerSettings {
-  /** Tests simultaneously broken on a locator BEYOND which no repair job is created at all. */
-  threshold: number;
-  /** The built-in default, so the UI can say what "unset" means. */
-  defaultThreshold: number;
-  /** How far back "simultaneous" reaches, in minutes. Not editable — shown so the threshold's
-   *  units are unambiguous. */
-  windowMinutes: number;
-}
-
-/** The outcome of accepting or rejecting a repaired version. */
-export interface RepairReviewDecision {
-  ok: true;
-  versionId: string;
-  /** `reviewed` after an accept, `rejected` after a reject. */
-  reviewState: VersionReviewState;
-  /** After a reject: the new version appended to restore the previous definition. Null after
-   *  an accept, which writes no version — the repaired one is already the active definition. */
-  revertedToVersion: number | null;
-  note: string;
-}
 
 /**
  * One Repair Agent credential as the management surface sees it (Slice 19, slice 02 / ADR-0005).
@@ -611,20 +242,6 @@ export interface CreatedAgentCredential {
   credential: AgentCredentialSummary;
   /** The bearer token to configure on the drainer. Not retrievable afterwards. */
   token: string;
-}
-
-/** Set a Repair Policy across a scope: one test, a whole folder (including its subfolders),
- *  or a tag. Exactly one scope key is expected. */
-export interface SetRepairPolicyRequest {
-  policy: RepairPolicy;
-  testIds?: string[];
-  folderId?: string;
-  tag?: string;
-}
-
-/** How many tests a bulk policy change actually applied to. */
-export interface SetRepairPolicyResult {
-  updated: number;
 }
 
 /**
@@ -714,9 +331,6 @@ export interface TestSummary {
   /** The test's cron schedule, or null when unscheduled — drives the Tests-list
    *  "scheduled · next run" indicator (Slice 8). */
   schedule: TestScheduleSummary | null;
-  /** What happens when a run of this test fails on an unresolvable locator (Slice 19).
-   *  `manual` for everything until an author opts in. */
-  repairPolicy: RepairPolicy;
 }
 
 /**
@@ -870,14 +484,11 @@ export interface TestConfigView {
   /** True when the test uses `{{baseUrl}}` — the locator-verify control uses this to require
    *  an environment (which supplies the base URL + cookies + localStorage). */
   needsEnvironment: boolean;
-  /** The test's Repair Policy (Slice 19). Shown and edited on test detail; written via the
-   *  structural `PATCH /tests/:id`, so changing it never writes a new test_version. */
-  repairPolicy: RepairPolicy;
   /**
    * The wall-clock lease an Agent Run Session on this test is given, in seconds — the bound on an
    * agent that will not stop. Meaningful only for `kind: "agent"`; a pinned test carries the
    * default and ignores it. Written via the structural `PATCH /tests/:id`, so changing it writes
-   * no test_version — the lease is operational metadata, like the Repair Policy.
+   * no test_version — the lease is operational metadata, like the schedule.
    */
   agentLeaseSeconds: number;
   /** The test's declared Assertions (slice 09), with their pinned form spelled out — which
@@ -1098,21 +709,21 @@ export interface PromoteDraftBody {
 }
 
 /**
- * How an Authoring Session is being driven (Author with AI):
- *  - `interactive` — step-by-step: Claude performs one action per instruction, then waits.
- *  - `batch` — Claude runs a whole plan/file to completion in one go.
- * Chosen when the session opens (`open_session`'s `mode`); steers Claude's behavior and the
- * checkpoint cadence, and drives a badge in the live view. Defaults to `interactive`.
+ * What KIND of session this is — not a choice anyone makes, and never passed to `open_session`:
+ *  - `record` — an Authoring Session. Claude is handed the whole Brief up front, walks it end to
+ *    end, and ends the session itself. There is exactly one way to drive it.
+ *  - `repair` — a Repair Session. It records nothing: it re-drives an existing test's steps to the
+ *    point a Run failed and parks there so the break can be diagnosed against the live page.
+ * The two are distinct because `checkpoint` and `finish_session` are refused in `repair` — there
+ * is no draft there to capture into or to save.
  */
-/** How an Authoring Session is being driven. `interactive` / `batch` RECORD a new test;
- *  `repair` records nothing — it re-drives an existing test's steps to the point a Run failed
- *  and parks there so a locator can be diagnosed against the live page. */
-export type AuthoringMode = "interactive" | "batch" | "repair";
+export type AuthoringMode = "record" | "repair";
 
 /**
  * The AI authoring instructions (the MCP `initialize` prompt), as read/edited from the Author
  * page (`GET/PUT /authoring/instructions`). Two layers, served to Claude as `base` + `additional`:
- *  - `base` — the foundational prompt (modes, checkpoint discipline, core rules). Changed rarely;
+ *  - `base` — the foundational prompt (the authoring discipline, checkpoint discipline, core
+ *    rules). Changed rarely;
  *    edited in an "advanced" section. `baseUsingDefault` is true when no override is stored (so
  *    `base` is the baked-in `baseDefault`, the reset target).
  *  - `additional` — team-specific guidance, edited frequently and appended under its own heading.
@@ -1248,8 +859,6 @@ export interface AuthoringSessionSummary {
   name: string;
   /** The steering intent that opened the session, if any. */
   intent: string | null;
-  /** Whether the session is being driven step-by-step or as a batch plan. */
-  mode: AuthoringMode;
   /** The session's current page URL and title. */
   url: string;
   title: string;
@@ -1635,26 +1244,8 @@ export interface CheckpointView {
 }
 
 /**
- * One entry in the "needs review" list — a checkpoint currently awaiting a human
- * decision (`pending-baseline` or `diff`), with just enough context to triage and
- * open it. Not the slice-7 dashboard; a flat list, enough to find work.
- */
-export interface NeedsReviewItem {
-  runId: string;
-  testName: string;
-  environment: string;
-  runTimestamp: string;
-  checkpointName: string;
-  /** Why it needs review: `pending-baseline` (first approval) or `diff`. Spelled out rather than
-   *  `Exclude<ReviewState, "passed">`, because `missing` is also not-passed and is emphatically
-   *  NOT awaiting a human decision — there is nothing to look at and nothing to approve. */
-  reviewState: "pending-baseline" | "diff";
-}
-
-/**
- * One row in the Runs history — every run, newest first, regardless of outcome
- * (unlike NeedsReviewItem, which only lists checkpoints awaiting a decision). Enough
- * to scan run outcomes and open any one in the viewer.
+ * One row in the Runs history — every run, newest first, regardless of outcome.
+ * Enough to scan run outcomes and open any one in the viewer.
  */
 export interface RunSummary {
   runId: string;
@@ -1672,9 +1263,21 @@ export interface RunSummary {
   /** Why a `failed` run failed (the replay error); null otherwise. */
   error: string | null;
   /** Who triggered the run (email / "ai" sentinel), and how — `manual` | `suite` |
-   *  `schedule` | `api`. Both null for runs created before attribution was recorded. */
+   *  `schedule` | `api` | `repair` | `varys`. Both null for runs created before attribution was
+   *  recorded; `varys` marks an Agent Run Session a Run Request from the web app was answered by,
+   *  so its absence reads "not known to have come from Varys", never "typed". */
   triggeredBy: string | null;
   triggerSource: string | null;
+  /**
+   * The Agent Run Session behind this run, or null for a pinned run (and for an agent run started
+   * before leases existed).
+   *
+   * Carried on the SUMMARY, not just the detail view, because without it the runs list cannot tell
+   * a session that is walking the journey right now from one that ended red an hour ago: both are
+   * a row of `missing` slots, and the list has no other signal. It is what lets `outcome` read
+   * `running` while the session is open — see {@link RunOutcomeRun.agentSession}.
+   */
+  session: AgentSessionView | null;
 }
 
 /** Aggregate child-run counts for a suite run — derived on read, never stored. */
@@ -1685,11 +1288,6 @@ export interface SuiteRunCounts {
   passed: number;
   needsReview: number;
   failed: number;
-  /** Children that read `healed` — they verified, but on a repair nobody has accepted yet
-   *  (Slice 19, slice 06). They are a SUBSET of `passed`, not a sibling of it: a healed run does
-   *  not fail the suite, so the aggregate still reports passing and this is the count that tells
-   *  you how much of that pass is resting on unreviewed repairs. */
-  healed: number;
 }
 
 /**
@@ -2049,7 +1647,9 @@ export interface RunView {
   /** When the run was created, ISO 8601. */
   runTimestamp: string;
   /** Who triggered the run (email / "ai" sentinel), and how — `manual` | `suite` |
-   *  `schedule` | `api`. Both null for runs created before attribution was recorded. */
+   *  `schedule` | `api` | `repair` | `varys`. Both null for runs created before attribution was
+   *  recorded; `varys` marks an Agent Run Session a Run Request from the web app was answered by,
+   *  so its absence reads "not known to have come from Varys", never "typed". */
   triggeredBy: string | null;
   triggerSource: string | null;
   /** Why a `failed` run failed (the replay error); null otherwise. A failed run
@@ -2081,23 +1681,10 @@ export interface RunView {
   checkpoints: CheckpointView[];
   /** Optional free-form note on the run, or null when none. Editable from the run-detail page. */
   notes: string | null;
-  /** Which CLASS of failure ended this run, when it is classified (Slice 19). `locator` is the
-   *  only repairable class — the run-detail "repair this" affordance is offered on that and
-   *  nothing else; every other class gets a read-only Triage Job (slice 08). */
+  /** Which CLASS of failure ended this run, when it is classified (Slice 19). `locator` is what
+   *  the run-detail "repair this" affordance keys on — a broken locator is the failure a Repair
+   *  Session is most often opened for. */
   failureKind: RunFailureKind;
-  /** The triage finding written onto this run (Slice 19, slice 08): a drainer's written
-   *  explanation of a failure it was NOT allowed to fix — "the chart is empty because
-   *  /api/metrics returns 401". Null until one is reported.
-   *
-   *  A diagnosis, never a resolution: the run's `outcome` is completely unaffected by it, which is
-   *  the whole point of the slice. Shown beside the failure so a red cell becomes actionable. */
-  triageFinding: string | null;
-  /** Who wrote the finding (a `Repair Agent "…"` label) and when, ISO. Null with the finding. */
-  triageBy: string | null;
-  triageAt: string | null;
-  /** The Repair Policy of the run's test, so run detail can say whether a repair would have
-   *  been enqueued automatically or needs enqueuing by hand. */
-  repairPolicy: RepairPolicy;
   /**
    * Every pinned assertion this run evaluated, each with its own verdict and its own history
    * (slice 09). Empty for a test that declares none, and for every run that predates them.
@@ -2155,6 +1742,14 @@ export interface RunView {
  * action is to set the new actual as the baseline; a real bug is left red and fixed in the app. A
  * run that set/updated the baseline reads **`baseline`**; a clean match reads **`passed`**. Computed
  * server-side and sent as {@link RunView.outcome} / `RunSummary.outcome`; the client only displays it.
+ *
+ * **`running` covers two different things.** A replay Varys is driving, taken straight off the
+ * stored status — and an **Agent Run Session** still inside its lease, which Varys is not driving
+ * and cannot observe. The second is a display-only reading of a run that is stored `failed` the
+ * whole time: while the session is `open` Varys genuinely cannot tell an agent that walked away
+ * from one still working, so the outcome declines to call an ending that has not happened. The
+ * instant the lease passes or the agent closes the session, an unfilled slot reads `failed` and
+ * nothing may soften it. See {@link RunOutcomeRun.agentSession}.
  */
 export type RunOutcome =
   | "queued"
@@ -2163,7 +1758,6 @@ export type RunOutcome =
   | "passed" // had a baseline and the capture matched — a real verification pass
   | "baseline" // this run set or updated the golden baseline (first approval or "set as baseline")
   | "pending-baseline" // first run — no baseline yet, awaiting approval (NOT a failure)
-  | "healed" // it verified, but only because an UNACCEPTED repair is in the definition it replayed
   | "regression" // a baseline existed but the capture differs — a visual difference (incl. a rejected diff)
   | "failed"; // the replay crashed or an element couldn't be located — an execution failure
 
@@ -2177,30 +1771,19 @@ export interface RunOutcomeCheckpoint {
 export interface RunOutcomeRun {
   status: string;
   error?: string | null;
-  /** True when the DEFINITION this run replayed contains a repair no human has accepted yet —
-   *  i.e. the run's test version was written by a Repair Agent and is still `unreviewed`
-   *  (Slice 19, slice 06). It is the one input that is NOT derivable from the checkpoints: a
-   *  clean re-run after a repair looks identical to any other clean run, and the difference —
-   *  that its greenness rests on an unreviewed edit — is a property of the version, not of a
-   *  pixel comparison. Derive it with {@link isRepairInReview}. */
-  repairApplied?: boolean;
-}
-
-/**
- * Does this test version carry a repair that is still waiting on a human? The single definition
- * of {@link RunOutcomeRun.repairApplied}, so every surface asks it the same way.
- *
- * `unreviewed` is the only state that counts. An `accepted` repair has been signed off, so runs
- * against it are ordinary passes again — `healed` is a review-queue marker, not a permanent scar
- * on the test's history. A `rejected` one never stood at all.
- */
-export function isRepairInReview(
-  /** `test_versions.repair_job_id` of the version the run replayed. */
-  repairJobId: string | null,
-  /** `test_versions.review_state` of that same version. */
-  reviewState: string | null,
-): boolean {
-  return repairJobId != null && reviewState === "unreviewed";
+  /**
+   * For a run of an **Agent-Driven Test**: which of the three states its **Agent Run Session** is
+   * in, via {@link deriveAgentSessionState}. Omit it — as every caller did before this existed,
+   * and as callers that want the verdict regardless still should — and the derivation below is
+   * unchanged.
+   *
+   * It exists because an Agent Run Session is created ALREADY RED, with every Manifest slot
+   * `missing`, and stays that way until the agent reports one. That is the honest answer to "what
+   * has this run verified?" — but while the session is still inside its lease it is not yet an
+   * answer to "how did this run END", and a list that says `failed` about a session currently
+   * walking the journey is telling the reader something that is not true yet.
+   */
+  agentSession?: AgentSessionState | null;
 }
 
 /**
@@ -2556,28 +2139,23 @@ export function deriveUnreachedRootCause(
  *  4. any unaccepted `diff` (or legacy `rejected`) → `regression`  (a baseline existed and changed)
  *  5. any unresolved first-capture seed → `pending-baseline`  (no baseline yet — awaiting approval)
  *  6. nothing was actually verified     → `failed`  (it captured nothing to compare)
- *  7. an unaccepted repair is in play   → `healed`  (it verified, but on an unreviewed repair)
- *  8. any checkpoint set as baseline    → `baseline`
- *  9. otherwise (all matched)           → `passed`
+ *  7. any checkpoint set as baseline    → `baseline`
+ *  8. otherwise (all matched)           → `passed`
  *
  * `missing` outranks EVERYTHING below queued/running and a crash, and both directions matter. Above
  * `regression`, because an unreached checkpoint means the journey broke, and that is more urgent and
  * more actionable than a pixel that moved earlier in the flow. Above `pending-baseline`, or a first
  * run that reached nothing would read as "awaiting approval" — the most flattering possible
- * description of having checked nothing. Above `healed` and `baseline` for the same reason the
- * execution-failure rule sits above `healed`: neither a repair nor a baseline write may dress an
+ * description of having checked nothing. Above `baseline`, so a baseline write may not dress an
  * unfilled slot up as anything other than red.
  *
  * A diff outranks a pending seed: a real failure against an established baseline is more urgent than
  * approving a brand-new checkpoint. A `resolution="approved"` checkpoint was promoted to the
  * baseline (seed approval, accepted diff, or a re-baselined pass) — a baseline write.
  *
- * `healed` sits BELOW `regression` and `failed` and ABOVE `baseline`/`passed`, and both halves of
- * that matter. Below, because a re-pinned locator must never soften a real visual break: if the
- * pixels also moved, `regression` stays the headline and the repair is beside the point. Above,
- * because a repair nobody has accepted is the most interesting thing about an otherwise-green run
- * — collapsing it into `passed` is exactly the silent pass the whole slice exists to prevent.
- * Operationally `healed` is a queue item, not an alarm: same weight class as `pending-baseline`.
+ * A step whose locator fell back to its recorded CSS path is flagged on THAT step and marked in
+ * the run timeline; it does not colour the run. Healing is reported in exactly one place, and the
+ * run this derives reads `passed` because that marker is the whole report.
  */
 export function deriveRunOutcome(
   checkpoints: readonly RunOutcomeCheckpoint[],
@@ -2605,14 +2183,16 @@ export function deriveRunOutcome(
     else if (c.reviewState === "passed") matched = true;
   }
 
-  if (unfilled) return "failed"; // a Manifest slot was never filled — nothing may soften this
+  // A slot nobody has reported YET is a different claim from a slot nobody ever reported. While
+  // the session is open the journey may simply not have got there, so the run reads as still
+  // running rather than asserting a verdict the session has not finished earning. The instant it
+  // is over — expired or finished — the red stands, and nothing may soften it.
+  if (unfilled) return run.agentSession === "open" ? "running" : "failed";
   if (failing) return "regression"; // a visual difference (changed baseline or rejected diff) outranks the rest
   if (pendingSeed) return "pending-baseline"; // first run awaiting approval (not a failure)
   // No checkpoints (or all neutral) — mirror the stored status. A non-passing run here is
-  // an execution failure (it captured nothing to compare), so `failed`, not `regression`. Checked
-  // BEFORE `healed`, so a repair can never dress an execution failure up as an amber queue item.
+  // an execution failure (it captured nothing to compare), so `failed`, not `regression`.
   if (!matched && !baselineWrite && run.status !== "passed") return "failed";
-  if (run.repairApplied) return "healed"; // green, but resting on a repair nobody has accepted
   if (baselineWrite) return "baseline"; // a golden was set/updated, nothing failing
   return "passed";
 }
@@ -2657,7 +2237,6 @@ export type MatrixCellStatus =
   | "passed"
   | "baseline"
   | "pending-baseline"
-  | "healed"
   | "regression"
   | "failed"
   | "running"

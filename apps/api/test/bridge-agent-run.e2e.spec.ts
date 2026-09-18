@@ -14,6 +14,8 @@ import type {
 import type { Subscription } from "rxjs";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createDb, runs, type DbHandle } from "@varys/db";
+import { eq } from "drizzle-orm";
 import { AppModule } from "../src/app.module";
 import { BridgeService } from "../src/authoring/bridge.service";
 import {
@@ -63,6 +65,7 @@ describe("Bridge relay → running an Agent-Driven Test", () => {
   let db: TestDb;
   let storageDir: string;
   let bridge: BridgeService;
+  let handle: DbHandle;
 
   /** The lapse bound for this suite. Long enough that an "outstanding" assertion is not a race;
    *  short enough that nothing here waits on a real one. */
@@ -120,11 +123,13 @@ describe("Bridge relay → running an Agent-Driven Test", () => {
     app = moduleRef.createNestApplication();
     await app.init();
     bridge = moduleRef.get(BridgeService);
+    handle = createDb(db.connectionString);
     await prepareAuth();
   }, 60_000);
 
   afterAll(async () => {
     await app?.close();
+    await handle?.pool.end();
     await db?.container.stop();
     if (storageDir) await rm(storageDir, { recursive: true, force: true });
   });
@@ -436,6 +441,126 @@ describe("Bridge relay → running an Agent-Driven Test", () => {
 
       theirs.stop();
       mine.stop();
+    });
+  });
+
+  /**
+   * Issue #15 — a Run started from the web app says so.
+   *
+   * Two doors now reach the same Agent Run Session: pressing Run here, or typing to your own
+   * Claude. The Runs they produce are otherwise identical, which is the point — so the only thing
+   * asserted here is the marker, and the absence of any other difference between the two.
+   *
+   * The marker is read off Varys' own record of the press. `start_agent_run` is called identically
+   * in both cases below and carries nothing that says how it was summoned, which is exactly why a
+   * stamp cannot be forged by an agent claiming it came from the web app.
+   */
+  describe("which door the Run came through", () => {
+    /** The Run as a person would later open it. */
+    async function readRun(runId: string): Promise<Record<string, unknown>> {
+      const res = await authed(app).get(`/runs/${runId}`).expect(200);
+      return res.body as Record<string, unknown>;
+    }
+
+    it("marks a Run that answered a press, and leaves one started by asking Claude directly alone", async () => {
+      const helper = await pairHelper();
+
+      // Door one: the button. Press, then the helper's Claude reaches `start_agent_run`.
+      const requested = await createAgentTest("pressed the button");
+      await addCheckpoint(requested, "home");
+      await authed(app).post("/authoring/bridge/run-agent-test").send({ testId: requested }).expect(201);
+      const fromVarys = await mcpTool<{ runId: string }>(app, mcpToken(), "start_agent_run", {
+        testId: requested,
+      });
+
+      // Door two: no press at all — the same person, the same tool, on a different test. The
+      // helper is still paired throughout, so pairing is not what distinguishes the two.
+      const typed = await createAgentTest("typed it myself");
+      await addCheckpoint(typed, "home");
+      const byHand = await mcpTool<{ runId: string }>(app, mcpToken(), "start_agent_run", {
+        testId: typed,
+      });
+
+      expect((await readRun(fromVarys.runId)).triggerSource).toBe("varys");
+      // Not merely "not varys": unchanged from what this path recorded before the marker existed.
+      expect((await readRun(byHand.runId)).triggerSource).toBe("manual");
+
+      // And the marker is on the run a reader browses to, not only on the one they opened.
+      const listed = await authed(app).get(`/runs?testId=${requested}`).expect(200);
+      expect(listed.body).toHaveLength(1);
+      expect(listed.body[0]).toMatchObject({ runId: fromVarys.runId, triggerSource: "varys" });
+
+      helper.stop();
+    });
+
+    it("changes nothing about the Run but the marker", async () => {
+      const helper = await pairHelper();
+      const requested = await createAgentTest("marked but identical");
+      await addCheckpoint(requested, "basket");
+      await addCheckpoint(requested, "checkout");
+      const typed = await createAgentTest("unmarked and identical");
+      await addCheckpoint(typed, "basket");
+      await addCheckpoint(typed, "checkout");
+
+      await authed(app).post("/authoring/bridge/run-agent-test").send({ testId: requested }).expect(201);
+      const marked = await mcpTool<{
+        runId: string;
+        leaseSeconds: number;
+        manifest: { name: string }[];
+      }>(app, mcpToken(), "start_agent_run", { testId: requested });
+      const unmarked = await mcpTool<{
+        runId: string;
+        leaseSeconds: number;
+        manifest: { name: string }[];
+      }>(app, mcpToken(), "start_agent_run", { testId: typed });
+
+      // The Wall-Clock Lease is stamped by `start_agent_run` and the marker is written after it —
+      // a press must not buy, or cost, a single second.
+      expect(marked.leaseSeconds).toBe(unmarked.leaseSeconds);
+      expect(marked.manifest.map((m) => m.name)).toEqual(unmarked.manifest.map((m) => m.name));
+
+      const a = await readRun(marked.runId);
+      const b = await readRun(unmarked.runId);
+      expect(a.triggerSource).toBe("varys");
+      expect(b.triggerSource).toBe("manual");
+
+      // Pre-seeded red, the closed Manifest, and the review state every slot starts in: the
+      // guarantees a reviewer leans on, asserted to be the same on both sides of the marker.
+      for (const key of ["status", "outcome", "failureKind", "error", "kind", "agentSummary"]) {
+        expect([key, a[key]]).toEqual([key, b[key]]);
+      }
+      const states = (run: Record<string, unknown>) =>
+        (run.checkpoints as { name: string; reviewState: string }[]).map((c) => [
+          c.name,
+          c.reviewState,
+        ]);
+      expect(states(a)).toEqual(states(b));
+      // Nothing is approved on either, and the marker gives neither a head start.
+      expect(states(a).every(([, state]) => state === "missing")).toBe(true);
+      expect((a.session as { status: string } | null)?.status).toBe(
+        (b.session as { status: string } | null)?.status,
+      );
+
+      helper.stop();
+    });
+
+    it("reads a Run recorded before the marker existed as 'not known to have come from Varys'", async () => {
+      const testId = await createAgentTest("from the archives");
+      await addCheckpoint(testId, "home");
+      const session = await mcpTool<{ runId: string }>(app, mcpToken(), "start_agent_run", {
+        testId,
+      });
+      // What every run looks like that predates attribution being recorded at all. Arranged
+      // directly because there is no longer any code path that produces one.
+      await handle.db
+        .update(runs)
+        .set({ triggerSource: null, triggeredBy: null })
+        .where(eq(runs.id, session.runId));
+
+      const view = await readRun(session.runId);
+      expect(view).toMatchObject({ runId: session.runId, triggerSource: null, triggeredBy: null });
+      const listed = await authed(app).get(`/runs?testId=${testId}`).expect(200);
+      expect(listed.body[0]).toMatchObject({ triggerSource: null, triggeredBy: null });
     });
   });
 

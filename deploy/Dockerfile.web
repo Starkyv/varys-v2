@@ -27,6 +27,15 @@ RUN WXT_API_BASE="$WXT_API_BASE" pnpm --filter @varys/extension exec wxt zip \
  && mkdir -p apps/web/dist/downloads \
  && cp apps/extension/.output/*-chrome.zip apps/web/dist/downloads/varys-extension-chrome.zip
 
+# The Bridge Helper, as an installable tarball under the same /downloads/ path. A deployed user
+# has no checkout to run `pnpm connect` from, so the pairing panel points them at this URL and
+# `npx` installs it straight from here — no npm publish, no registry account, and it can never be
+# a version older than the Varys it was downloaded from. It has NO runtime dependencies (its only
+# import of @varys/review-contract is type-only), so the tarball installs standalone.
+RUN pnpm --filter @varys/connect build \
+ && npm pack --pack-destination apps/web/dist/downloads --workspace @varys/connect \
+ && mv apps/web/dist/downloads/varys-connect-*.tgz apps/web/dist/downloads/varys-connect.tgz
+
 # Unprivileged nginx (listens on 8080, runs as a non-root user).
 FROM nginxinc/nginx-unprivileged:alpine
 COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf

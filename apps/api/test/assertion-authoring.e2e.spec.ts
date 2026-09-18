@@ -98,7 +98,7 @@ describe("Claude pins an assertion during authoring", () => {
   };
 
   const openInvoice = async (name: string): Promise<string> => {
-    const opened = await callTool("open_session", { startUrl: fixture.url, name, mode: "batch" });
+    const opened = await callTool("open_session", { startUrl: fixture.url, name });
     return opened.sessionId as string;
   };
 

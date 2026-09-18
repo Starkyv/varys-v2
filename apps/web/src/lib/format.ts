@@ -64,3 +64,47 @@ export function formatActor(actor: string | null | undefined): string {
   const at = actor.indexOf("@");
   return at > 0 ? actor.slice(0, at) : actor;
 }
+
+/**
+ * How a run was triggered, as a person reads it. Two surfaces show this — the Runs list's Source
+ * column and the run-detail header — and they must not disagree about what `varys` means.
+ *
+ * `varys` is an Agent Run Session that answered a Run Request pressed in the web app; `manual` is
+ * a person starting an ordinary run themselves. Null is NOT "typed": it is every run recorded
+ * before attribution existed, plus every one Varys never matched to a request of its own, so it
+ * reads as the unremarkable default rather than as a claim about how it started.
+ */
+const RUN_SOURCE_LABEL: Record<string, string> = {
+  manual: "Manual",
+  schedule: "Scheduled",
+  suite: "Suite",
+  api: "API",
+  // Varys' own re-run of a repaired test — neither a person's nor a cron's.
+  repair: "Repair",
+  // Someone pressed Run in Varys and their own Claude answered.
+  varys: "From Varys",
+};
+
+/** A run's `triggerSource` as a display label; unknown and null both read "Manual". */
+export function runSource(triggerSource: string | null | undefined): string {
+  return RUN_SOURCE_LABEL[triggerSource ?? "manual"] ?? "Manual";
+}
+
+/**
+ * How long is left on a deadline, as a compact label ("4m left", "under a minute left").
+ *
+ * For an Agent Run Session's Wall-Clock Lease in the runs list. Empty string once the deadline has
+ * passed rather than "0m left" or a negative: an expired session is no longer counting down to
+ * anything, and the row says `Failed` at that point — a stale countdown beside it would be the one
+ * misreading worth avoiding.
+ */
+export function timeLeft(iso: string | null | undefined, now: number = Date.now()): string {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  const ms = t - now;
+  if (ms <= 0) return "";
+  if (ms < MIN) return "under a minute left";
+  if (ms < HOUR) return `${Math.round(ms / MIN)}m left`;
+  return `${Math.round(ms / HOUR)}h left`;
+}

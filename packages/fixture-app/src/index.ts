@@ -457,18 +457,20 @@ function html(variant: Variant): string {
 </html>`;
   }
 
-  // A REAL locator break, for the repair queue (Slice 19). The pair renders the same page with
+  // A REAL locator break, for attended repair (Slice 19). The pair renders the same page with
   // one control renamed AND resized AND re-parented, so a fingerprint recorded against
   // `locatorRepair` genuinely has no signal left to match in `locatorRepairBroken`: the test id
   // and element id are different, the accessible name is different, the containing section's id
   // is different, and the box is far enough off that size similarity can't clear the matcher's
-  // identifying-signal floor either. That is what makes the queue test a real hard-fail rather
-  // than a stubbed one — exactly the "element moved/renamed" drift auto-repair exists for.
+  // identifying-signal floor either. That is what makes the repair test a real hard-fail rather
+  // than a stubbed one — exactly the "element moved/renamed" drift a Repair Session exists for.
   //
-  // `locatorRepairDeleted` is the third case, and the one the justification gate exists for
-  // (Slice 19, slice 05): the control is not renamed, it is GONE — and a plausible DIFFERENT
-  // control sits where it used to be. A repair agent can re-pin to that and produce a locator
-  // that genuinely resolves, which is precisely why "it resolves" cannot be the only gate.
+  // `locatorRepairDeleted` is the third case, and the one a person has to look at: the control is
+  // not renamed, it is GONE — and a plausible DIFFERENT control sits where it used to be. Claude
+  // can re-pin to that and produce a locator that genuinely resolves, which is precisely why "it
+  // resolves" is not the same question as "is this still the control the test was exercising?".
+  // Repair being attended is what answers it: the person who reads the failure knows whether the
+  // app dropped the control on purpose.
   if (
     variant === "locatorRepair" ||
     variant === "locatorRepairBroken" ||
@@ -482,7 +484,7 @@ function html(variant: Variant): string {
     // The deleted variant re-parents and resizes for the same reason the broken one does: the
     // recorded fingerprint must have NO signal left to match, or the matcher resolves it fuzzily
     // and the run never fails. Which is also the point of this pair — from the matcher's side the
-    // two breaks are indistinguishable; only the justification gate can tell them apart.
+    // two breaks are indistinguishable, and nothing automatic can tell them apart.
     const panel = broken ? "editor-panel" : deleted ? "toolbar-panel" : "form-panel";
     const size = broken
       ? "width: 260px; height: 72px;"

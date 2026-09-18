@@ -36,7 +36,7 @@ pnpm dev
 
 | Service | URL | What it is |
 |---|---|---|
-| Web (review UI) | http://localhost:5174 | React SPA — diff viewer + approve/reject + needs-review list |
+| Web (review UI) | http://localhost:5174 | React SPA — Runs history + diff viewer + approve/reject |
 | API | http://localhost:4000 | NestJS — tests, runs, environments, artifacts, decisions |
 | Worker | — | Playwright replay worker, consumes the run queue |
 
@@ -62,6 +62,52 @@ password) and you land on the **Dashboard**.
 > `GOOGLE_CLIENT_SECRET`, plus an env-driven domain restriction: `VARYS_AUTH_ALLOWED_DOMAINS`
 > (default `datagenie.ai`) and `VARYS_AUTH_DOMAIN_SCOPE` (`google` | `all`).
 
+## Run an Agent-Driven Test with your own Claude
+
+Some journeys will not sit still — a dashboard whose numbers change hourly, a chart that redraws.
+Those are **Agent-Driven Tests**: no recorded steps, walked instead by an agent following written
+instructions. Varys hosts no browser for them and holds no key that can summon a model, so the
+run happens on **your** machine, on **your** Claude subscription.
+
+1. **Point Claude Code at Varys**, once. `-s user` puts it in your user config, so the Claude the
+   helper launches can see it whatever directory it starts in:
+
+   ```bash
+   claude mcp add -s user --transport http varys http://localhost:5174/mcp
+   ```
+
+   The first call opens a browser to sign in.
+
+2. **Open an Agent-Driven Test** (Tests → *New agent test*, then add instructions and at least one
+   Checkpoint). The **Run this test** card offers **Pair a helper** — press it for a one-time code.
+
+3. **Run the helper** on that machine and leave it running. The pairing panel shows the exact
+   command; locally it runs from this checkout, and launches Claude in `VARYS_CONNECT_CWD` — name
+   the project you want the agent working in, or it will start in the Varys repo:
+
+   ```bash
+   cd /path/to/varys-v2
+   VARYS_CONNECT_CWD=/path/to/your-project pnpm connect <pairing-code>
+   ```
+
+   Against a **deployed** Varys there is no checkout to run from, so the panel offers the helper as
+   a download from that same origin instead:
+
+   ```bash
+   VARYS_API=https://varys.example.com \
+     npx https://varys.example.com/downloads/varys-connect.tgz <pairing-code>
+   ```
+
+4. **Press Run now.** The card tracks the ask: *outstanding* → *acknowledged* (your helper has
+   launched Claude) → *fulfilled*, at which point it takes you to the Run. If nothing answers, it
+   says so and lapses rather than spinning forever.
+
+Runs started this way read **From Varys** in the Runs list; one you started by typing to Claude
+yourself reads Manual. Nothing else about them differs — same pre-seeded red, same Wall-Clock
+Lease, same review and approval.
+
+See [`apps/connect/README.md`](./apps/connect/README.md) for what the helper will and won't do.
+
 ## Create and review a test
 
 1. **Build + load the recorder extension:**
@@ -84,9 +130,10 @@ password) and you land on the **Dashboard**.
 3. **Run it:** open http://localhost:5174 → **Tests** tab → your recording is listed → click
    **Run**. (Saving only stores the recording; a run is what produces something to review.)
 
-4. **Review:** the checkpoint appears under **Needs review** (the queue auto-refreshes as the run
-   finishes) → open it → compare baseline / actual / diff → **Approve** (first approval, or replace
-   the baseline — behind an irreversible-confirm) or **Reject**.
+4. **Review:** the run appears under **Runs** (the list auto-refreshes as the run finishes) →
+   open it → compare baseline / actual / diff → **Approve** (first approval, or replace the
+   baseline — behind an irreversible-confirm) or **Reject**. A checkpoint awaiting a baseline
+   decision is decided on its own Run; there is no separate queue page listing them.
 
 ## Run the tests
 
@@ -96,7 +143,7 @@ local-FS storage) — no live services needed.
 ```bash
 pnpm -r typecheck
 
-# Backend lifecycle: seed → approve → diff → reject → masking → waits → login/secrets → needs-review
+# Backend lifecycle: seed → approve → diff → reject → masking → waits → login/secrets → run history
 pnpm --filter @varys/api test
 
 # Visual Review UI: component tests (MSW) + a browser E2E driving the real built SPA
@@ -118,10 +165,11 @@ pnpm --filter @varys/recorder         test   # interactions → step definition
 
 ```
 apps/
-  api/         NestJS API — tests, runs, environments, artifacts, approve/reject, needs-review
+  api/         NestJS API — tests, runs, environments, artifacts, approve/reject
   worker/      Playwright replay worker (consumes the pg-boss queue)
-  web/         React SPA — tests list + run, diff viewer (side-by-side / overlay), approve/reject, needs-review list
+  web/         React SPA — tests list + run, diff viewer (side-by-side / overlay), approve/reject
   extension/   WXT MV3 recorder extension
+  connect/     the Bridge Helper — pairs your machine to Varys and launches your own Claude
 packages/
   review-contract/   shared typed read-model the API and web SPA agree on (pure types)
   step-schema/       versioned test-definition contract (zod)

@@ -26,8 +26,6 @@ export type NavKey =
   | "suites"
   | "runs"
   | "suiteRuns"
-  | "needsReview"
-  | "repairQueue"
   | "environments"
   | "extension"
   | "configurations";
@@ -40,8 +38,6 @@ export type Route =
   | { name: "suites" }
   | { name: "runs" }
   | { name: "suiteRuns" }
-  | { name: "needsReview" }
-  | { name: "repairQueue" }
   | { name: "environments" }
   | { name: "extension" }
   | { name: "configurations" }
@@ -57,8 +53,6 @@ const VIEW_PARAM: Record<NavKey, string> = {
   suites: "suites",
   runs: "runs",
   suiteRuns: "suite-runs",
-  needsReview: "needs-review",
-  repairQueue: "repair-queue",
   environments: "environments",
   extension: "extension",
   configurations: "configurations",
@@ -162,10 +156,6 @@ export function routeHeading(route: Route): { title: string; subtitle: string } 
       return { title: "Runs", subtitle: "Every replay, newest first · live" };
     case "suiteRuns":
       return { title: "Suite runs", subtitle: "Fan-outs of suite × environment" };
-    case "repairQueue":
-      return { title: "Repair queue", subtitle: "Broken locators waiting for a repair agent" };
-    case "needsReview":
-      return { title: "Needs review", subtitle: "Checkpoints awaiting a human decision" };
     case "environments":
       return { title: "Environments", subtitle: "Per-deployment variables & secrets" };
     case "extension":

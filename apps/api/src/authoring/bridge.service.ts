@@ -262,16 +262,21 @@ export class BridgeService {
    *
    * Nothing downstream depends on this: it reports, it does not gate. A run started by hand from a
    * terminal, with no request behind it, matches nothing here and is entirely unaffected.
+   *
+   * Answers whether a request was actually closed out, so the caller can stamp the Run as having
+   * been requested from Varys. That answer is this relay's own record of a press it accepted —
+   * the agent is never asked how it came to be running, and could not be believed if it were.
    */
-  noteAgentRunStarted(ownerId: string, testId: string, runId: string): void {
+  noteAgentRunStarted(ownerId: string, testId: string, runId: string): boolean {
     const record = this.runRequests.get(requestKey(ownerId, testId));
     // Only an OPEN request can be fulfilled, and a lapse is final. Once Varys has said it asked
     // and heard nothing, a session that turns up afterwards does not retract that: the Run is
     // real and appears under Runs like any other, but the author is not pulled into it from a
     // page they stopped watching minutes ago, and a request that ended does not un-end.
-    if (!record || !isAgentRunRequestInFlight(this.phaseOf(record))) return;
+    if (!record || !isAgentRunRequestInFlight(this.phaseOf(record))) return false;
     record.runId = runId;
     this.log.log(`bridge run request for agent test ${testId} fulfilled by run ${runId}`);
+    return true;
   }
 
   /** Events the web chat consumes: a current-status snapshot first, then live events. */

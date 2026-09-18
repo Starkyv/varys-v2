@@ -5,8 +5,6 @@ import { Dashboard } from "../../views/Dashboard";
 import { Drafts } from "../../views/Drafts";
 import { Environments } from "../../views/Environments";
 import { Extension } from "../../views/Extension";
-import { NeedsReview } from "../../views/NeedsReview";
-import { RepairQueue } from "../../views/RepairQueue";
 import { RunDetail } from "../../views/RunDetail";
 import { Runs } from "../../views/Runs";
 import { SuiteRunDetail } from "../../views/SuiteRunDetail";
@@ -33,10 +31,6 @@ export function RouteOutlet() {
       return <Runs />;
     case "suiteRuns":
       return <SuiteRuns />;
-    case "needsReview":
-      return <NeedsReview />;
-    case "repairQueue":
-      return <RepairQueue />;
     case "environments":
       return <Environments />;
     case "extension":

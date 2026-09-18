@@ -141,7 +141,7 @@ describe("Repair session → diagnose a failed run", () => {
 
     const fin = await rpc("tools/call", {
       name: "finish_session",
-      arguments: { sessionId: sid, confirm: true },
+      arguments: { sessionId: sid },
     }).expect(200);
     expect(fin.body.result.isError).toBe(true);
     expect(fin.body.result.content[0].text).toMatch(/no draft to save/i);

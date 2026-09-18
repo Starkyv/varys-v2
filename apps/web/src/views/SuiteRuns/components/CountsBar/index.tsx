@@ -1,8 +1,8 @@
 import type { SuiteRunCounts } from "@varys/review-contract";
 import styles from "./styles.module.scss";
 
-/** `healed` is deliberately NOT a segment: healed children are already inside `passed`, so
- *  drawing it would over-count the bar. It rides along as a caption instead. */
+/** One segment per terminal child state — the segments partition `total`, so nothing that is
+ *  already counted inside another one may be drawn here. */
 const SEGMENTS: { key: keyof SuiteRunCounts; color: string; label: string }[] = [
   { key: "passed", color: "var(--color-success)", label: "passed" },
   { key: "needsReview", color: "var(--color-warning)", label: "need review" },
@@ -34,9 +34,6 @@ export function CountsBar({ counts, width }: { counts: SuiteRunCounts; width?: n
         {counts.total} run{counts.total === 1 ? "" : "s"}
         {counts.failed > 0 && <span className={styles.failed}> · {counts.failed} failed</span>}
         {counts.needsReview > 0 && <span className={styles.review}> · {counts.needsReview} to review</span>}
-        {/* A healed child is counted inside `passed`, so it never moves the bar — but it is the
-            one thing a green suite can be hiding, so it is always spelled out. */}
-        {counts.healed > 0 && <span className={styles.review}> · {counts.healed} healed</span>}
       </div>
     </div>
   );

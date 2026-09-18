@@ -460,14 +460,14 @@ describe("a failing assertion's repairability", () => {
       unrepairable: [],
     });
     expect(assertionFailureVerdict([wrong])).toMatchObject({
-      consequence: "triage",
+      consequence: "unrepairable",
       repairable: [],
       unrepairable: [wrong],
     });
     // Mixed: the false relation wins. A run whose app is known to be wrong is not a run to
     // repair, however repairable its other failure looks in isolation.
     expect(assertionFailureVerdict([missing, wrong])).toMatchObject({
-      consequence: "triage",
+      consequence: "unrepairable",
       repairable: [missing],
       unrepairable: [wrong],
     });
@@ -583,7 +583,7 @@ describe("an assertion with no pinned form is judged, not skipped", () => {
     const unavailable = evaluateJudgedAssertion(chartLooksRight, { ok: false, error: "no key" });
     const verdict = assertionFailureVerdict([unavailable]);
     // Nothing to repair (no locator broke) and nothing to diagnose (no verdict was reached). The
-    // run goes needs-review and a human looks; manufacturing a triage job here would file a bug
+    // run goes needs-review and a human looks; calling it evidence about the app would be a bug
     // report about an application nobody examined.
     expect(verdict.consequence).toBe("none");
     expect(verdict.repairable).toEqual([]);
@@ -592,14 +592,14 @@ describe("an assertion with no pinned form is judged, not skipped", () => {
     expect(assertionRepairability(unavailable)).toBe("unavailable");
   });
 
-  it("sends a judged FAIL to triage, exactly as a false relation goes", () => {
+  it("classes a judged FAIL as unrepairable, exactly as a false relation is", () => {
     const judged = evaluateJudgedAssertion(chartLooksRight, {
       ok: true,
       verdict: "fail",
       reasoning: "empty",
     });
     const verdict = assertionFailureVerdict([judged]);
-    expect(verdict.consequence).toBe("triage");
+    expect(verdict.consequence).toBe("unrepairable");
     expect(verdict.unrepairable).toEqual([judged]);
     expect(verdict.unavailable).toEqual([]);
   });

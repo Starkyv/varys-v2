@@ -16,9 +16,6 @@ import type {
   PromoteDraftBody,
   RecordedTarget,
   Rect,
-  RepairPolicy,
-  SetRepairPolicyRequest,
-  SetRepairPolicyResult,
   TestConfigPatch,
   TestConfigStep,
   TestConfigView,
@@ -31,7 +28,6 @@ import type {
   TestSummary,
 } from "@varys/review-contract";
 import { AGENT_LEASE_MAX_SECONDS } from "@varys/review-contract";
-import { isRepairPolicy, REPAIR_POLICIES } from "@varys/repair-policy";
 import { summarizeAssertion } from "../assertion-view";
 import {
   describeStep,
@@ -43,12 +39,15 @@ import {
 } from "@varys/step-schema";
 import type { StorageAdapter } from "@varys/storage-adapter";
 import parser from "cron-parser";
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
 import { AgentTestsService } from "./agent-tests.service";
 import {
   agentCheckpoints,
   baselines,
+  currentDefinition,
+  currentVersion,
+  currentVersionRow,
   draftPreviews,
   environments,
   folders,
@@ -81,9 +80,6 @@ export interface UpdateTestInput {
   /** Set/replace the test's free-form note; `null`/empty clears it. Omit to leave
    *  unchanged. Annotation only — never writes a new test_version. */
   notes?: string | null;
-  /** Set the Repair Policy (Slice 19) — `manual` | `auto`. Omit to leave unchanged.
-   *  Operational metadata, like the schedule: never writes a new test_version. */
-  repairPolicy?: RepairPolicy;
   /** Set/replace the test's BRIEF — what it is for, in the author's words; `null`/empty clears
    *  it. Omit to leave unchanged. It lives on the test row, not in the definition, so editing it
    *  writes no test_version and disturbs neither the history nor the baselines — which is what
@@ -92,8 +88,8 @@ export interface UpdateTestInput {
   brief?: string | null;
   /**
    * Set the wall-clock lease an Agent Run Session on this test is bounded by, in seconds
-   * (Agent-Driven Tests). Omit to leave unchanged. Operational metadata, like the Repair Policy
-   * and the schedule: never writes a new test_version.
+   * (Agent-Driven Tests). Omit to leave unchanged. Operational metadata, like the schedule:
+   * never writes a new test_version.
    *
    * Refused on a pinned test. Varys runs those itself and bounds them with the worker's own
    * timeouts; accepting a setting that would silently do nothing is how a person ends up believing
@@ -118,15 +114,6 @@ function nextCronRun(cron: string, timezone: string, enabled: boolean): Date | n
     );
   }
   return enabled ? next : null;
-}
-
-/**
- * Narrow a stored `repair_policy` string to the contract type. A row written before the column
- * existed, or by a future value this build does not know, reads as `manual` — the SAFE default:
- * an unrecognised policy must never be treated as permission to edit a test unattended.
- */
-function asRepairPolicy(value: string | null | undefined): RepairPolicy {
-  return isRepairPolicy(value) ? value : "manual";
 }
 
 /**
@@ -345,7 +332,6 @@ export class TestsService {
    *  Un-promoted AI drafts are excluded — they live in the review queue (`listDrafts`)
    *  and are not suite/schedule eligible. */
   async list(): Promise<TestSummary[]> {
-    // One row per test = its latest version (max version), via a correlated subquery.
     const rows = await this.db
       .select({
         id: tests.id,
@@ -358,20 +344,18 @@ export class TestsService {
         promotedAt: tests.promotedAt,
         folderId: tests.folderId,
         folderName: folders.name,
-        definition: testVersions.definition,
-        repairPolicy: tests.repairPolicy,
+        definition: currentDefinition,
         kind: tests.kind,
         scheduleCron: testSchedules.cron,
         scheduleEnabled: testSchedules.enabled,
         scheduleNextRunAt: testSchedules.nextRunAt,
       })
       .from(tests)
-      .innerJoin(testVersions, eq(testVersions.testId, tests.id))
       .leftJoin(folders, eq(folders.id, tests.folderId))
       .leftJoin(testSchedules, eq(testSchedules.testId, tests.id))
-      .where(
-        sql`${tests.status} = 'active' and ${testVersions.version} = (select max(v.version) from test_versions v where v.test_id = ${tests.id})`,
-      )
+      // `isNotNull` keeps the old inner join's semantics: a test with no definition yet is not
+      // listed, rather than listed with nothing in it.
+      .where(and(eq(tests.status, "active"), isNotNull(currentDefinition)))
       .orderBy(desc(tests.createdAt));
 
     // Tags grouped per test (one extra query beats an array_agg group-by here).
@@ -409,7 +393,6 @@ export class TestsService {
               nextRunAt: r.scheduleNextRunAt ? r.scheduleNextRunAt.toISOString() : null,
             } satisfies TestScheduleSummary)
           : null,
-        repairPolicy: asRepairPolicy(r.repairPolicy),
       };
     });
   }
@@ -506,13 +489,10 @@ export class TestsService {
         origin: tests.origin,
         intent: tests.intent,
         createdAt: tests.createdAt,
-        definition: testVersions.definition,
+        definition: currentDefinition,
       })
       .from(tests)
-      .innerJoin(testVersions, eq(testVersions.testId, tests.id))
-      .where(
-        sql`${tests.status} = 'draft' and ${testVersions.version} = (select max(v.version) from test_versions v where v.test_id = ${tests.id})`,
-      )
+      .where(and(eq(tests.status, "draft"), isNotNull(currentDefinition)))
       .orderBy(desc(tests.createdAt));
 
     // Representative thumbnail per draft = its first checkpoint's authoring preview.
@@ -589,12 +569,10 @@ export class TestsService {
         origin: tests.origin,
         intent: tests.intent,
         createdAt: tests.createdAt,
-        definition: testVersions.definition,
+        definition: currentDefinition,
       })
       .from(tests)
-      .innerJoin(testVersions, eq(testVersions.testId, tests.id))
-      .where(eq(tests.id, id))
-      .orderBy(desc(testVersions.version))
+      .where(and(eq(tests.id, id), isNotNull(currentDefinition)))
       .limit(1);
     if (!row) throw new NotFoundException(`Draft ${id} not found`);
 
@@ -721,14 +699,6 @@ export class TestsService {
     if (input.folderId !== undefined) patch.folderId = input.folderId; // null = unfile
     if (input.notes !== undefined) patch.notes = input.notes?.trim() || null; // empty clears
     if (input.brief !== undefined) patch.intent = input.brief?.trim() || null; // empty clears
-    if (input.repairPolicy !== undefined) {
-      if (!isRepairPolicy(input.repairPolicy)) {
-        throw new BadRequestException(
-          `repairPolicy must be one of ${REPAIR_POLICIES.join(" | ")}`,
-        );
-      }
-      patch.repairPolicy = input.repairPolicy;
-    }
     if (input.agentLeaseSeconds !== undefined) {
       patch.agentLeaseSeconds = assertLeaseSeconds(input.agentLeaseSeconds);
     }
@@ -842,73 +812,15 @@ export class TestsService {
     return { ok: true };
   }
 
-  /**
-   * Set a Repair Policy across a scope — one test, a whole FOLDER (including its subfolders,
-   * resolved the same way a suite resolves folder membership), or a TAG. Exactly one scope must
-   * be given; an empty scope is rejected rather than silently applied to the whole corpus, which
-   * is precisely the accident that would opt every test into unattended editing.
-   *
-   * Writes only `tests.repair_policy`, so a bulk opt-in cannot perturb a definition, a baseline
-   * or any review state. Drafts are included: an un-promoted draft has no runs to fail yet, and
-   * excluding it would silently drop it out of a folder-wide opt-in.
-   */
-  async setRepairPolicy(input: SetRepairPolicyRequest): Promise<SetRepairPolicyResult> {
-    if (!isRepairPolicy(input?.policy)) {
-      throw new BadRequestException(`policy must be one of ${REPAIR_POLICIES.join(" | ")}`);
-    }
-    const scopes = [input.testIds?.length, input.folderId, input.tag].filter(Boolean).length;
-    if (scopes === 0) {
-      throw new BadRequestException("a scope is required: testIds, folderId, or tag");
-    }
-    if (scopes > 1) {
-      throw new BadRequestException("give exactly one scope: testIds, folderId, or tag");
-    }
-
-    let ids: string[];
-    if (input.testIds?.length) {
-      ids = [...new Set(input.testIds)];
-    } else if (input.folderId) {
-      const [folder] = await this.db
-        .select({ id: folders.id })
-        .from(folders)
-        .where(eq(folders.id, input.folderId))
-        .limit(1);
-      if (!folder) throw new NotFoundException(`Folder ${input.folderId} not found`);
-      const subtree = subtreeOf([input.folderId], await folderChildren(this.db));
-      const rows = await this.db
-        .select({ id: tests.id, folderId: tests.folderId })
-        .from(tests);
-      ids = rows.filter((r) => r.folderId && subtree.has(r.folderId)).map((r) => r.id);
-    } else {
-      const tag = input.tag?.trim() ?? "";
-      if (!tag) throw new BadRequestException("tag cannot be empty");
-      const rows = await this.db
-        .select({ id: testTags.testId })
-        .from(testTags)
-        .where(eq(testTags.tag, tag));
-      ids = [...new Set(rows.map((r) => r.id))];
-    }
-
-    if (ids.length === 0) return { updated: 0 };
-    const updated = await this.db
-      .update(tests)
-      .set({ repairPolicy: input.policy })
-      .where(inArray(tests.id, ids))
-      .returning({ id: tests.id });
-    return { updated: updated.length };
-  }
-
   async getById(id: string): Promise<TestView> {
     const [row] = await this.db
       .select({
         name: tests.name,
-        version: testVersions.version,
-        definition: testVersions.definition,
+        version: currentVersion,
+        definition: currentDefinition,
       })
-      .from(testVersions)
-      .innerJoin(tests, eq(tests.id, testVersions.testId))
-      .where(eq(testVersions.testId, id))
-      .orderBy(desc(testVersions.version))
+      .from(tests)
+      .where(and(eq(tests.id, id), isNotNull(currentDefinition)))
       .limit(1);
 
     if (!row) throw new NotFoundException(`Test ${id} not found`);
@@ -935,7 +847,6 @@ export class TestsService {
       .select({
         notes: tests.notes,
         brief: tests.intent,
-        repairPolicy: tests.repairPolicy,
         kind: tests.kind,
         agentLeaseSeconds: tests.agentLeaseSeconds,
       })
@@ -969,7 +880,6 @@ export class TestsService {
       kind: meta?.kind === "agent" ? "agent" : "pinned",
       notes: meta?.notes ?? null,
       brief: meta?.brief ?? null,
-      repairPolicy: asRepairPolicy(meta?.repairPolicy),
       // NOT NULL on the row, and the row is the one `getById` above already required — the
       // fallback is unreachable and exists only because `meta` destructures as optional.
       agentLeaseSeconds: meta?.agentLeaseSeconds ?? 0,
@@ -1075,24 +985,14 @@ export class TestsService {
     id: string,
     patch: TestConfigPatch,
     createdBy: string,
-    /**
-     * Slice 19, slice 04: an unattended Repair Agent's write lands `unreviewed` and carries the
-     * Repair Job it was written under, so it appears in the repair review queue instead of
-     * silently becoming the definition every run uses. Omitted everywhere else — a version a
-     * person wrote has already been reviewed by the person writing it.
-     */
-    review?: { unreviewed?: boolean; repairJobId?: string | null },
   ): Promise<{ version: number; versionId: string }> {
     // An Agent-Driven Test has exactly one version row, written at creation and never again —
     // it holds no steps, waits or thresholds to configure, and its real behaviour (instructions
     // and checkpoints) is edited in place precisely so wording changes are not audit events.
     //
-    // Two other doors also write versions, and agent-driven runs now exist, so the invariant no
+    // Another door also writes versions, and agent-driven runs now exist, so the invariant no
     // longer rests on nothing being able to reach them. The run-review mask/threshold save is
-    // guarded in its own right (`RunsService.persistMasks`). The repair-review write is not, and
-    // is held instead by a REAL structural argument rather than an accident of ordering: it needs
-    // a Repair Job, jobs are enqueued only by the worker off a `locator` failure, and the worker
-    // never executes this kind.
+    // guarded in its own right (`RunsService.persistMasks`).
     const [kindRow] = await this.db
       .select({ kind: tests.kind })
       .from(tests)
@@ -1104,17 +1004,7 @@ export class TestsService {
       );
     }
 
-    const [latest] = await this.db
-      .select({
-        id: testVersions.id,
-        version: testVersions.version,
-        definition: testVersions.definition,
-        reviewState: testVersions.reviewState,
-      })
-      .from(testVersions)
-      .where(eq(testVersions.testId, id))
-      .orderBy(desc(testVersions.version))
-      .limit(1);
+    const latest = await currentVersionRow(this.db, id);
     if (!latest) throw new NotFoundException(`Test ${id} not found`);
     if (patch.baseVersion !== latest.version) {
       throw new ConflictException(
@@ -1391,12 +1281,10 @@ export class TestsService {
     // revision counter, which is what `baseVersion` compares against, so a stale editor is still
     // a 409 rather than a silent clobber.
     //
-    // An AGENT's write (`review` present) still appends, and so does a save landing on a version
-    // that is itself awaiting review. Both are load-bearing for the repair queue: rejecting a
-    // repair means restoring the definition BELOW it, and the review diff is v(n-1) vs v(n) —
-    // overwriting either side would leave a reviewer with nothing to compare and nothing to
-    // revert to.
-    const replaceInPlace = !review && latest.reviewState === "reviewed";
+    // A save landing on a version that is itself awaiting review still APPENDS: overwriting it
+    // would leave a reviewer with nothing to compare and nothing to revert to. With no unattended
+    // agent left to write one, that is the only remaining way a version can be unreviewed.
+    const replaceInPlace = latest.reviewState === "reviewed";
     const nextVersion = latest.version + 1;
     let versionId = "";
     await this.db.transaction(async (tx) => {
@@ -1415,8 +1303,6 @@ export class TestsService {
             version: nextVersion,
             definition: validated,
             createdBy,
-            ...(review?.unreviewed ? { reviewState: "unreviewed" } : {}),
-            ...(review?.repairJobId ? { repairJobId: review.repairJobId } : {}),
           })
           .returning({ id: testVersions.id });
         versionId = inserted?.id ?? "";

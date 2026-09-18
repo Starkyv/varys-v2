@@ -4,7 +4,6 @@ import type {
   CreateAgentTestRequest,
   LocatorVerifyRequest,
   ReorderAgentCheckpointsRequest,
-  SetRepairPolicyRequest,
   TestConfigPatch,
 } from "@varys/review-contract";
 import { type AuthUser, CurrentUser } from "../auth/current-user.decorator";
@@ -33,13 +32,6 @@ export class TestsController {
     return this.tests.list();
   }
 
-  // Set a Repair Policy in bulk — one test, a whole folder (with its subfolders), or a tag.
-  // Declared before the `:id` routes so "repair-policy" is never read as a test id.
-  @Post("repair-policy")
-  @HttpCode(200) // updates existing tests; creates nothing
-  setRepairPolicy(@Body() body: SetRepairPolicyRequest) {
-    return this.tests.setRepairPolicy(body ?? ({} as SetRepairPolicyRequest));
-  }
 
   // Create an Agent-Driven Test: no steps, active on create, no Draft and no Promote.
   // Declared before the `:id` routes so "agent" is never read as a test id.

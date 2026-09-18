@@ -282,18 +282,31 @@ describe("Agent Run Session — red before the agent does anything", () => {
 
     // This is the walk-away case: nothing else is called after `start`, ever.
     const view = await authed(app).get(`/runs/${session.runId}`).expect(200);
+    // The guarantee, and it is a property of the STORED run: red from the instant it existed, with
+    // the reason that says why, and every Manifest slot seeded `missing`. Nothing about the
+    // display can soften any of this, and nothing later infers anything from work never reported.
     expect(view.body.status).toBe("failed");
     expect(view.body.failureKind).toBe("unreached");
-    // The derived outcome is what every surface displays, and `missing` outranks everything a
-    // sibling decision could soften.
-    expect(view.body.outcome).toBe("failed");
+    expect(view.body.checkpoints.map((c: { reviewState: string }) => c.reviewState)).toEqual([
+      "missing",
+      "missing",
+      "missing",
+    ]);
 
-    // It reads identically on the flat runs list — an agent-driven run is an ordinary run.
+    // The DISPLAYED outcome is the one thing that waits. While the session is inside its lease
+    // Varys genuinely cannot tell a walked-away agent from a working one — `open` is the honestly
+    // ambiguous state — so the view declines to call an ending that has not happened yet. It turns
+    // red the moment the lease is out, which the lease suite below proves with the clock.
+    expect(view.body.session.state).toBe("open");
+    expect(view.body.outcome).toBe("running");
+
+    // And it reads identically on the flat runs list — one answer, derived once, on both surfaces.
     const list = await authed(app).get(`/runs?testId=${testId}`).expect(200);
-    const row = (list.body as { runId: string; outcome: string }[]).find(
+    const row = (list.body as { runId: string; outcome: string; status: string }[]).find(
       (r) => r.runId === session.runId,
     );
-    expect(row?.outcome).toBe("failed");
+    expect(row?.outcome).toBe("running");
+    expect(row?.status).toBe("failed");
   });
 
   it("stores the fully composed instruction text on the run, verbatim", async () => {
@@ -733,18 +746,16 @@ describe("Agent Run Session — red before the agent does anything", () => {
       expect((await runRow(session.runId)).failureKind).toBe("unreached");
     });
 
-    it("sends the proposals to the review queue, where approving seeds the baseline that the NEXT run is judged against", async () => {
+    it("awaits a baseline decision on its own Run, where approving seeds the baseline that the NEXT run is judged against", async () => {
       const first = await start({ testId: submitTestId, environmentId });
       await submit(first.session.runId, "home", {
         reasoning: "First capture of the home page; nothing to compare it to yet.",
       });
 
-      // It is in the same queue, and on the same footing, as a pinned test's first capture.
-      const queue = await authed(app).get("/runs/needs-review").expect(200);
-      const item = (queue.body as { runId: string; checkpointName: string; environment: string }[]).find(
-        (q) => q.runId === first.session.runId,
-      );
-      expect(item).toMatchObject({ checkpointName: "home", environment: "staging" });
+      // It awaits a decision on the same footing as a pinned test's first capture: the Run
+      // carries it as `pending-baseline`, which is where the decision is made.
+      const proposed = (await rowsOf(first.session.runId)).find((r) => r.name === "home");
+      expect(proposed?.reviewState).toBe("pending-baseline");
 
       // A human approves it — the one gate, and the same gate a pinned test passes through.
       await authed(app)
@@ -1181,15 +1192,16 @@ describe("Agent Run Session — red before the agent does anything", () => {
       expect(byName.get("chart")?.baselineUrl).toBeNull();
       // The run's own reason says which of the two ended it.
       expect(view.failureKind).toBe("unreached");
-      expect(view.outcome).toBe("failed");
+      // Still `running` as a display: this session has not closed and its lease has not run out,
+      // so "chart" is a slot nobody has reported YET rather than one nobody ever will. The stored
+      // run is red throughout regardless.
+      expect(view.outcome).toBe("running");
+      expect(view.status).toBe("failed");
 
       // An unreached slot is not review work: there is nothing to look at and nothing to approve,
-      // so it must not appear in the queue beside captures that are waiting on a human.
-      const queue = (await authed(app).get("/runs/needs-review").expect(200)).body as {
-        runId: string;
-        checkpointName: string;
-      }[];
-      expect(queue.some((q) => q.runId === session.runId && q.checkpointName === "chart")).toBe(false);
+      // so it reads `missing` rather than joining the captures that await a human decision.
+      expect(byName.get("chart")?.reviewState).not.toBe("pending-baseline");
+      expect(byName.get("chart")?.reviewState).not.toBe("diff");
     });
 
     it("states one root cause for a journey that stopped, not one failure per slot it never reached", async () => {
@@ -1475,6 +1487,40 @@ describe("Agent Run Session — red before the agent does anything", () => {
      * never filled, and the one slot that WAS reported keeps its verdict, its image and its
      * reasoning — expiry closes a session, it does not discard what the session achieved.
      */
+    /**
+     * The runs LIST, not just the run view.
+     *
+     * A session walking the journey right now and one that ended red an hour ago are the same row
+     * of `missing` slots, and before this the list had no way to tell them apart — every fresh
+     * Agent Run Session appeared as `Failed` the instant it started, while the agent was still
+     * driving. The stored status stays `failed` throughout, absolutely; what changes is only what
+     * the list is entitled to SAY about a session that has not ended.
+     */
+    it("reads running in the runs list while the session is open, and red the moment it is not", async () => {
+      await authed(app).patch(`/tests/${leaseTestId}`).send({ agentLeaseSeconds: 3 }).expect(200);
+      const { session } = await start({ testId: leaseTestId, environmentId });
+
+      const listed = async () => {
+        const res = await authed(app).get(`/runs?testId=${leaseTestId}`).expect(200);
+        return (res.body as { runId: string; status: string; outcome: string; session: { state: string } | null }[])
+          .find((r) => r.runId === session.runId);
+      };
+
+      const during = await listed();
+      expect(during?.outcome).toBe("running");
+      expect(during?.session?.state).toBe("open");
+      // The claim is about display only. Underneath, the run is exactly as red as it always was.
+      expect(during?.status).toBe("failed");
+      expect((await runRow(session.runId)).failureKind).toBe("unreached");
+
+      await waitOutLease(3);
+
+      const after = await listed();
+      // No sweeper ran and nothing was written — the lease simply passed, and the answer changed.
+      expect(after?.outcome).toBe("failed");
+      expect(after?.session?.state).toBe("expired");
+    });
+
     it("closes the session when the clock runs out, leaving a red run nobody had to report", async () => {
       await authed(app).patch(`/tests/${leaseTestId}`).send({ agentLeaseSeconds: 3 }).expect(200);
       const { session } = await start({ testId: leaseTestId, environmentId });

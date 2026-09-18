@@ -7,7 +7,7 @@ import { Test } from "@nestjs/testing";
 import { createDb, type DbHandle } from "@varys/db";
 import { type FixtureServer, startFixtureServer } from "@varys/fixture-app";
 import { type Boss, createBoss, startBoss, workRuns } from "@varys/queue";
-import type { RepairJobSummary, RunView, TestConfigView } from "@varys/review-contract";
+import type { RunView, TestConfigView } from "@varys/review-contract";
 import { processRun } from "@varys/runner";
 import { LocalFsAdapter } from "@varys/storage-adapter";
 import request from "supertest";
@@ -72,11 +72,9 @@ describe("An assertion checks a relationship, in the worker, with no model call"
 
   // ---- helpers ---------------------------------------------------------------------------
 
-  async function createTest(definition: object, policy?: "auto"): Promise<string> {
+  async function createTest(definition: object): Promise<string> {
     const res = await authed(app).post("/tests").send(definition).expect(201);
-    const testId = res.body.id as string;
-    if (policy) await authed(app).patch(`/tests/${testId}`).send({ repairPolicy: policy }).expect(200);
-    return testId;
+    return res.body.id as string;
   }
 
   async function runToEnd(testId: string): Promise<RunView> {
@@ -320,22 +318,4 @@ describe("An assertion checks a relationship, in the worker, with no model call"
     expect(after.status).toBe("passed");
   }, 300_000);
 
-  // ---- the queue consequence (closes slice 08's partial criterion) -----------------------
-
-  it("enqueues a READ-ONLY triage job for a false assertion relation", async () => {
-    fixture.setVariant("totalsWrong");
-    const testId = await createTest(invoiceTest("assertion triage"), "auto");
-
-    const view = await runToEnd(testId);
-    expect(view.failureKind).toBe("assertion");
-
-    const jobs = (
-      (await authed(app).get("/repair-jobs").expect(200)).body as RepairJobSummary[]
-    ).filter((j) => j.testId === testId);
-    expect(jobs).toHaveLength(1);
-    // A false relation means the TEST is right and the APP is wrong. There is nothing here for a
-    // repair to fix, so the only job it earns is one that can write a finding and nothing else.
-    expect(jobs[0].kind).toBe("triage");
-    expect(jobs[0].status).toBe("queued");
-  }, 300_000);
 });

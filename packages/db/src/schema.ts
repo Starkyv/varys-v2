@@ -51,12 +51,6 @@ export const tests = pgTable("tests", {
   /** Optional free-form note on the test (organization/annotation only — never part of
    *  the versioned definition). Edited inline on the test-detail page. */
   notes: text("notes"),
-  /** Repair Policy (Slice 19): what happens when a run fails on a locator it cannot resolve —
-   *  `manual` (surface it; a human opens a Repair Session — today's behaviour) or `auto`
-   *  (enqueue a Repair Job). Defaults to `manual` for EVERY test, however it was authored, so
-   *  nothing an author recorded starts changing behind their back. Operational metadata, like
-   *  `folder_id` / `status`: setting it never writes a test_version. */
-  repairPolicy: text("repair_policy").notNull().default("manual"),
   /** Which kind of test this is. `pinned` — the only kind before Agent-Driven Tests — is
    *  behaviour written down as data: ordered steps, each carrying a Fingerprint, replayed by the
    *  worker with no model call. `agent` is an **Agent-Driven Test**: no steps and no fingerprints,
@@ -167,50 +161,12 @@ export const testVersions = pgTable("test_versions", {
   /**
    * Whether this version has been reviewed by a human (Slice 19, slice 04).
    *
-   * `reviewed` for everything a person wrote — which is every version a human editor or the
-   * attended MCP path produces, hence the default. `unreviewed` is written ONLY by an
-   * unattended Repair Agent: an AI edit to someone's corpus is never trusted by default, so it
-   * sits in the repair review queue until accepted. `rejected` records a version a reviewer
-   * threw away; the test was reverted by appending the previous definition as a new version, so
-   * the history keeps the rejected attempt rather than erasing it.
+   * `reviewed` for everything a person wrote — which, with repair attended, is every version.
+   * `rejected` records a version a reviewer threw away; the test was reverted by appending the
+   * previous definition as a new version, so the history keeps the rejected attempt rather than
+   * erasing it.
    */
   reviewState: text("review_state").notNull().default("reviewed"),
-  /** The Repair Job this version was written under, when an agent wrote it — what links a
-   *  version awaiting review back to the failure it claims to fix. Plain uuid (no FK) because
-   *  the job's table is created after this one in the bootstrap DDL. */
-  repairJobId: uuid("repair_job_id"),
-  /**
-   * The clause of the Brief the repairing agent claimed this version satisfies, and the judge's
-   * one-line verdict on that claim (Slice 19, slice 05).
-   *
-   * Present only on a version an agent wrote and the gate PASSED — a rejected justification never
-   * reaches a stored version, because the repair is abandoned and reverted. Shown beside the
-   * Brief in review, which is the only way a reviewer can tell what the verdict was checked
-   * against.
-   */
-  justification: text("justification"),
-  justificationReasoning: text("justification_reasoning"),
-  /**
-   * Whether an INDEPENDENT judge stood behind that reasoning (Slice 19, slice 14).
-   *
-   * True when a configured judge validated the agent's argument against the Brief; false when no
-   * judge was configured and the repair stands on the agent's own account. Null for versions
-   * written before the distinction existed, and for every version no agent wrote.
-   *
-   * Stored rather than inferred from the reasoning text: the review surface has to tell a
-   * reviewer which of the two they are reading without parsing prose.
-   */
-  justificationValidated: boolean("justification_validated"),
-  /**
-   * The page the repair was made against, captured live at the instant the fix was written
-   * (Slice 19, slice 13) — an artifact key, served through `/artifacts/:token`.
-   *
-   * The only evidence in a review that is neither the agent's account of itself nor the stored
-   * definition: it shows the reviewer the screen the re-pinned control actually lives on, so
-   * "same control, renamed" can be confirmed rather than taken on trust. Null for every version
-   * written outside a repair session, and for repairs written before this was captured.
-   */
-  repairScreenshotKey: text("repair_screenshot_key"),
   /** Who accepted or rejected this version, and when. Both null while it is `unreviewed`, and
    *  for every version that never needed reviewing. */
   reviewedBy: text("reviewed_by"),
@@ -243,31 +199,23 @@ export const runs = pgTable("runs", {
   /** Why a `failed` run failed (the replay error) — null otherwise. */
   error: text("error"),
   /** What CLASS of failure ended the run, when it is classified (Slice 19):
-   *  `locator` | `pixel` | `judge` | `assertion` | `timeout` | `crash`. `locator` — a fingerprint
-   *  the matcher could not resolve — is the only class auto-repair may touch; every other class
-   *  gets a read-only Triage Job instead (slice 08). Null for runs that are not red and for runs
-   *  that finished before this column existed. Recorded rather than inferred from the error text,
-   *  because "is this repairable?" is a safety decision. */
+   *  `locator` | `pixel` | `judge` | `assertion` | `timeout` | `crash`. Plain reporting: it tells
+   *  whoever opens the red run what kind of thing broke before they decide whether to open a
+   *  Repair Session. Null for runs that are not red and for runs that finished before this column
+   *  existed. Recorded rather than inferred from the error text, so it cannot rot when a message
+   *  is reworded. */
   failureKind: text("failure_kind"),
-  /** A Triage Job's written finding on this run (Slice 19, slice 08) — the explanation of a
-   *  failure Claude was NOT allowed to fix. An annotation and nothing more: the run's status and
-   *  its derived outcome are untouched by it, because a diagnosis must never be mistakable for a
-   *  resolution. Null until one is reported. */
-  triageFinding: text("triage_finding"),
-  /** Who wrote it (a `Repair Agent "…"` label) and when — the audit pair for the finding. */
-  triageBy: text("triage_by"),
-  triageAt: timestamp("triage_at", { withTimezone: true }),
-  /** The Triage Job the finding was reported under, so a finding traces to the claim that made
-   *  it. SET NULL is not needed — a job dies with its test, and so does the run. */
-  triageJobId: uuid("triage_job_id"),
   /** 0-based index of the step that failed (null when it failed before any step). */
   failedStepIndex: integer("failed_step_index"),
   /** Who triggered the run (email), or "ai"/sentinel for non-human triggers. A suite
    *  child carries the suite-launcher's email; a scheduled fire (when wired) carries the
    *  schedule owner. Null for runs created before this column existed. */
   triggeredBy: text("triggered_by"),
-  /** How the run was triggered: `manual` | `suite` | `schedule` | `api`. Pairs with
-   *  triggeredBy so "ran by the cron owner" is distinguishable from a manual run. */
+  /** How the run was triggered: `manual` | `suite` | `schedule` | `api` | `repair` | `varys`.
+   *  Pairs with triggeredBy so "ran by the cron owner" is distinguishable from a manual run.
+   *  `varys` marks an Agent Run Session that answered a Run Request pressed in the web app —
+   *  evidence for a reader only; nothing branches on it. Nullable, and stays so: absence means
+   *  "not known", which is the honest reading for every run predating each of these values. */
   triggerSource: text("trigger_source"),
   /** Optional free-form note on the run (annotation only). Edited inline on the run-detail page. */
   notes: text("notes"),
@@ -497,7 +445,7 @@ export const runSteps = pgTable(
  * failure. `failureKind` is decided by the exception's TYPE — a `LocatorUnresolvedError` — and the
  * matcher cannot tell "the button was renamed" from "the button never rendered because
  * /api/orders returned 500". Both arrive as `locator`. These rows are the evidence that
- * distinguishes them, so a human (or a triage drainer) reads the cause rather than inferring one.
+ * distinguishes them, so whoever opens the run reads the cause rather than inferring one.
  *
  * Deliberately NOT a full network log. Only `xhr` / `fetch` / `document` requests are candidates,
  * and of those a run keeps every PROBLEM (a transport failure, a status >= 400, or a request the
@@ -696,127 +644,6 @@ export const appSettings = pgTable("app_settings", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
-/** A Repair Job's kind: `repair` may change the test; `triage` (slice 08) only diagnoses. */
-export type RepairJobKind = "repair" | "triage";
-/** A Repair Job's lifecycle. `queued` is UNCLAIMED — a project with no drainer accumulates
- *  these, which ADR-0003 accepts as long as the queue view makes it visible. */
-export type RepairJobStatus = "queued" | "claimed" | "done" | "failed" | "cancelled";
-
-/**
- * The repair queue (Slice 19) — Varys enqueues, a cloud Claude drains (ADR-0003). One row is one
- * request to fix one broken test, created at the point in a run where an unresolvable locator is
- * ALREADY detected (never by a separate scanner), and only when that test's Repair Policy is
- * `auto` — or when a human enqueues it by hand from a failed run.
- *
- * Since slice 07 a job is one request to fix one **Failure Cluster**, which may span many tests:
- * `test_id`/`run_id` are the ANCHOR (the oldest failure, the one a drainer opens its session on)
- * and {@link repairJobTests} carries the full membership. Thirty-eight tests broken by one renamed
- * button are one job, proposed once and applied across the cluster as a single reviewable change.
- *
- * The partial unique index is therefore over `cluster_key` alone WHERE status = 'queued' —
- * project-wide, not per test, which is what makes "one app change, one job" true. It deliberately
- * does not cover finished jobs, so the same break can be re-enqueued after a repair completed or
- * was cancelled.
- */
-export const repairJobs = pgTable(
-  "repair_jobs",
-  {
-    id: uuid("id").defaultRandom().primaryKey(),
-    /** The test to repair. Dies with its test (CASCADE) — a deleted test has nothing to fix. */
-    testId: uuid("test_id")
-      .notNull()
-      .references(() => tests.id, { onDelete: "cascade" }),
-    /** The run whose failure created the job. SET NULL so purging a run keeps the job's audit
-     *  trail rather than deleting the record of why a test was edited. */
-    runId: uuid("run_id").references(() => runs.id, { onDelete: "set null" }),
-    kind: text("kind").notNull().default("repair"),
-    status: text("status").notNull().default("queued"),
-    /** Stable identity of the broken locator — `deriveClusterKey` of `@varys/repair-policy`. */
-    clusterKey: text("cluster_key").notNull(),
-    /** How many times a drainer has attempted this job — the attempt cap's counter (slice 03). */
-    attempts: integer("attempts").notNull().default(0),
-    /** Who holds the claim (an `agent:…` principal) and since when; both null while queued. */
-    claimedBy: text("claimed_by"),
-    claimedAt: timestamp("claimed_at", { withTimezone: true }),
-    /** When this claim lapses (slice 03). A Claim is a lease: past this instant the job is
-     *  swept back to `queued` with its attempt count incremented, so a drainer that died
-     *  mid-repair strands nothing. Null whenever `claimed_by` is. */
-    claimExpiresAt: timestamp("claim_expires_at", { withTimezone: true }),
-    /** What the drainer said it did when it reported the repair (slice 04) — the account a
-     *  reviewer reads beside the version. Null until a repair is reported. */
-    report: text("report"),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-  },
-  (t) => ({
-    // Project-wide: one QUEUED job per broken locator, however many tests it broke (slice 07).
-    openUq: uniqueIndex("repair_jobs_cluster_queued_uq")
-      .on(t.clusterKey)
-      .where(sql`status = 'queued'`),
-  }),
-);
-
-/**
- * The tests one Repair Job covers — the Failure Cluster's membership (Slice 19, slice 07).
- *
- * A job's `test_id` is only its anchor. This is the list a clustered repair is applied across, a
- * clustered reject reverts, and a Repair Agent credential's reach is scoped to: without it, "the
- * tests covered by a job it has claimed" would be a single test and thirty-seven others would be
- * repaired one divergent proposal at a time.
- *
- * One row per (job, test): a test that keeps failing the same locator while the job is open
- * updates its `run_id` rather than joining twice.
- */
-export const repairJobTests = pgTable(
-  "repair_job_tests",
-  {
-    id: uuid("id").defaultRandom().primaryKey(),
-    jobId: uuid("job_id")
-      .notNull()
-      .references(() => repairJobs.id, { onDelete: "cascade" }),
-    /** A test in the cluster. Dies with its test — a deleted test is not part of any blast radius. */
-    testId: uuid("test_id")
-      .notNull()
-      .references(() => tests.id, { onDelete: "cascade" }),
-    /** The run that surfaced THIS test's failure (each member has its own). SET NULL on purge. */
-    runId: uuid("run_id").references(() => runs.id, { onDelete: "set null" }),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  },
-  (t) => ({ memberUq: uniqueIndex("repair_job_tests_uq").on(t.jobId, t.testId) }),
-);
-
-/**
- * A locator failure the circuit breaker refused to enqueue (Slice 19, slice 07).
- *
- * When more tests are simultaneously broken than the project's threshold allows, NO jobs are
- * created — mass failure means the app broke or was redesigned, and repairing through it would
- * rewrite the corpus into agreement with a bug. The failures are recorded here instead, which is
- * what makes the suppression visible and what makes the human override possible: releasing a
- * tripped breaker enqueues from these rows, so nothing has to be re-run to recover the work.
- *
- * `target` is the failing fingerprint, stored because the cluster key alone cannot be re-derived
- * and a release must be able to enqueue without the original run.
- */
-export const suppressedFailures = pgTable("suppressed_failures", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  testId: uuid("test_id")
-    .notNull()
-    .references(() => tests.id, { onDelete: "cascade" }),
-  runId: uuid("run_id").references(() => runs.id, { onDelete: "set null" }),
-  /** Stable identity of the broken locator — the same `deriveClusterKey` the queue uses. */
-  clusterKey: text("cluster_key").notNull(),
-  /** The recorded fingerprint that missed, so an override can enqueue from this row alone. */
-  target: jsonb("target").notNull(),
-  /** The threshold in force, and the count that breached it, AT SUPPRESSION TIME — so the record
-   *  still explains itself after somebody raises the setting. */
-  threshold: integer("threshold").notNull(),
-  failingTests: integer("failing_tests").notNull(),
-  /** When a human released this for repair (the override). Null while still suppressed. */
-  releasedAt: timestamp("released_at", { withTimezone: true }),
-  releasedBy: text("released_by"),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-});
-
 /**
  * A Repair Agent credential (Slice 19, slice 02 — ADR-0005): the long-lived secret an unattended
  * drainer presents on `/mcp` in place of the browser OAuth leg a human completes.
@@ -877,9 +704,6 @@ export const schema = {
   draftPreviews,
   testSchedules,
   appSettings,
-  repairJobs,
-  repairJobTests,
-  suppressedFailures,
   agentCredentials,
   agentCheckpoints,
 };
@@ -921,9 +745,6 @@ ALTER TABLE tests ADD COLUMN IF NOT EXISTS created_by text;
 ALTER TABLE tests ADD COLUMN IF NOT EXISTS promoted_by text;
 ALTER TABLE tests ADD COLUMN IF NOT EXISTS promoted_at timestamptz;
 ALTER TABLE tests ADD COLUMN IF NOT EXISTS notes text;
--- Repair Policy (Slice 19). Existing rows default to 'manual' — nothing an author already
--- recorded starts self-editing when this column appears.
-ALTER TABLE tests ADD COLUMN IF NOT EXISTS repair_policy text NOT NULL DEFAULT 'manual';
 -- Test kind (Agent-Driven Tests). 'pinned' = steps + fingerprints the worker replays with no
 -- model call (every test that existed before this column); 'agent' = an Agent-Driven Test, whose
 -- behaviour is the agent_checkpoints rows below. Defaulted, so nothing already recorded changes.
@@ -995,18 +816,9 @@ CREATE TABLE IF NOT EXISTS test_versions (
 );
 -- Bring an existing test_versions table (created before created_by) up to date.
 ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS created_by text;
--- Human review of a version (Slice 19, slice 04). Defaults to 'reviewed' so every version that
--- already exists — and every version a person writes — needs no decision; only an unattended
--- Repair Agent writes 'unreviewed', which is what puts it in the repair review queue.
+-- Human review of a version (Slice 19, slice 04). Defaults to 'reviewed': with repair attended,
+-- every version is written by a person and needs no decision.
 ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS review_state text NOT NULL DEFAULT 'reviewed';
-ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS repair_job_id uuid;
--- The agent's brief-clause justification and the judge's verdict on it (Slice 19, slice 05).
-ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS justification text;
-ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS justification_reasoning text;
--- Did an independent judge stand behind that reasoning, or only the agent itself (slice 14)?
-ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS justification_validated boolean;
--- The page a repair was made against, captured live when the fix was written (slice 13).
-ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS repair_screenshot_key text;
 ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS reviewed_by text;
 ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS reviewed_at timestamptz;
 CREATE INDEX IF NOT EXISTS test_versions_unreviewed_idx
@@ -1049,12 +861,6 @@ ALTER TABLE runs ADD COLUMN IF NOT EXISTS agent_lease_expires_at timestamptz;
 -- the error text. Plain text with no CHECK: the known set is enforced in the API, which degrades
 -- an unrecognised value to null rather than shipping a class no surface can render.
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS failure_kind text;
--- A Triage Job's written finding on a red run (slice 08). An annotation only: the run's status and
--- derived outcome are untouched, because a diagnosis must never be mistakable for a resolution.
-ALTER TABLE runs ADD COLUMN IF NOT EXISTS triage_finding text;
-ALTER TABLE runs ADD COLUMN IF NOT EXISTS triage_by text;
-ALTER TABLE runs ADD COLUMN IF NOT EXISTS triage_at timestamptz;
-ALTER TABLE runs ADD COLUMN IF NOT EXISTS triage_job_id uuid;
 CREATE TABLE IF NOT EXISTS run_results (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   run_id uuid NOT NULL REFERENCES runs(id),
@@ -1228,70 +1034,6 @@ DELETE FROM run_results a USING run_results b
   WHERE a.run_id = b.run_id AND a.checkpoint_name = b.checkpoint_name
     AND (a.created_at < b.created_at OR (a.created_at = b.created_at AND a.id < b.id));
 CREATE UNIQUE INDEX IF NOT EXISTS run_results_run_checkpoint_uq ON run_results (run_id, checkpoint_name);
--- The repair queue (Slice 19). Varys enqueues on an unresolvable-locator failure under
--- an 'auto' Repair Policy; a cloud Claude drains it (ADR-0003). The partial unique index is what
--- makes "one failure, one job" true — ten nightly runs failing the same locator on the same
--- test leave ONE queued job. It covers only queued rows, so the same break can be re-enqueued
--- once a repair finished or was cancelled.
-CREATE TABLE IF NOT EXISTS repair_jobs (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  test_id uuid NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
-  run_id uuid REFERENCES runs(id) ON DELETE SET NULL,
-  kind text NOT NULL DEFAULT 'repair',
-  status text NOT NULL DEFAULT 'queued',
-  cluster_key text NOT NULL,
-  attempts integer NOT NULL DEFAULT 0,
-  claimed_by text,
-  claimed_at timestamptz,
-  claim_expires_at timestamptz,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS repair_jobs_status_idx ON repair_jobs (status, created_at);
--- Clustering (slice 07) moves the "one failure, one job" index from (test_id, cluster_key) to
--- cluster_key alone: a job now covers a whole Failure Cluster, so the same broken locator in a
--- second test JOINS the open job instead of opening a rival one. The old index has to go or it
--- would still admit one queued job per test.
-DROP INDEX IF EXISTS repair_jobs_queued_uq;
-CREATE UNIQUE INDEX IF NOT EXISTS repair_jobs_cluster_queued_uq
-  ON repair_jobs (cluster_key) WHERE status = 'queued';
--- The Failure Cluster's membership: every test one job covers. repair_jobs.test_id is the anchor.
-CREATE TABLE IF NOT EXISTS repair_job_tests (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  job_id uuid NOT NULL REFERENCES repair_jobs(id) ON DELETE CASCADE,
-  test_id uuid NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
-  run_id uuid REFERENCES runs(id) ON DELETE SET NULL,
-  created_at timestamptz NOT NULL DEFAULT now()
-);
-CREATE UNIQUE INDEX IF NOT EXISTS repair_job_tests_uq ON repair_job_tests (job_id, test_id);
--- Backfill: every pre-clustering job is a cluster of one. Doing it here rather than leaving the
--- readers to fall back to repair_jobs.test_id keeps membership the single source of truth, so no
--- query has to ask "clustered or not?".
-INSERT INTO repair_job_tests (job_id, test_id, run_id)
-  SELECT id, test_id, run_id FROM repair_jobs
-  ON CONFLICT DO NOTHING;
--- Failures the circuit breaker refused to enqueue (slice 07). Recorded rather than dropped: this
--- is what makes a tripped breaker visible, and what the human override enqueues from.
-CREATE TABLE IF NOT EXISTS suppressed_failures (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  test_id uuid NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
-  run_id uuid REFERENCES runs(id) ON DELETE SET NULL,
-  cluster_key text NOT NULL,
-  target jsonb NOT NULL,
-  threshold integer NOT NULL,
-  failing_tests integer NOT NULL,
-  released_at timestamptz,
-  released_by text,
-  created_at timestamptz NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS suppressed_failures_open_idx
-  ON suppressed_failures (created_at) WHERE released_at IS NULL;
--- A Claim is a lease (slice 03): a claimed job carries the instant its claim lapses, after which
--- it is swept back to 'queued' with attempts incremented. Added by ALTER so an existing queue
--- gains the column without the CREATE TABLE above (IF NOT EXISTS) silently skipping it.
-ALTER TABLE repair_jobs ADD COLUMN IF NOT EXISTS claim_expires_at timestamptz;
--- The drainer's account of what it repaired (slice 04), shown beside the unreviewed version.
-ALTER TABLE repair_jobs ADD COLUMN IF NOT EXISTS report text;
 -- Repair Agent credentials (Slice 19, slice 02 / ADR-0005): the second issuer on /mcp, for an
 -- unattended drainer that cannot complete the browser OAuth leg. Only the token's SHA-256 is
 -- stored, so the secret is unrecoverable after provisioning; expiry is NOT NULL because ADR-0005
@@ -1319,6 +1061,12 @@ CREATE TABLE IF NOT EXISTS app_settings (
   value text NOT NULL,
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+-- The base authoring prompt moved to authoring_instructions_base_v2 when open_session lost its
+-- mode argument. An override stored under the old key would still be teaching Claude to pass an
+-- argument the server now refuses, so the orphan is dropped rather than carried: a customised
+-- deployment falls back to the new baked-in default, which is the only text that matches the
+-- tools. The "additional" layer is untouched — it is team guidance, not the authoring contract.
+DELETE FROM app_settings WHERE key = 'authoring_instructions_base';
 -- Auth & multi-user (Slice 10 — better-auth-owned tables). These back Varys's OWN
 -- user authentication (who can use Varys), distinct from the per-environment
 -- app-under-test login vault. better-auth manages these tables itself (via its kysely
@@ -1419,4 +1167,24 @@ CREATE INDEX IF NOT EXISTS "oauthAccessToken_clientId_idx" ON "oauthAccessToken"
 CREATE INDEX IF NOT EXISTS "oauthAccessToken_userId_idx" ON "oauthAccessToken" ("userId");
 CREATE INDEX IF NOT EXISTS "oauthConsent_clientId_idx" ON "oauthConsent" ("clientId");
 CREATE INDEX IF NOT EXISTS "oauthConsent_userId_idx" ON "oauthConsent" ("userId");
+-- The repair queue is gone (ADR-0008): repair is attended, so nothing enqueues, claims, leases,
+-- clusters, triages or suppresses. Dropped rather than left dormant — a table nobody writes is a
+-- table the next reader has to reason about. Idempotent, so this runs against a fresh volume and
+-- against a database that carried the queue alike. repair_job_tests first: it references
+-- repair_jobs. The columns that pointed INTO the queue go with it, for the same reason.
+DROP TABLE IF EXISTS repair_job_tests;
+DROP TABLE IF EXISTS repair_jobs;
+DROP TABLE IF EXISTS suppressed_failures;
+ALTER TABLE tests DROP COLUMN IF EXISTS repair_policy;
+ALTER TABLE runs DROP COLUMN IF EXISTS triage_finding;
+ALTER TABLE runs DROP COLUMN IF EXISTS triage_by;
+ALTER TABLE runs DROP COLUMN IF EXISTS triage_at;
+ALTER TABLE runs DROP COLUMN IF EXISTS triage_job_id;
+ALTER TABLE test_versions DROP COLUMN IF EXISTS repair_job_id;
+ALTER TABLE test_versions DROP COLUMN IF EXISTS justification;
+ALTER TABLE test_versions DROP COLUMN IF EXISTS justification_reasoning;
+ALTER TABLE test_versions DROP COLUMN IF EXISTS justification_validated;
+ALTER TABLE test_versions DROP COLUMN IF EXISTS repair_screenshot_key;
+-- The circuit-breaker threshold was a project setting; with no breaker it configures nothing.
+DELETE FROM app_settings WHERE key = 'repair_breaker_threshold';
 `;

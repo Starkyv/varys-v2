@@ -3,11 +3,13 @@ import { BadRequestException, Inject, Injectable, Logger, NotFoundException } fr
 import {
   agentCheckpoints,
   baselines,
+  currentVersionRow,
   environments,
+  replayedDefinition,
+  replayedTestId,
   runEvidence,
   runResults,
   runs,
-  testVersions,
   tests,
 } from "../db/schema";
 import {
@@ -22,7 +24,7 @@ import {
 } from "@varys/review-contract";
 import type { TestDefinition } from "@varys/step-schema";
 import type { StorageAdapter } from "@varys/storage-adapter";
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
 import { viewportKeyOf } from "../runs/runs.service";
 import { SettingsService } from "../settings/settings.service";
@@ -243,6 +245,38 @@ export class AgentRunService {
     return { id, test, checkpoints };
   }
 
+  /**
+   * Record that this Run exists because someone pressed Run in the Varys web app, rather than
+   * because they typed to their own Claude.
+   *
+   * Evidence for a reader, and deliberately nothing more. No outcome, Wall-Clock Lease, review
+   * state or baseline approval reads `trigger_source`, and this runs AFTER the session and its
+   * pre-seeded `missing` rows are committed — so a Run requested from Varys is in every respect
+   * that matters the same Run.
+   *
+   * **It cannot fail the thing it describes.** A write that throws is logged and swallowed, never
+   * rethrown: by the time it runs the Run exists, its lease clock is running and its Manifest is
+   * seeded, so letting a transient database error propagate would hand the agent a failed
+   * `start_agent_run` for a session that is very much alive — and an agent that believes its
+   * session never started is an agent that starts a second one, on the author's own subscription.
+   * Losing the write costs a reader one label; losing the ordering, or the isolation, would cost
+   * the run itself. Ordering alone is not enough to make "it reports, it does not gate" true.
+   *
+   * The claim is Varys' own. The caller stamps only a Run it has already matched against a Run
+   * Request the relay was holding for that person and that test; the agent is never asked how it
+   * came to be running, because an agent's account of its own summoning is not evidence.
+   *
+   * Absence of the marker means "not known to have come from Varys" — every Run predating this,
+   * and every Run whose request had already lapsed, reads exactly as it did before.
+   */
+  async markRequestedFromVarys(runId: string): Promise<void> {
+    try {
+      await this.db.update(runs).set({ triggerSource: "varys" }).where(eq(runs.id, runId));
+    } catch (e) {
+      this.log.warn(`run ${runId} could not be marked as requested from Varys: ${String(e)}`);
+    }
+  }
+
   /** Open a session on an Agent-Driven Test against an environment. */
   async start(
     testId: string,
@@ -260,12 +294,7 @@ export class AgentRunService {
 
     const env = await this.instructions.resolveEnvironment(opts.environmentId);
 
-    const [version] = await this.db
-      .select({ id: testVersions.id, definition: testVersions.definition })
-      .from(testVersions)
-      .where(eq(testVersions.testId, id))
-      .orderBy(desc(testVersions.version))
-      .limit(1);
+    const version = await currentVersionRow(this.db, id);
     if (!version) throw new NotFoundException(`Test ${id} has no version row`);
     // The stub version's viewport, so a baseline seeded by approving one of these captures is
     // keyed exactly as the next session looks it up. Nothing honours it as a capture setting —
@@ -605,11 +634,10 @@ export class AgentRunService {
         testId: tests.id,
         testName: tests.name,
         kind: tests.kind,
-        definition: testVersions.definition,
+        definition: replayedDefinition,
       })
       .from(runs)
-      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
-      .innerJoin(tests, eq(tests.id, testVersions.testId))
+      .innerJoin(tests, eq(tests.id, replayedTestId))
       .where(eq(runs.id, id))
       .limit(1);
     if (!row) throw new NotFoundException(`Run ${id} not found`);

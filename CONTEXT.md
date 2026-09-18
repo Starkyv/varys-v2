@@ -9,11 +9,20 @@ optional Claude/MCP layer that can author tests by driving a live browser sessio
 A live, server-side Playwright browser session that Claude drives (via the MCP server)
 to author a test — perceiving the page and performing actions while Varys captures the
 resulting steps. Distinct from a Run, which replays an already-saved test.
-_Avoid_: live session, recording session (when Claude-driven)
+
+There is exactly one way to drive it: Claude is given the whole **Brief** up front, walks it end
+to end, and ends the session itself. There is no step-by-step way to author and nothing for the
+author to stop — a session that has run out of brief is over.
+_Avoid_: live session, recording session (when Claude-driven), interactive mode, batch mode
 
 **Run**:
 A server-side replay of a saved test against one environment, producing checkpoint
 diffs against the approved baseline.
+
+A Run carries its own write-once copy of the definition it replayed. The test has one definition
+and no history, so the Run is the only place the past stays legible — which step it walked, which
+one failed, and the page that failure faced. The copy is *evidence*: nothing reads it as the test
+and nothing can be restored from it.
 _Avoid_: execution, playback
 
 **Checkpoint**:
@@ -25,8 +34,10 @@ _Avoid_: snapshot, assertion
 A live, server-side Playwright browser session that re-drives an EXISTING test — with the same
 drive a Run uses — to the step in question and parks there, so the test can be diagnosed and
 edited against the page it actually faces. It records nothing: every change is written onto the
-existing test as a new audited version. Distinct from an Authoring Session, which records a new
-test into a Draft.
+existing test **in place** — a test is one definition, with no versions behind it and nothing to
+roll back to. The page it re-drives comes from the failing **Run**'s own copy, which is what lets
+it face the page that actually broke rather than the test as it stands today. Distinct from an
+Authoring Session, which records a new test into a Draft.
 _Avoid_: debug session, fix session
 
 **Draft**:
@@ -37,6 +48,14 @@ something else for that kind: it is the only status Claude may write to, which m
 the moment a test passes out of Claude's reach and into its author's.
 (Human-authored tests are active on create and are never drafts.)
 _Avoid_: staging test, pending test
+
+**Needs Review**:
+A *state*, never a place. A **Checkpoint** whose image awaits a human decision (`pending-baseline`
+or `diff`, unresolved) and, derived from it, a **Run** outcome. It is decided on the Run itself —
+there is no queue page that lists it, and the count of what is waiting is not something Varys
+reports. The only queue page is the **Review queue**, which holds **Drafts** awaiting **Promote**
+and can no more approve a baseline than a Promote can.
+_Avoid_: review queue (that names the Draft queue), needs-review page, approval queue
 
 **Promote**:
 The human action that accepts a Draft: assign it a folder + tags and make it active
@@ -88,13 +107,12 @@ A failing assertion fails the run, and *how* it failed decides who owns it. **Ex
 failed** — a side produced no value, because its target no longer resolves — is a *locator*
 failure: the app was never asked the question, so it cannot have answered wrongly, and it is
 repairable exactly like a broken step locator. **Relation false** — both values were read and
-they disagree — is evidence about the *application*, and is never repairable, under any Repair
-Policy, at any breaker threshold, by any agent: the only way to "repair" it is to re-pin until
-the numbers agree, which hides the exact bugs assertions exist to catch. It earns a Triage Job.
-A **judged fail** is the same rule with softer evidence and the same consequence. A judge that
-could not be reached at all is the one outcome that is neither a pass nor a failure: nothing was
-checked, so the run goes needs-review, earns no job, and claims nothing either way — a model
-outage must never read as a green.
+they disagree — is evidence about the *application* and is never repairable: the only way to
+"repair" it is to re-pin until the numbers agree, which hides the exact bugs assertions exist to
+catch. It is reported and left red. A **judged fail** is the same rule with softer evidence and
+the same consequence. A judge that could not be reached at all is the one outcome that is neither
+a pass nor a failure: nothing was checked, so the run goes **Needs Review** and claims nothing
+either way — a model outage must never read as a green.
 _Avoid_: check, expectation, validation
 
 **Pin**:
@@ -107,7 +125,7 @@ An assertion's pin is *verified against the live page before it is stored*, and 
 can go wrong are not alike. A side that cannot be READ means the pin is broken, and it is refused —
 storing it would author a check that has never once evaluated. A pin that reads both values and
 finds they DISAGREE is correct, and the page is not: it is stored as written and reported. This is
-the same rule as "a false relation is never repairable", one moment earlier — rewording a check at
+the same rule as **Assertion**'s "a false relation is never repairable", one moment earlier — rewording a check at
 authoring time until the app agrees with it hides exactly the bug the check was for.
 _Avoid_: cache, lock, freeze
 
@@ -123,8 +141,8 @@ _Avoid_: agentic test, prompt test, AI test
 
 **Checkpoint Manifest**:
 The closed set of checkpoint names an Agent-Driven Test's Run must produce — the test's
-**authored** checkpoints, in order. Handed to the claimer when it takes the job; the capture
-tool accepts no name outside it, and a Run that leaves a slot unfilled is red. It is what stops
+**authored** checkpoints, in order. Handed to the agent when its **Agent Run Session** starts; the
+capture tool accepts no name outside it, and a Run that leaves a slot unfilled is red. It is what stops
 an agent that re-decides its path from quietly checking less and still reporting green. A slot
 whose environment has no approved baseline yet is not a failure but a **proposal**: it is still
 required to be produced, and what it produces awaits human approval.
@@ -174,8 +192,9 @@ launched Claude), **fulfilled** (an Agent Run Session for that test was started,
 was actually wanted), or **lapsed** (neither happened inside its bound, so Varys says plainly
 that it asked and cannot say whether anyone listened). One request at a time per person per test,
 refused by the relay rather than by a disabled button, so two browser tabs cannot each start a
-session on the same machine. Distinct from a **Claim**, which reserves durable work for a worker;
-a Run Request reserves nothing and leaves nothing behind when it lapses.
+session on the same machine. It reserves nothing and leaves nothing behind when it lapses. A fulfilled one leaves
+exactly one trace: the **Run** it was answered by records that it came from Varys rather than from
+someone typing to their own Claude — evidence for a reader, which nothing else reads.
 _Avoid_: pending run, queued agent run, reservation
 
 **Wall-Clock Lease**:
@@ -187,76 +206,17 @@ subscription being spent. Retrying a state it could not reach stays the agent's 
 this only stops an agent retrying one that will **never** appear. On expiry the session is closed
 and every further submission refused; whatever slots are still unfilled have been `unreached`
 since they were seeded, so the Run is **failed**, not **cancelled** — an agent that drove for ten
-minutes and could not get there has found something out. Distinct from a **Claim**'s expiry,
-which returns work to a queue for someone else to try.
+minutes and could not get there has found something out. It expires to STOP the work; nothing
+picks it up afterwards.
 _Avoid_: timeout, budget, deadline, TTL
 
-**Repair Policy**:
-Per-test setting for what happens when a run fails on a locator it cannot resolve: `manual`
-(surface it for a human to open a Repair Session, today's behaviour) or `auto` (enqueue a
-Repair Job). Applies to every test, however it was authored — a hand-recorded test can
-self-heal too.
-_Avoid_: self-heal mode, AI mode
-
-**Repair Job**:
-A queued request for a cloud Claude to repair one broken test, created by Varys when a run
-fails a locator under an `auto` Repair Policy. Varys owns the queue, the browser and the
-audit trail; the user's cloud Claude **claims** the job over `/mcp`, drives a Repair Session,
-and re-pins. Distinct from a **Run**, which Varys executes itself.
-_Avoid_: repair task, healing run
-
-**Triage Job**:
-A queued request for a cloud Claude to *diagnose* a failure it may not fix — a pixel
-regression, a failed judge, a false assertion, a crash. Claude drives to the failure, looks,
-and writes a finding onto the run; it may not edit the test and may never approve a baseline.
-The run stays red. Distinct from a **Repair Job**, which changes the test.
-_Avoid_: investigation, analysis, RCA
-
-**Claim**:
-A cloud Claude taking exclusive ownership of one queued Repair or Triage Job over `/mcp`,
-which binds it to that job's Repair Session. The queue is project-wide and first-claim-wins:
-any member's cloud Claude may drain it, and the job records who claimed it, so a repaired
-version is attributed to that member. A claim is a lease — it expires if the claimer stops
-reporting, and the job returns to the queue with one more attempt spent. A job that spends every
-attempt without a repair is abandoned rather than re-offered forever. It expires to give the work
-to somebody else, where a **Wall-Clock Lease** expires to stop the work — do not call a Claim one.
-_Avoid_: lease (that names the Wall-Clock Lease), pick up, assign
-
 **Healed**:
-A run outcome: everything the test checks verified cleanly, but reaching it required re-pinning
-a locator that no longer resolved. Amber — outranked by `regression` and `failed`, outranking
-`passed`. Operationally it is a queue item, not an alarm: it does not fail a suite, and it
-stays in the review queue until a human accepts the repaired version. Extends the existing
-locator-level sense of healed (`LocatorVerifyResult.healed`) to the whole run.
-_Avoid_: self-healed, auto-fixed, warning
+A property of one **step**, not of a Run: the scored matcher could not confidently resolve a
+checkpoint's element, so the run fell back to the recorded deterministic CSS path and captured
+through that. Transient — it is flagged on the step of that one Run and written nowhere near the
+test — and marked in the run timeline. Only checkpoints heal; a click has no fallback, because a
+wrong region is cheap and a wrong click is not.
 
-**Failure Cluster**:
-A group of queued job-triggering failures that share one root cause — the same locator
-signature stopped resolving across many tests. Repaired once, reviewed once, applied across
-the cluster as a single change, rather than N independent repairs that can diverge.
-_Avoid_: batch, group
-
-**Circuit Breaker**:
-The threshold above which auto-repair is suppressed entirely and an alert is raised instead:
-when too many tests fail at once, the app is broken or was redesigned — a human decision —
-not a corpus that has drifted. Protects against auto-repairing the whole test corpus into
-agreement with a broken deploy.
-_Avoid_: kill switch, rate limit
-
-**Repair Agent**:
-A provisioned, revocable, expiring service credential that lets an unattended process
-authenticate to `/mcp` and drain the job queue. It resolves to a real service principal
-(`agent:…`), not to an anonymous exemption, so ownership checks and attribution work unchanged;
-its safety comes from **scope** — it may claim jobs and repair within them, and may never open
-an Authoring Session, edit tests outside a claimed job, or approve a baseline. Distinct from
-the **Bridge Helper**, which is attended and carries a human's own Claude login.
-_Avoid_: service account, API key, bot user
-
-**Signal Diff**:
-The side-by-side reading of a repair's locator, before and after, signal by signal — role,
-accessible name, text, `data-testid`, id, ancestors, neighbouring text — with the ones that
-MOVED distinguished from the ones that did not. Computed from the two stored definitions, never
-from the repairing agent's account of its own change, so the evidence can contradict the claim
-in front of the reviewer. The unchanged signals are the point as much as the changed ones: they
-are what shows a re-pinned element is still the same control.
-_Avoid_: locator diff, patch, changeset
+A Run with a healed step still reads **passed**: the marker on the step is the whole report. There
+is no run-level `healed`, and no amber for "green, but on a locator that didn't really match".
+_Avoid_: self-healed, auto-fixed, warning, healed run

@@ -190,10 +190,6 @@ describe("Runs API", () => {
     expect(byName.alpha).toBe("approved");
     expect(byName.beta).toBe("approved");
 
-    // The run leaves the needs-review list.
-    const list = await authed(app).get("/runs/needs-review").expect(200);
-    expect((list.body as { runId: string }[]).some((i) => i.runId === runId)).toBe(false);
-
     // Each baseline is audited with approver + timestamp.
     const seeded = await consumerDb.db
       .select()
@@ -277,16 +273,10 @@ describe("Runs API", () => {
     expect(persisted.body.reviewState).toBe("passed");
     expect(persisted.body.version).toBe(2);
 
-    // run2 is now passed, exposes the persisted mask, and left the needs-review list.
+    // run2 is now passed and exposes the persisted mask — nothing is left awaiting a decision.
     const after = await authed(app).get(`/runs/${run2}`).expect(200);
     expect(hero(after.body as Body).reviewState).toBe("passed");
     expect(hero(after.body as Body).masks).toHaveLength(1);
-    const list = await authed(app).get("/runs/needs-review").expect(200);
-    expect(
-      (list.body as { runId: string; checkpointName: string }[]).some(
-        (i) => i.runId === run2 && i.checkpointName === "hero",
-      ),
-    ).toBe(false);
 
     // Run 3 — still the changed colour, but the persisted mask is honored → passes.
     const r3 = await authed(app).post("/runs").send({ testId }).expect(201);
@@ -516,62 +506,8 @@ describe("Runs API", () => {
     expect(after.body.checkpoints[0].resolution).toBe("approved");
   });
 
-  // visual-review-ui Issue 4 TB1 — the needs-review list returns unresolved
-  // checkpoints with the read-model context, and drops them once decided.
-  it("lists checkpoints needing review and excludes resolved ones", async () => {
-    const definition = {
-      name: "needs-review test",
-      viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
-      steps: [
-        { type: "navigate", url: fixture.url },
-        { type: "screenshot", name: "hero", target: { tag: "div", attributes: { id: "hero" }, text: "Hero" } },
-      ],
-    };
-    const test = await authed(app)
-      .post("/tests")
-      .send(definition)
-      .expect(201);
-
-    const created = await authed(app)
-      .post("/runs")
-      .send({ testId: test.body.id })
-      .expect(201);
-    const runId = created.body.runId as string;
-    for (let i = 0; i < 100; i++) {
-      const res = await authed(app).get(`/runs/${runId}`).expect(200);
-      if (["passed", "needs_review", "failed"].includes(res.body.status)) break;
-      await sleep(200);
-    }
-
-    type Item = {
-      runId: string;
-      testName: string;
-      environment: string;
-      runTimestamp: string;
-      checkpointName: string;
-      reviewState: string;
-    };
-    const listed = await authed(app).get("/runs/needs-review").expect(200);
-    const mine = (listed.body as Item[]).find((i) => i.runId === runId);
-    expect(mine).toBeDefined();
-    expect(mine).toMatchObject({
-      testName: "needs-review test",
-      environment: "default",
-      checkpointName: "hero",
-      reviewState: "pending-baseline",
-    });
-    expect(Number.isNaN(Date.parse(mine?.runTimestamp ?? "x"))).toBe(false);
-
-    // Decide it → it leaves the list.
-    await authed(app)
-      .post(`/runs/${runId}/checkpoints/hero/approve`)
-      .expect(201);
-    const after = await authed(app).get("/runs/needs-review").expect(200);
-    expect((after.body as Item[]).find((i) => i.runId === runId)).toBeUndefined();
-  });
-
-  // The Runs history lists every run (all outcomes) with its identifying context —
-  // unlike needs-review, it keeps a run after it's resolved / passed / failed.
+  // The Runs history lists every run (all outcomes) with its identifying context,
+  // and keeps a run after it's resolved / passed / failed.
   it("lists runs in the history regardless of outcome", async () => {
     const definition = {
       name: "history test",
@@ -612,7 +548,7 @@ describe("Runs API", () => {
     });
     expect(Number.isNaN(Date.parse(mine?.runTimestamp ?? "x"))).toBe(false);
 
-    // Resolving it does NOT remove it from the history (unlike needs-review).
+    // Resolving it does NOT remove it from the history.
     await authed(app)
       .post(`/runs/${runId}/checkpoints/hero/approve`)
       .expect(201);

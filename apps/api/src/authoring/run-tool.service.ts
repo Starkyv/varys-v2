@@ -179,8 +179,6 @@ function noteFor(view: RunView, finished: boolean, awaiting: number): string {
   switch (view.outcome) {
     case "passed":
       return "The test verified against its baseline. If you have just repaired it, this is the evidence the repair works — say so, and say which version now runs.";
-    case "healed":
-      return "Everything verified, but the definition it replayed contains a repair NOBODY HAS ACCEPTED. Report it as healed, not passed: a human accepts the repaired version in the Repair queue before this counts as green.";
     case "baseline":
       return "This run set or updated the golden baseline. It verified nothing — do not report it as a pass.";
     case "pending-baseline":

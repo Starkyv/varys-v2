@@ -1,16 +1,15 @@
-import { ArrowLeft, Button, Check, ErrorState, ExternalLink, Flask, IconButton, Play, Skeleton, Sparkles, Trash } from "@varys/ui";
+import { ArrowLeft, Button, Check, ErrorState, ExternalLink, Flask, IconButton, Play, Skeleton, Trash } from "@varys/ui";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { createElement, useEffect, useMemo, useState } from "react";
 import { useConfirm } from "../../context/confirm";
 import { type Route, useRouter } from "../../context/router";
 import { useRunDialog } from "../../context/run-dialog";
 import { useToast } from "../../context/toast";
-import { absoluteTime, formatActor } from "../../lib/format";
-import { StatusBadge, statusLabel } from "../../lib/status";
+import { absoluteTime, formatActor, runSource } from "../../lib/format";
+import { StatusBadge } from "../../lib/status";
 import {
   useApproveAll,
   useDeleteRun,
-  useEnqueueRepairJob,
   useRunTest,
   useRunView,
   useUpdateRunNotes,
@@ -48,7 +47,6 @@ export function RunDetail({ runId }: { runId: string }) {
   const { toast } = useToast();
   const approveAll = useApproveAll(runId);
   const del = useDeleteRun();
-  const enqueueRepair = useEnqueueRepairJob();
   const rerun = useRunTest();
   const { openRunDialog } = useRunDialog();
   const notesMutation = useUpdateRunNotes(runId);
@@ -195,11 +193,15 @@ export function RunDetail({ runId }: { runId: string }) {
             <span className={styles.env}>{data.environment}</span> · {absoluteTime(data.runTimestamp)}
             {data.triggeredBy && (
               <span
-                title={`Triggered by ${data.triggeredBy}${data.triggerSource ? ` (${data.triggerSource})` : ""}`}
+                title={`Triggered by ${data.triggeredBy}${data.triggerSource ? ` (${runSource(data.triggerSource)})` : ""}`}
               >
                 {" "}
                 · by {formatActor(data.triggeredBy)}
-                {data.triggerSource ? ` (${data.triggerSource})` : ""}
+                {/* How it was started, beside who started it. For an Agent-Driven Test the two
+                    doors — pressing Run here, or typing to your own Claude — produce runs that
+                    are otherwise identical, and "which was this?" is the first useful question
+                    when one reads oddly. Absent for a run Varys never matched to a request. */}
+                {data.triggerSource ? ` (${runSource(data.triggerSource)})` : ""}
               </span>
             )}
           </div>
@@ -236,31 +238,6 @@ export function RunDetail({ runId }: { runId: string }) {
             Open Playwright trace
           </Button>
         )}
-        {/* A locator failure is the ONE class of failure a repair may touch (Slice 19). Under
-            `auto` the worker already queued a job; under `manual` this is how a human hands one
-            to the drainer without opting the test in permanently. Never shown for a pixel
-            regression, a failed judge or a crash — those are not repairable. */}
-        {data.failureKind === "locator" && (
-          <Button
-            variant="secondary"
-            iconLeft={<Sparkles size={15} />}
-            disabled={enqueueRepair.isPending}
-            loading={enqueueRepair.isPending}
-            title={
-              data.repairPolicy === "auto"
-                ? "This test repairs automatically — queue it again if the job was cancelled"
-                : "Queue this broken locator for a repair agent"
-            }
-            onClick={() =>
-              enqueueRepair.mutate(data.runId, {
-                onSuccess: () => toast("Queued for repair"),
-                onError: (e) => toast(e instanceof Error ? e.message : "Couldn’t queue the repair"),
-              })
-            }
-          >
-            Queue repair
-          </Button>
-        )}
         {(hasTimeline || isAgentRun) && pendingCount > 0 && (
           <Button variant="primary" iconLeft={<Check size={15} />} onClick={() => setApproveAllOpen(true)}>
             Approve all
@@ -285,28 +262,6 @@ export function RunDetail({ runId }: { runId: string }) {
       {runNetworkProblems(data).length > 0 && (
         <div className={styles.networkAlert}>
           <NetworkAlert run={data} />
-        </div>
-      )}
-
-      {/* A triage finding (Slice 19, slice 08): an agent's written explanation of a failure it was
-          NOT allowed to fix. Shown ABOVE the timeline and beside the failure, because it is the
-          thing that turns a red run into an actionable one — but toned as an observation, never as
-          a resolution: the status badge above is untouched by it and still red. */}
-      {data.triageFinding && (
-        <div className={styles.triage}>
-          <div className={styles.triageHead}>
-            <Sparkles size={15} />
-            <span className={styles.triageTitle}>What a repair agent found</span>
-            <span className={styles.triageMeta}>
-              {data.triageBy ? formatActor(data.triageBy) : "a repair agent"}
-              {data.triageAt ? ` · ${absoluteTime(data.triageAt)}` : ""}
-            </span>
-          </div>
-          <p className={styles.triageBody}>{data.triageFinding}</p>
-          <p className={styles.triageFoot}>
-            A diagnosis, not a fix — nothing about this test or its baselines was changed, and the
-            run is still {statusLabel(data.outcome).toLowerCase()}.
-          </p>
         </div>
       )}
 
