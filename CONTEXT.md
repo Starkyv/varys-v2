@@ -153,9 +153,9 @@ The natural-language context an agent is given for a Run, composed general-to-sp
 three layers — **suite**, **test** (the Brief's preamble), then the **checkpoint**'s own — and
 concatenated, never overridden, because the layers are additive context rather than competing
 settings. They are environmental, not behavioural: what app, which account, what to ignore.
-Credentials live here as plain text by deliberate choice. Because instructions are unversioned
-and editable in place, the fully composed text is **copied onto the Run**, so a Run stays
-explainable after every layer has been rewritten.
+Credentials live here as plain text by deliberate choice. Because instructions are edited in
+place, the fully composed text is **copied onto the Run**, so a Run stays explainable after every
+layer has been rewritten.
 _Avoid_: prompt, system prompt, context
 
 **Unreached**:

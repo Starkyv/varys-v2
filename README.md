@@ -172,7 +172,7 @@ apps/
   connect/     the Bridge Helper — pairs your machine to Varys and launches your own Claude
 packages/
   review-contract/   shared typed read-model the API and web SPA agree on (pure types)
-  step-schema/       versioned test-definition contract (zod)
+  step-schema/       test-definition contract (zod)
   capture/           DOM element → multi-signal fingerprint
   recorder/          page interactions → step definition
   locator-engine/    ranked fingerprint → live-page locator (resolve / heal / not-found)

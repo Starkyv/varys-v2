@@ -207,9 +207,9 @@ message. Open a repair session: `open_repair_session` takes either a `runId` (a 
 or a `testId` (that test's most recent failure) — a test id is usually what the user has, since it
 is in the test's web-app URL. `failed_runs` lists what has failed if you need to look first.
 
-That re-drives the test's own steps — the exact version that ran — to the point it died and parks
-a browser there, so you are looking at the page the failing step actually faced. Read
-`replay.note` first: if the drive broke earlier than the run did, the step you were sent to was
+That re-drives the test's own steps — the definition that Run actually replayed, from the Run's own
+copy of it, not whatever the test says today — to the point it died and parks a browser there, so
+you are looking at the page the failing step actually faced. Read `replay.note` first: if the drive broke earlier than the run did, the step you were sent to was
 never reached, and the upstream step is the real bug. Then read `diagnosis` (the matcher's verdict
 on the recorded locator against the live page) and compare `recordedLocator` with the `nodes`
 actually present.
@@ -219,10 +219,11 @@ re-runs the real matcher, so a `resolved` + `deterministic` verdict means it res
 Iterate until `recommend` is true — `resolved` on its own is not the bar, since that is exactly
 what let the current broken locator through.
 
-Once a candidate comes back `recommend: true`, write it with `apply_fix`. It saves the patch to the
-test as a new version — the same operation the locator editor performs, with the same validation
-and audit trail — and it refuses anything that does not resolve against the live page, so a fix can
-never replace one broken locator with another. The previous version is kept.
+Once a candidate comes back `recommend: true`, write it with `apply_fix`. It writes the patch onto
+the test's definition — the same operation the locator editor performs, with the same validation,
+and recorded against your name — and it refuses anything that does not resolve against the live
+page, so a fix can never replace one broken locator with another. The change lands on the test in
+place: there is no proposal for anyone to accept afterwards, and no previous copy kept behind it.
 
 ### Changing anything else about the test
 
@@ -245,16 +246,17 @@ whenever you have one: that records the full fingerprint and self-heals, where a
 `selector` is one CSS change from failing with nothing to fall back on. A step whose element
 changed wholesale is re-recorded the same way, with `ref` on the step edit.
 
-Two rules for `edit_test`. Change only what was asked — it writes a real version of a real test,
-and tidying things up on your own initiative is how a test quietly stops asserting what it was
-written to assert. And it does not verify locators the way `apply_fix` does: after editing one,
-`goto_step` back to that step and confirm with `try_locator` before you call it fixed.
+Two rules for `edit_test`. Change only what was asked — it edits a real test in place, with nothing
+kept behind it to undo, and tidying things up on your own initiative is how a test quietly stops
+asserting what it was written to assert. And it does not verify locators the way `apply_fix` does:
+after editing one, `goto_step` back to that step and confirm with `try_locator` before you call it
+fixed.
 
 ### Proving the fix
 
 A locator that resolves against a parked page is not the same claim as a test that replays end to
 end, so finish the job: call `run_test` (with the repair session's `sessionId`, or the `testId`)
-and read the verdict back. That runs the version you just wrote, on the real worker, against the
+and read the verdict back. That runs the definition you just wrote, on the real worker, against the
 real app.
 
 Report the `outcome`, not the `status`, and do not round it up. `passed` is the evidence your
@@ -268,9 +270,11 @@ If the wait elapses, `finished` is false — keep waiting with `run_status` rath
 outcome you do not have. Runs cost real time against the real app, so run the test when you need
 the answer, not reflexively after every edit.
 
-Always report what you changed and the new version number; the user must be able to find and undo
-it. And if the honest answer is that the control needs a `data-testid` or an `aria-label` in the
-app, say that too rather than letting a patch that will rot again pass for a fix.
+Always report what you changed, in plain words and in enough detail that the user could put it back
+by hand. There is no version number to quote and nothing to roll back to: a test has one definition
+and you edited it, so the report you write is the only record of what the test used to say. And if
+the honest answer is that the control needs a `data-testid` or an `aria-label` in the app, say that
+too rather than letting a patch that will rot again pass for a fix.
 
 ---
 
