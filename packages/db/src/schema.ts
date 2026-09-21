@@ -17,7 +17,7 @@ import {
 /** A folder — each test's one browsable home (DESIGN §5). Folders nest via `parentId`
  *  (null = a root folder); names are unique among siblings. Deleting a folder deletes its whole
  *  subtree of folders (ON DELETE CASCADE), but the TESTS in them are only unfiled, never deleted
- *  (tests.folder_id is SET NULL). Organization metadata only: never part of the versioned
+ *  (tests.folder_id is SET NULL). Organization metadata only: never part of the
  *  definition. */
 export const folders = pgTable("folders", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -49,7 +49,7 @@ export const tests = pgTable("tests", {
   promotedBy: text("promoted_by"),
   promotedAt: timestamp("promoted_at", { withTimezone: true }),
   /** Optional free-form note on the test (organization/annotation only — never part of
-   *  the versioned definition). Edited inline on the test-detail page. */
+   *  the definition). Edited inline on the test-detail page. */
   notes: text("notes"),
   /** Which kind of test this is. `pinned` — the only kind before Agent-Driven Tests — is
    *  behaviour written down as data: ordered steps, each carrying a Fingerprint, replayed by the
@@ -68,10 +68,10 @@ export const tests = pgTable("tests", {
   /**
    * **The test's definition** — the one answer to "what is this test?" (ADR 0008).
    *
-   * Written beside the version row today and read by nobody: `test_versions` stays authoritative
-   * for reads until the ticket that drops it, at which point {@link currentDefinition} resolves
-   * here instead and every reader follows without changing. Nullable only so the column can be
-   * added to a live table; after the bootstrap backfill every pinned test carries one.
+   * What {@link currentDefinition} resolves to, and so what every reader of a test's steps gets.
+   * The only copy: there is no history behind it and nothing to roll back to. Nullable only so
+   * the column could be added to a live table; after the bootstrap backfill every pinned test
+   * carries one.
    */
   definition: jsonb("definition"),
   /**
@@ -79,7 +79,8 @@ export const tests = pgTable("tests", {
    *
    * With one definition per test there is no row to read "who wrote this" off, so the pair lives
    * on the test itself. `updatedAt` doubles as the stale-editor token the config save compares
-   * against, in place of a version number.
+   * against, in place of a version number: every write of `definition` stamps it, and a save
+   * carrying an older one is refused with 409.
    */
   updatedBy: text("updated_by"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -166,32 +167,6 @@ export const suiteRuns = pgTable("suite_runs", {
   notifiedAt: timestamp("notified_at", { withTimezone: true }),
 });
 
-export const testVersions = pgTable("test_versions", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  testId: uuid("test_id")
-    .notNull()
-    .references(() => tests.id),
-  version: integer("version").notNull(),
-  definition: jsonb("definition").notNull(),
-  /** Who authored this version (e.g. "system" for an in-viewer mask/threshold
-   *  persist). Audit pair with createdAt. Null for the original recording. */
-  createdBy: text("created_by"),
-  /**
-   * Whether this version has been reviewed by a human (Slice 19, slice 04).
-   *
-   * `reviewed` for everything a person wrote — which, with repair attended, is every version.
-   * `rejected` records a version a reviewer threw away; the test was reverted by appending the
-   * previous definition as a new version, so the history keeps the rejected attempt rather than
-   * erasing it.
-   */
-  reviewState: text("review_state").notNull().default("reviewed"),
-  /** Who accepted or rejected this version, and when. Both null while it is `unreviewed`, and
-   *  for every version that never needed reviewing. */
-  reviewedBy: text("reviewed_by"),
-  reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-});
-
 export type RunStatus =
   | "queued"
   | "running"
@@ -202,9 +177,6 @@ export type RunStatus =
 
 export const runs = pgTable("runs", {
   id: uuid("id").defaultRandom().primaryKey(),
-  testVersionId: uuid("test_version_id")
-    .notNull()
-    .references(() => testVersions.id),
   environmentId: uuid("environment_id"),
   /** The fan-out parent when this run is a suite-run child; null = standalone. */
   suiteRunId: uuid("suite_run_id").references(() => suiteRuns.id),
@@ -242,9 +214,9 @@ export const runs = pgTable("runs", {
    * session start (Agent-Driven Tests). Null for every pinned run.
    *
    * A copy rather than a reference, and that is the whole point of the column: instructions and
-   * checkpoints are deliberately unversioned, so without it a run from six weeks ago becomes
-   * unexplainable the moment any of its layers is reworded. This is the compensating control for
-   * that choice — the only record of what the agent was actually told.
+   * checkpoints are edited in place, so without it a run from six weeks ago becomes unexplainable
+   * the moment any of its layers is reworded. This is the compensating control for that choice —
+   * the only record of what the agent was actually told.
    */
   agentInstructions: text("agent_instructions"),
   /**
@@ -261,9 +233,9 @@ export const runs = pgTable("runs", {
    * The wall-clock lease this session was GRANTED, in seconds — copied off the test at start
    * (Agent-Driven Tests). Null for every pinned run, and for an agent run that predates leases.
    *
-   * A copy for the same reason `agent_instructions` is one: the test's lease is editable and
-   * unversioned, so without it "was this run given ten minutes or ten hours?" becomes
-   * unanswerable the moment someone changes the setting.
+   * A copy for the same reason `agent_instructions` is one: the test's lease is editable in
+   * place, so without it "was this run given ten minutes or ten hours?" becomes unanswerable the
+   * moment someone changes the setting.
    */
   agentLeaseSeconds: integer("agent_lease_seconds"),
   /**
@@ -278,10 +250,9 @@ export const runs = pgTable("runs", {
    */
   agentLeaseExpiresAt: timestamp("agent_lease_expires_at", { withTimezone: true }),
   /**
-   * The test this Run belongs to — reached DIRECTLY rather than through the version row it
-   * replayed (ADR 0008). Written beside `test_version_id` today and read by nobody until
-   * {@link replayedTestId} resolves here. Nullable only so the column can be added to a live
-   * table; after the bootstrap backfill every run carries one.
+   * The test this Run belongs to (ADR 0008) — what {@link replayedTestId} resolves to. Nullable
+   * only so the column could be added to a live table; after the bootstrap backfill every run
+   * carries one.
    */
   testId: uuid("test_id").references(() => tests.id),
   /**
@@ -377,7 +348,7 @@ export const runEvidence = pgTable(
 /**
  * Per-assertion run result (Slice 19, slice 09) — one row per DECLARED, pinned assertion of the
  * definition this run replayed. Run OUTPUT, like run_results: relational, never part of the
- * versioned definition.
+ * definition itself.
  *
  * `assertionId` is the author-chosen id from the definition, which is what makes an assertion's
  * history a straight query: the id survives an edit to its `check` text, so the row written last
@@ -449,7 +420,7 @@ export const runAssertions = pgTable(
  * label (the `describeStep` vocabulary) + timing + outcome, with `checkpointName`
  * the join point to run_results for screenshot steps. Steps never reached have
  * no row (so "didn't run" stays derivable from the definition's full step list).
- * Run OUTPUT — relational, never part of the versioned definition.
+ * Run OUTPUT — relational, never part of the definition.
  */
 export const runSteps = pgTable(
   "run_steps",
@@ -546,9 +517,9 @@ export const baselines = pgTable("baselines", {
 /**
  * One Checkpoint of an **Agent-Driven Test** — a row of the Checkpoint Manifest.
  *
- * Unlike a pinned test's checkpoint (a screenshot step inside the versioned definition), this is
- * relational and UNVERSIONED: editing the wording of an instruction is not an audit event, so
- * these rows are edited in place and never write a `test_version`.
+ * Unlike a pinned test's checkpoint (a screenshot step inside the definition), this is
+ * relational: editing the wording of an instruction is not an audit event, and these rows are
+ * edited in place.
  *
  * `id` is the row's durable identity and `name` is only its label. That split is what lets a
  * rename carry its approved baselines: `baselines` is keyed by `checkpoint_name`, so renaming
@@ -612,8 +583,8 @@ export const draftPreviews = pgTable(
 
 /**
  * A test's optional cron schedule (Slice 8 — Scheduling). Operational "when-to-run"
- * metadata, NOT part of the versioned definition (like `tests.folder_id`/`status`): a
- * 1:1 row per test, set via the structural test update, never bumping a test_version.
+ * metadata, NOT part of the definition (like `tests.folder_id`/`status`): a
+ * 1:1 row per test, set via the structural test update, leaving the definition untouched.
  * The firing tick (PRD 1, Issue 2) sweeps `next_run_at <= now()`; `enabled` gates firing
  * (pause without losing the cron). The env pin drops to the default baseline on env
  * deletion (SET NULL); the row dies with its test (CASCADE).
@@ -686,7 +657,6 @@ export const schema = {
   suiteTests,
   suiteFolders,
   suiteRuns,
-  testVersions,
   runs,
   runResults,
   runEvidence,
@@ -748,16 +718,16 @@ ALTER TABLE tests ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'pinned';
 -- agent grinding at a state that will never appear, not a budget anyone should be spending in full.
 ALTER TABLE tests ADD COLUMN IF NOT EXISTS agent_lease_seconds integer NOT NULL DEFAULT 900;
 -- One definition per test (ADR 0008). The definition itself, plus who last changed it and when —
--- the attribution that has to survive the version rows, and the token a stale editor is refused
--- against once baseVersion goes. Nullable because the column is added to a live table; the
--- backfill below fills it from each test's highest-numbered version. Dual-written beside
--- test_versions until the reads move over.
+-- the attribution that outlived the version rows, and the token a stale editor is refused
+-- against. Nullable because the column was added to a live table; the backfill below fills it
+-- from each test's highest-numbered version on the one boot that still finds any. It is the only
+-- place a test's definition lives.
 ALTER TABLE tests ADD COLUMN IF NOT EXISTS definition jsonb;
 ALTER TABLE tests ADD COLUMN IF NOT EXISTS updated_by text;
 ALTER TABLE tests ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
--- The ordered Checkpoints of an Agent-Driven Test. Relational and UNVERSIONED: editing the
--- wording of an instruction is not an audit event, so no test_version is written. The row id is
--- the durable identity and the name is only a label, which is what lets a rename carry the
+-- The ordered Checkpoints of an Agent-Driven Test. Relational and edited in place, as everything
+-- about a test now is — rewording an instruction is not an audit event. The row id is the durable
+-- identity and the name is only a label, which is what lets a rename carry the
 -- approved baselines keyed by checkpoint_name instead of orphaning them.
 CREATE TABLE IF NOT EXISTS agent_checkpoints (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -807,26 +777,8 @@ CREATE TABLE IF NOT EXISTS suite_runs (
 );
 -- Fan-in Slack notification claim: set once when the last child finishes (exactly-once notify).
 ALTER TABLE suite_runs ADD COLUMN IF NOT EXISTS notified_at timestamptz;
-CREATE TABLE IF NOT EXISTS test_versions (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  test_id uuid NOT NULL REFERENCES tests(id),
-  version integer NOT NULL,
-  definition jsonb NOT NULL,
-  created_by text,
-  created_at timestamptz NOT NULL DEFAULT now()
-);
--- Bring an existing test_versions table (created before created_by) up to date.
-ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS created_by text;
--- Human review of a version (Slice 19, slice 04). Defaults to 'reviewed': with repair attended,
--- every version is written by a person and needs no decision.
-ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS review_state text NOT NULL DEFAULT 'reviewed';
-ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS reviewed_by text;
-ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS reviewed_at timestamptz;
-CREATE INDEX IF NOT EXISTS test_versions_unreviewed_idx
-  ON test_versions (created_at DESC) WHERE review_state = 'unreviewed';
 CREATE TABLE IF NOT EXISTS runs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  test_version_id uuid NOT NULL REFERENCES test_versions(id),
   environment_id uuid,
   status text NOT NULL DEFAULT 'queued',
   error text,
@@ -845,14 +797,14 @@ ALTER TABLE runs ADD COLUMN IF NOT EXISTS trigger_source text;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS notes text;
 -- The fully composed AI Instructions an Agent Run Session was handed, copied verbatim at start
 -- (Agent-Driven Tests). Null for every pinned run. It is a COPY because the three instruction
--- layers are unversioned by design: without it, editing a checkpoint's wording would quietly
--- rewrite the history of every run that ever walked it.
+-- layers are edited in place: without it, editing a checkpoint's wording would quietly rewrite
+-- the history of every run that ever walked it.
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS agent_instructions text;
 -- The agent's written account of the session, stored when it finishes the run. Also the CLOSED
 -- flag: a run carrying one accepts no further submissions, so "done" cannot be walked back.
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS agent_summary text;
 -- The wall-clock lease this Agent Run Session was granted and when it runs out. The seconds are a
--- forensic copy (the test's setting is editable and unversioned); the timestamp is the enforced
+-- forensic copy (the test's setting is editable in place); the timestamp is the enforced
 -- deadline, stamped once at start so the bound is absolute. Null for every pinned run.
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS agent_lease_seconds integer;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS agent_lease_expires_at timestamptz;
@@ -864,31 +816,41 @@ ALTER TABLE runs ADD COLUMN IF NOT EXISTS agent_lease_expires_at timestamptz;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS failure_kind text;
 -- What this Run replayed, and which test it belongs to (ADR 0008). The definition is a write-once
 -- COPY, so a timeline, a failed step index and a repair drive keep meaning something after the
--- test is edited; test_id is the direct link that replaces reaching the test THROUGH the version
--- row. Both nullable because the columns are added to a live table; the backfill below fills them
--- from the version each run actually pointed at.
+-- test is edited; test_id is the direct link to the test. Both nullable because the columns were
+-- added to a live table; the backfill below fills them from the version each run actually pointed
+-- at, on the one boot that still finds any.
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS test_id uuid REFERENCES tests(id);
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS definition jsonb;
--- The backfill. Guarded on definition IS NULL, which is what makes booting twice a no-op: after
--- the first pass every row already carries its copy, and a later save or run writes its own.
--- A test's definition is its HIGHEST-NUMBERED version — the same rule currentDefinition applies.
-UPDATE tests t
-   SET definition = v.definition,
-       updated_by = v.created_by,
-       updated_at = v.created_at
-  FROM (
-    SELECT DISTINCT ON (test_id) test_id, definition, created_by, created_at
-      FROM test_versions
-     ORDER BY test_id, version DESC
-  ) v
- WHERE v.test_id = t.id AND t.definition IS NULL;
--- A Run's copy comes from the version that Run pointed at, NOT from its test's current one: the
--- whole point of the column is that those two can differ.
-UPDATE runs r
-   SET definition = v.definition,
-       test_id = v.test_id
-  FROM test_versions v
- WHERE v.id = r.test_version_id AND r.definition IS NULL;
+-- The backfill, and the last thing in Varys that reads a version row. It runs only where one
+-- survives: the table is no longer created above, so a fresh volume skips this entirely and a
+-- database carrying history is drained by it exactly once, on the boot that upgrades it. Written
+-- as a DO block because the statements name a relation that usually does not exist, and a plain
+-- UPDATE would fail to PARSE rather than find nothing to do.
+-- Guarded on definition IS NULL for the same reason it always was: booting twice is a no-op,
+-- because after the first pass every row carries its own copy and a later save or run writes its
+-- own. A test's definition is its HIGHEST-NUMBERED version, the rule currentDefinition applied.
+DO $$
+BEGIN
+  IF to_regclass('public.test_versions') IS NOT NULL THEN
+    UPDATE tests t
+       SET definition = v.definition,
+           updated_by = v.created_by,
+           updated_at = v.created_at
+      FROM (
+        SELECT DISTINCT ON (test_id) test_id, definition, created_by, created_at
+          FROM test_versions
+         ORDER BY test_id, version DESC
+      ) v
+     WHERE v.test_id = t.id AND t.definition IS NULL;
+    -- A Run's copy comes from the version that Run pointed at, NOT from its test's current one:
+    -- the whole point of the column is that those two can differ.
+    UPDATE runs r
+       SET definition = v.definition,
+           test_id = v.test_id
+      FROM test_versions v
+     WHERE v.id = r.test_version_id AND r.definition IS NULL;
+  END IF;
+END $$;
 CREATE TABLE IF NOT EXISTS run_results (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   run_id uuid NOT NULL REFERENCES runs(id),
@@ -1005,8 +967,8 @@ CREATE TABLE IF NOT EXISTS draft_previews (
   created_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (test_id, checkpoint_name)
 );
--- Per-test cron schedule (Slice 8 — Scheduling). Operational metadata; editing it never
--- writes a test_version. 1:1 with tests (PK = test_id); the env pin drops to the default
+-- Per-test cron schedule (Slice 8 — Scheduling). Operational metadata; editing it leaves the
+-- test's definition untouched. 1:1 with tests (PK = test_id); the env pin drops to the default
 -- baseline on env delete (SET NULL); the row dies with its test (CASCADE).
 CREATE TABLE IF NOT EXISTS test_schedules (
   test_id uuid PRIMARY KEY REFERENCES tests(id) ON DELETE CASCADE,
@@ -1188,11 +1150,6 @@ ALTER TABLE runs DROP COLUMN IF EXISTS triage_finding;
 ALTER TABLE runs DROP COLUMN IF EXISTS triage_by;
 ALTER TABLE runs DROP COLUMN IF EXISTS triage_at;
 ALTER TABLE runs DROP COLUMN IF EXISTS triage_job_id;
-ALTER TABLE test_versions DROP COLUMN IF EXISTS repair_job_id;
-ALTER TABLE test_versions DROP COLUMN IF EXISTS justification;
-ALTER TABLE test_versions DROP COLUMN IF EXISTS justification_reasoning;
-ALTER TABLE test_versions DROP COLUMN IF EXISTS justification_validated;
-ALTER TABLE test_versions DROP COLUMN IF EXISTS repair_screenshot_key;
 -- The circuit-breaker threshold was a project setting; with no breaker it configures nothing.
 DELETE FROM app_settings WHERE key = 'repair_breaker_threshold';
 -- And the second issuer on /mcp goes with the drainer that needed it (ADR-0008): there is one
@@ -1200,4 +1157,14 @@ DELETE FROM app_settings WHERE key = 'repair_breaker_threshold';
 -- rotate or revoke. Dropped rather than kept dormant — a live table of long-lived secrets that
 -- nothing accepts any more is worse than no table at all.
 DROP TABLE IF EXISTS agent_credentials;
+-- And the history goes (ADR-0008): a test has one definition, a Run has its own copy of what it
+-- replayed, and there is nothing to roll back to. Dropped AFTER the backfill above, which is the
+-- whole order that makes this deployable against a real corpus rather than a fresh volume — the
+-- definitions are read out of the version rows first, and only then are the rows removed. The
+-- run's pointer goes first because it is the FK holding the table down.
+--
+-- This is the irreversible one. Everything else above is machinery nobody used; this is the last
+-- copy of what a test used to look like. Deliberate: see the ADR.
+ALTER TABLE runs DROP COLUMN IF EXISTS test_version_id;
+DROP TABLE IF EXISTS test_versions;
 `;

@@ -8,7 +8,6 @@ import {
 import {
   baselines,
   currentDefinitionOf,
-  currentVersionRow,
   environments,
   replayedDefinition,
   replayedTestId,
@@ -19,7 +18,6 @@ import {
   runs,
   runSteps,
   tests,
-  testVersions,
 } from "@varys/db";
 import { diffPng } from "@varys/diff-engine";
 import { type Boss, enqueueRun } from "@varys/queue";
@@ -118,8 +116,8 @@ export class RunsService {
       triggerSource?: "manual" | "suite" | "schedule" | "api";
     } = {},
   ): Promise<CreatedRun> {
-    // An Agent-Driven Test is never executed by the worker: it has no steps, and its one version
-    // row is a zero-step placeholder that exists only to satisfy `runs.test_version_id`. Replaying
+    // An Agent-Driven Test is never executed by the worker: it has no steps, and its definition
+    // is a zero-step placeholder that exists only so the shape is structurally valid. Replaying
     // it would produce a run that captured nothing and compared nothing — which `deriveRunOutcome`
     // has no checkpoints to redden, so it would read as a PASS. Refused here rather than at each
     // entry point, because this is the single door the ad-hoc route and the suite fan-out share.
@@ -134,17 +132,17 @@ export class RunsService {
       );
     }
 
-    const version = await currentVersionRow(this.db, testId);
-    if (!version) throw new NotFoundException(`Test ${testId} not found`);
+    // What this run is about to replay comes off the test.
+    const definition = await currentDefinitionOf(this.db, testId);
+    if (!definition) throw new NotFoundException(`Test ${testId} not found`);
 
     const [run] = await this.db
       .insert(runs)
       .values({
-        testVersionId: version.id,
-        // Dual-write (ADR 0008): the Run's own write-once copy of what it is about to replay, and
-        // its direct link to the test — beside the version pointer that still answers both today.
+        // The Run's own write-once copy of what it is about to replay, and its direct link to the
+        // test (ADR 0008). The copy is what keeps this run legible after the test is edited.
         testId,
-        definition: version.definition,
+        definition,
         environmentId: opts.environmentId ?? null,
         suiteRunId: opts.suiteRunId ?? null,
         trace: opts.trace ?? false,
@@ -273,10 +271,10 @@ export class RunsService {
     const kind: TestKind = row.kind === "agent" ? "agent" : "pinned";
     const isAgentRun = kind === "agent";
 
-    // Capture mode lives on the screenshot step of the version that ran; map it by
+    // Capture mode lives on the screenshot step of the definition THIS RUN replayed; map it by
     // checkpoint name (absent ⇒ element, for definitions recorded before capture modes).
     const captureModes = new Map<string, CaptureMode>();
-    // Compare mode likewise lives on the screenshot step of the version that ran (absent ⇒
+    // Compare mode likewise lives on the screenshot step of the definition that ran (absent ⇒
     // pixel, for definitions recorded before context compare).
     const compareModes = new Map<string, CompareMode>();
     for (const s of (row.definition as TestDefinition).steps) {
@@ -286,8 +284,8 @@ export class RunsService {
       }
     }
 
-    // Masks are the *current* ones a reviewer would edit — from the latest version,
-    // which after a persist holds the just-saved masks (the run's own version may be older).
+    // Masks are the *current* ones a reviewer would edit — off the TEST's definition, which
+    // after a persist holds the just-saved masks (the run's own copy may predate them).
     const masksByName = new Map<string, Rect[]>();
     const latestDef = await this.latestDefinition(row.testId);
     for (const s of latestDef.steps) {
@@ -464,7 +462,7 @@ export class RunsService {
         captureMode: captureModes.get(r.name) ?? "element",
         // An Agent-Driven Test's checkpoints are ALWAYS compared contextually — never pixel
         // diffed, in any configuration (PRD, Out of Scope 9). The map above is built from the
-        // version's screenshot steps and this kind has none, so falling through to the `pixel`
+        // replayed definition's screenshot steps and this kind has none, so falling through to `pixel`
         // default would dress a judged verdict up as a diff score, offer mask and threshold
         // editors for a comparison that has neither, and read "Within threshold" off a `threshold`
         // column that only exists because it is NOT NULL. Stated from the kind rather than
@@ -588,7 +586,7 @@ export class RunsService {
   /** The test's current definition (the source of "current" masks/threshold). */
   private async latestDefinition(testId: string): Promise<TestDefinition> {
     const definition = await currentDefinitionOf(this.db, testId);
-    if (!definition) throw new NotFoundException(`No versions for test ${testId}`);
+    if (!definition) throw new NotFoundException(`Test ${testId} has no definition`);
     return definition as TestDefinition;
   }
 
@@ -1038,11 +1036,11 @@ export class RunsService {
   }
 
   /**
-   * Persist masks/threshold: write a NEW test_version (latest+1) with the named
-   * screenshot step's masks/threshold updated (audited), then re-judge ONLY this
-   * checkpoint's run_result against the stored artifacts. A now-within-threshold
-   * checkpoint flips to `passed` and no longer awaits a decision. Future runs use
-   * the new version; no other historical run is touched.
+   * Persist masks/threshold: write the named screenshot step's masks/threshold onto the
+   * test's definition (audited), then re-judge ONLY this checkpoint's run_result against the
+   * stored artifacts. A now-within-threshold checkpoint flips to `passed` and no longer awaits
+   * a decision. Future runs replay the edited definition; no other historical run is touched —
+   * each carries its own copy of what it ran.
    */
   async persistMasks(
     runId: string,
@@ -1067,20 +1065,18 @@ export class RunsService {
     if (!ctx) {
       throw new NotFoundException(`Checkpoint ${checkpointName} not found for run ${runId}`);
     }
-    // An Agent-Driven Test has ONE version row, written at creation and never again — every join,
-    // dashboard and report that hangs off `runs.test_version_id` depends on that. It also has no
-    // masks and no pixel threshold to tune. Guarded here rather than left to a reachability
-    // argument, because agent-driven runs now exist and the argument was only ever "nothing can
-    // reach a checkpoint of one yet".
+    // An Agent-Driven Test's definition is the zero-step placeholder written at creation and
+    // never edited: there are no masks and no pixel threshold to tune. Guarded here rather than
+    // left to a reachability argument, because agent-driven runs now exist and the argument was
+    // only ever "nothing can reach a checkpoint of one yet".
     this.assertPixelComparable(
       ctx.testKind,
       "there are no masks or thresholds to save — edit its comparison prompt on the test instead",
     );
 
-    // 1. New audited test_version with the updated masks/threshold on this step.
-    const latest = await currentVersionRow(this.db, ctx.testId);
-    if (!latest) throw new NotFoundException(`No versions for test ${ctx.testId}`);
-    const def = latest.definition as TestDefinition;
+    // 1. The masks/threshold onto the test's definition, at this step.
+    const def = (await currentDefinitionOf(this.db, ctx.testId)) as TestDefinition | null;
+    if (!def) throw new NotFoundException(`Test ${ctx.testId} has no definition`);
     const masks = (input.masks ?? []) as Rect[];
     const nextDefinition: TestDefinition = {
       ...def,
@@ -1090,30 +1086,21 @@ export class RunsService {
           : s,
       ),
     };
-    const nextVersion = latest.version + 1;
-    await this.db.transaction(async (tx) => {
-      await tx.insert(testVersions).values({
-        testId: ctx.testId,
-        version: nextVersion,
-        definition: nextDefinition,
-        createdBy,
-      });
-      // Dual-write (ADR 0008): the in-viewer mask/threshold persist is a definition write like
-      // any other, so it lands on the test too — in one transaction, so the two cannot drift.
-      await tx
-        .update(tests)
-        .set({ definition: nextDefinition, updatedBy: createdBy, updatedAt: new Date() })
-        .where(eq(tests.id, ctx.testId));
-    });
+    // The in-viewer mask/threshold persist is a definition write like any other: it lands on the
+    // test, in place, and records who did it.
+    await this.db
+      .update(tests)
+      .set({ definition: nextDefinition, updatedBy: createdBy, updatedAt: new Date() })
+      .where(eq(tests.id, ctx.testId));
 
     const threshold = input.threshold ?? ctx.threshold;
 
     // 2. Re-judge ONLY when there's a baseline to diff against. A pending-baseline checkpoint
-    //    has nothing to compare yet — the saved masks live on the new test version and apply
+    //    has nothing to compare yet — the saved masks live on the test's definition and apply
     //    once its first capture is approved as baseline and on future runs (the review reads
-    //    masks from the latest test version, so they show up immediately).
+    //    masks from that definition, so they show up immediately).
     if (!ctx.baselineArtifactKey || !ctx.actualArtifactKey) {
-      return { reviewState: "pending-baseline", diffScore: 0, threshold, version: nextVersion };
+      return { reviewState: "pending-baseline", diffScore: 0, threshold };
     }
     const { baseline, actual } = await this.loadDiffInputs(
       ctx.baselineArtifactKey,
@@ -1141,7 +1128,6 @@ export class RunsService {
       reviewState: verdict === "match" ? "passed" : "diff",
       diffScore: score,
       threshold,
-      version: nextVersion,
     };
   }
 

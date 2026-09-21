@@ -166,7 +166,7 @@ export function TestDetail({ testId }: { testId: string }) {
   }
 
   // An Agent-Driven Test has no steps, waits or thresholds, so it gets its own editor rather
-  // than a step editor rendering nothing. Keyed by id only: its edits never bump the version,
+  // than a step editor rendering nothing. Keyed by id only: its edits never touch the definition,
   // which is precisely the property the remount below exists to handle for pinned tests.
   if (config.data.kind === "agent") {
     return (
@@ -192,9 +192,9 @@ export function TestDetail({ testId }: { testId: string }) {
     );
   }
 
-  // Key by version so a successful save (which bumps the version) remounts the editor
-  // with fresh data, clearing the dirty state.
-  return <ConfigEditor key={`${config.data.id}:${config.data.version}`} config={config.data} />;
+  // Key by when the definition last changed, so a successful save (which stamps it afresh)
+  // remounts the editor with fresh data, clearing the dirty state.
+  return <ConfigEditor key={`${config.data.id}:${config.data.updatedAt}`} config={config.data} />;
 }
 
 function ConfigEditor({ config }: { config: TestConfigView }) {
@@ -537,7 +537,7 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
       assertionPatches.length === 0
     )
       return null;
-    const patch: TestConfigPatch = { baseVersion: config.version };
+    const patch: TestConfigPatch = { baseUpdatedAt: config.updatedAt };
     if (defaultsChanged) patch.defaults = defaultWaits;
     if (steps.length > 0) patch.steps = steps;
     if (assertionPatches.length > 0) patch.assertions = assertionPatches;
@@ -565,7 +565,7 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
   function onSave() {
     if (!patch) return;
     save.mutate(patch, {
-      onSuccess: (res) => toast(`Saved — “${config.name}” is now v${res.version}`),
+      onSuccess: () => toast(`Saved — “${config.name}” will run with these changes`),
       onError: (e) => toast(e instanceof Error ? e.message : "Save failed"),
     });
   }
@@ -703,7 +703,7 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
     );
   };
 
-  /** Hard-delete this test — it and every run, baseline, and version it owns. No undo,
+  /** Hard-delete this test — it and every run and baseline it owns. No undo,
    *  so it is gated behind a confirm; on success there is nothing left to show here. */
   async function onDelete() {
     const ok = await confirm({
@@ -734,9 +734,6 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
         />
         <div className={styles.titleBlock}>
           <h1 className={styles.title}>{config.name}</h1>
-          <Badge tone="neutral" appearance="soft" size="sm">
-            v{config.version}
-          </Badge>
         </div>
         <span className={styles.headerSpacer} />
         <Button variant="secondary" iconLeft={<Play size={14} />} onClick={() => openRunDialog(config.id)}>
@@ -781,7 +778,7 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
 
           {/* The Brief — what this test is FOR, in the author's words. It is what a Repair
               Session diagnoses against, so a vague Brief is what a stalled repair sends you to
-              fix. It lives on the test row, so editing it writes no version and touches no
+              fix. It lives on the test row, so editing it leaves the definition alone and touches no
               baseline. */}
           <NotesCard
             label="Brief"
@@ -919,7 +916,7 @@ function ConfigEditor({ config }: { config: TestConfigView }) {
                   </div>
 
                   {isRemoved ? (
-                    <div className={styles.stepNote}>Removed — saving writes a new version without this step.</div>
+                    <div className={styles.stepNote}>Removed — saving takes this step out of the test.</div>
                   ) : (
                     <>
                       <WaitListEditor
@@ -1230,7 +1227,7 @@ function RecentRunsCard({ testId }: { testId: string }) {
 
 /**
  * The test's cron schedule (Slice 8) — its own card with its own save (the structural
- * PATCH /tests/:id, NOT the versioned config save). The toggle gates firing; cron +
+ * PATCH /tests/:id, NOT the definition config save). The toggle gates firing; cron +
  * timezone set the cadence, with an optional environment + keep-trace. A scheduled run
  * is an ordinary run (it only fires once the scheduler tick ships — PRD 1, Issue 2).
  */

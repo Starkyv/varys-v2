@@ -46,11 +46,11 @@ import {
   agentCheckpoints,
   baselines,
   currentDefinition,
-  currentVersion,
-  currentVersionRow,
+  currentDefinitionOf,
   draftPreviews,
   environments,
   folders,
+  replayedTestId,
   runAssertions,
   runNetwork,
   runResults,
@@ -59,7 +59,6 @@ import {
   tests,
   testSchedules,
   testTags,
-  testVersions,
 } from "../db/schema";
 import { applyFingerprintPatch, hasMatchableSignal } from "../fingerprint-patch";
 import { summarizeFingerprint } from "../fingerprint-summary";
@@ -68,28 +67,27 @@ import { STORAGE } from "../storage/storage.module";
 
 /** Organization metadata only — `folderId: null` unfiles; `tags` REPLACES the whole
  *  list (add + remove in one write); absent fields are left untouched. Deliberately
- *  NOT the definition: an update here writes only organization rows and never creates
- *  a test_version (so baselines/review state can't be touched). */
+ *  NOT the definition: an update here writes only organization rows and never touches
+ *  the test's definition (so baselines/review state can't be touched). */
 export interface UpdateTestInput {
   name?: string;
   folderId?: string | null;
   tags?: string[];
   /** Set/replace the cron schedule, or `null` to clear it (Slice 8). Omit to leave
-   *  unchanged. Setting a schedule never writes a new test_version. */
+   *  unchanged. Setting a schedule never touches the definition. */
   schedule?: TestScheduleInput | null;
   /** Set/replace the test's free-form note; `null`/empty clears it. Omit to leave
-   *  unchanged. Annotation only — never writes a new test_version. */
+   *  unchanged. Annotation only — never touches the definition. */
   notes?: string | null;
   /** Set/replace the test's BRIEF — what it is for, in the author's words; `null`/empty clears
    *  it. Omit to leave unchanged. It lives on the test row, not in the definition, so editing it
-   *  writes no test_version and disturbs neither the history nor the baselines — which is what
-   *  makes it safe to sharpen a Brief in response to a repair that was refused against it
-   *  (Slice 19, slice 05). */
+   *  leaves the definition and the baselines alone — which is what makes it safe to sharpen a
+   *  Brief in response to a repair that was refused against it (Slice 19, slice 05). */
   brief?: string | null;
   /**
    * Set the wall-clock lease an Agent Run Session on this test is bounded by, in seconds
-   * (Agent-Driven Tests). Omit to leave unchanged. Operational metadata, like the schedule:
-   * never writes a new test_version.
+   * (Agent-Driven Tests). Omit to leave unchanged. Operational metadata, like the schedule: it
+   * never touches the definition.
    *
    * Refused on a pinned test. Varys runs those itself and bounds them with the worker's own
    * timeouts; accepting a setting that would silently do nothing is how a person ends up believing
@@ -293,13 +291,15 @@ function mergeWaits(
 
 export interface CreatedTest {
   id: string;
-  version: number;
 }
 
 export interface TestView {
   id: string;
   name: string;
-  version: number;
+  /** When the definition below was last changed, ISO-8601. */
+  updatedAt: string;
+  /** Who changed it then, or null for one never edited since it was created. */
+  updatedBy: string | null;
   definition: TestDefinition;
 }
 
@@ -319,9 +319,6 @@ export class TestsService {
     const definition = parseTestDefinition(input);
     const [created] = await this.db
       .insert(tests)
-      // Dual-write (ADR 0008): the definition lands on the test AND as version 1. The version row
-      // stays authoritative for reads until the ticket that drops it, so the two must not drift —
-      // every path that writes one writes the other, in the same statement or the same transaction.
       .values({
         name: definition.name,
         createdBy: createdBy ?? null,
@@ -329,14 +326,11 @@ export class TestsService {
         updatedBy: createdBy ?? null,
       })
       .returning({ id: tests.id });
-    await this.db
-      .insert(testVersions)
-      .values({ testId: created.id, version: 1, definition });
-    return { id: created.id, version: 1 };
+    return { id: created.id };
   }
 
   /** All ACTIVE tests (recordings), newest first — each tagged with whether it needs
-   *  an environment to run (from its latest version's definition) and its folder.
+   *  an environment to run (from its definition) and its folder.
    *  Un-promoted AI drafts are excluded — they live in the review queue (`listDrafts`)
    *  and are not suite/schedule eligible. */
   async list(): Promise<TestSummary[]> {
@@ -433,21 +427,17 @@ export class TestsService {
         // promotes it is recorded separately as promotedBy.
         createdBy: opts?.createdBy ?? "ai",
         intent: opts?.intent ?? null,
-        // Dual-write (ADR 0008) — see `create`.
         definition,
         updatedBy: opts?.createdBy ?? "ai",
       })
       .returning({ id: tests.id });
-    await this.db
-      .insert(testVersions)
-      .values({ testId: created.id, version: 1, definition });
 
     // Authoring-preview screenshots: reference images of what Claude saw at each
     // checkpoint (DESIGN §4 — NOT the golden baseline; the runner seeds that on replay).
     for (const p of opts?.previews ?? []) {
       await this.putDraftPreview(created.id, p.checkpointName, p.bytes);
     }
-    return { id: created.id, version: 1 };
+    return { id: created.id };
   }
 
   /**
@@ -643,7 +633,7 @@ export class TestsService {
    * Promote a Draft into the active corpus: assign a folder + tags and flip
    * `status: "active"` so it becomes suite/schedule eligible. The one human gate on AI
    * output — web-UI only; never an agent tool. Baseline approval stays the separate
-   * per-environment gate (this does not touch baselines or write a test_version).
+   * per-environment gate (this does not touch baselines or the definition).
    * 409 if the test is already active (only a draft can be promoted).
    */
   async promote(id: string, body: PromoteDraftBody, promotedBy?: string): Promise<{ ok: true }> {
@@ -696,7 +686,7 @@ export class TestsService {
   }
 
   /** Rename, (un)file, retag, and/or (re)schedule a test. Writes ONLY relational rows
-   *  (tests + test_tags + test_schedules) — never a new test_version — so these actions
+   *  (tests + test_tags + test_schedules) — never the definition — so these actions
    *  cannot perturb baselines or review state. Tags are a full-list replace, normalized;
    *  `schedule: null` clears the cron, a value upserts it. `actor` is recorded as the
    *  schedule's owner (attributed to its unattended runs, §11 audit). */
@@ -827,7 +817,8 @@ export class TestsService {
     const [row] = await this.db
       .select({
         name: tests.name,
-        version: currentVersion,
+        updatedAt: tests.updatedAt,
+        updatedBy: tests.updatedBy,
         definition: currentDefinition,
       })
       .from(tests)
@@ -839,19 +830,20 @@ export class TestsService {
     return {
       id,
       name: row.name,
-      version: row.version,
+      updatedAt: row.updatedAt.toISOString(),
+      updatedBy: row.updatedBy,
       definition: row.definition as TestDefinition,
     };
   }
 
   /**
-   * The editable config surface of a test's LATEST version — the test-detail page's
+   * The editable config surface of a test's definition — the test-detail page's
    * read-model: the test-level default waits plus, per step, its label, the waits
    * before it, and (for screenshots) the threshold. A display projection only; the
    * full fingerprints/definition aren't surfaced (v1 edits waits + threshold).
    */
   async getConfig(id: string): Promise<TestConfigView> {
-    const view = await this.getById(id); // latest version + definition (throws if none)
+    const view = await this.getById(id); // the definition, and when it last moved (throws if none)
     const def = view.definition;
     const schedule = await this.readSchedule(id);
     const [meta] = await this.db
@@ -886,7 +878,8 @@ export class TestsService {
     return {
       id: view.id,
       name: view.name,
-      version: view.version,
+      updatedAt: view.updatedAt,
+      updatedBy: view.updatedBy,
       schedule,
       kind: meta?.kind === "agent" ? "agent" : "pinned",
       notes: meta?.notes ?? null,
@@ -978,52 +971,58 @@ export class TestsService {
   }
 
   /**
-   * Apply a config patch (waits + threshold + step locators) onto the test's latest
-   * definition and store the result (`createdBy` = the editing user).
+   * Apply a config patch (waits + threshold + step locators) onto the test's definition and
+   * store the result (`createdBy` = the editing user, recorded as `tests.updated_by`).
    *
-   * A person's save REPLACES that latest row in place — editing a test does not accumulate
-   * copies of its whole definition. `version` still increments as the live definition's
-   * revision counter. An agent's write (`review` present), and any save landing on a version
-   * still awaiting review, append instead — see the write itself for why the repair queue
-   * needs that. Locator edits merge onto the step's fingerprint, preserving its other signals.
-   * Optimistic
-   * concurrency: the patch's `baseVersion` must match the current latest, else 409 —
-   * so a stale editor can't silently clobber a newer version. Selector waits the
-   * editor can't author are preserved (it only replaces the delay/networkIdle ones).
-   * The assembled definition is re-validated by the schema before it's stored.
+   * A test has ONE definition and this changes it in place — editing a test does not accumulate
+   * copies of it. Locator edits merge onto the step's fingerprint, preserving its other signals.
+   * Optimistic concurrency: the patch's `baseUpdatedAt` must match the definition's current
+   * `updated_at`, else 409 — so a second tab that opened the test before someone else's save
+   * can't silently clobber it. There is no revision number to compare any more; "when it last
+   * moved" is the same guard with one fewer thing to report. Selector waits the editor can't
+   * author are preserved (it only replaces the delay/networkIdle ones). The assembled
+   * definition is re-validated by the schema before it's stored.
    */
   async saveConfig(
     id: string,
     patch: TestConfigPatch,
     createdBy: string,
-  ): Promise<{ version: number; versionId: string }> {
-    // An Agent-Driven Test has exactly one version row, written at creation and never again —
-    // it holds no steps, waits or thresholds to configure, and its real behaviour (instructions
-    // and checkpoints) is edited in place precisely so wording changes are not audit events.
-    //
-    // Another door also writes versions, and agent-driven runs now exist, so the invariant no
-    // longer rests on nothing being able to reach them. The run-review mask/threshold save is
-    // guarded in its own right (`RunsService.persistMasks`).
-    const [kindRow] = await this.db
-      .select({ kind: tests.kind })
+  ): Promise<{ updatedAt: string }> {
+    // A save with no token at all is a malformed body, not a stale editor — a client that never
+    // sent one must not be told its edits lost a race they were never in.
+    if (typeof patch.baseUpdatedAt !== "string" || !patch.baseUpdatedAt) {
+      throw new BadRequestException(
+        "A config save must carry `baseUpdatedAt` — the test's `updatedAt` as it was when the edit was opened.",
+      );
+    }
+
+    // What the save lands on, and what it is guarded against, in one read.
+    const [current] = await this.db
+      .select({ kind: tests.kind, definition: currentDefinition, updatedAt: tests.updatedAt })
       .from(tests)
       .where(eq(tests.id, id))
       .limit(1);
-    if (kindRow?.kind === "agent") {
+
+    // An Agent-Driven Test's definition is the zero-step placeholder written at creation — it
+    // holds no steps, waits or thresholds to configure, and its real behaviour (instructions and
+    // checkpoints) is edited in place precisely so wording changes are not audit events. Refused
+    // here rather than left to a reachability argument, because agent-driven runs now exist. The
+    // run-review mask/threshold save is guarded in its own right (`RunsService.persistMasks`).
+    if (current?.kind === "agent") {
       throw new BadRequestException(
         "An Agent-Driven Test has no step configuration — edit its AI Instructions and checkpoints instead.",
       );
     }
 
-    const latest = await currentVersionRow(this.db, id);
-    if (!latest) throw new NotFoundException(`Test ${id} not found`);
-    if (patch.baseVersion !== latest.version) {
+    if (!current?.definition) throw new NotFoundException(`Test ${id} not found`);
+    const def = current.definition as TestDefinition;
+    // The stale-editor guard. `updatedAt` is stamped by every definition write, and read back
+    // through the same Date → ISO round trip on both sides, so the comparison is exact.
+    if (patch.baseUpdatedAt !== current.updatedAt.toISOString()) {
       throw new ConflictException(
-        `Test was changed since you opened it (now at v${latest.version}). Reload and re-apply your edits.`,
+        "This test was changed since you opened it. Reload to get the latest, then re-apply your edits.",
       );
     }
-    const def = latest.definition as TestDefinition;
-
     // Default waits: replace the authorable set, keep any (rare) selector defaults.
     const nextDefaults =
       patch.defaults !== undefined
@@ -1041,7 +1040,7 @@ export class TestsService {
     }
 
     // Checkpoint renames, collected as the steps are edited: the name is the baseline key, so
-    // each one has to be migrated alongside the version write (below) or the golden is orphaned.
+    // each one has to be migrated alongside the definition write (below) or the golden is orphaned.
     const renames: Array<{ from: string; to: string }> = [];
 
     const editedSteps = def.steps.map((s, index) => {
@@ -1080,7 +1079,7 @@ export class TestsService {
         out = next;
       }
       // Checkpoint rename. Recorded here and applied to the baseline/preview rows in the same
-      // transaction as the version write, so the golden follows the name instead of being orphaned.
+      // transaction as the definition write, so the golden follows the name, not an orphan.
       if (p.name !== undefined && out.type === "screenshot") {
         const name = p.name.trim();
         if (!name) throw new BadRequestException("A checkpoint needs a name.");
@@ -1286,49 +1285,21 @@ export class TestsService {
       throw new BadRequestException(describeValidationError(err));
     }
 
-    // A person's save REPLACES the definition it was based on rather than appending beside it:
-    // the editor is not a history tool, and a mask nudge or a locator tweak used to duplicate the
-    // whole definition into a fresh row. `version` still increments — it is the live definition's
-    // revision counter, which is what `baseVersion` compares against, so a stale editor is still
-    // a 409 rather than a silent clobber.
-    //
-    // A save landing on a version that is itself awaiting review still APPENDS: overwriting it
-    // would leave a reviewer with nothing to compare and nothing to revert to. With no unattended
-    // agent left to write one, that is the only remaining way a version can be unreviewed.
-    const replaceInPlace = latest.reviewState === "reviewed";
-    const nextVersion = latest.version + 1;
-    let versionId = "";
+    // The save lands on the test's definition, in place. There is no row appended beside it and
+    // nothing kept in step (ADR 0008) — the previous definition is simply overwritten.
+    const updatedAt = new Date();
     await this.db.transaction(async (tx) => {
-      if (replaceInPlace) {
-        const [updated] = await tx
-          .update(testVersions)
-          .set({ definition: validated, version: nextVersion, createdBy })
-          .where(eq(testVersions.id, latest.id))
-          .returning({ id: testVersions.id });
-        versionId = updated?.id ?? "";
-      } else {
-        const [inserted] = await tx
-          .insert(testVersions)
-          .values({
-            testId: id,
-            version: nextVersion,
-            definition: validated,
-            createdBy,
-          })
-          .returning({ id: testVersions.id });
-        versionId = inserted?.id ?? "";
-      }
-      // Dual-write (ADR 0008), inside the same transaction as the version write so the two cannot
-      // drift: the test's own definition, and the attribution pair that replaces the version row's
-      // createdBy/createdAt. `updatedAt` is the stale-editor token the save will compare against
-      // once `baseVersion` goes, so it is stamped on every save rather than left to a trigger.
+      // The definition itself, and the attribution pair: who changed this test, and when.
+      // `updatedAt` is also the token the NEXT save is guarded against, so it is stamped here on
+      // every save rather than left to a trigger — the guard and the attribution are the same
+      // fact.
       await tx
         .update(tests)
-        .set({ definition: validated, updatedBy: createdBy, updatedAt: new Date() })
+        .set({ definition: validated, updatedBy: createdBy, updatedAt })
         .where(eq(tests.id, id));
       // A checkpoint's name IS its baseline key `(test, checkpoint, env, viewport)`. Renaming the
       // step without moving the rows would silently orphan every approved golden and send the next
-      // run back to `pending-baseline`, so the rename travels with the version write — atomically,
+      // run back to `pending-baseline`, so the rename travels with the definition write — atomically,
       // because a half-applied rename is worse than a rejected one.
       for (const { from, to } of renames) {
         await tx
@@ -1336,7 +1307,7 @@ export class TestsService {
           .where(and(eq(baselines.testId, id), eq(baselines.checkpointName, to)));
         await tx
           .update(baselines)
-          .set({ checkpointName: to, updatedAt: new Date() })
+          .set({ checkpointName: to, updatedAt })
           .where(and(eq(baselines.testId, id), eq(baselines.checkpointName, from)));
         // Draft previews are unique per (test, checkpoint) — clear the destination first.
         await tx
@@ -1348,13 +1319,13 @@ export class TestsService {
           .where(and(eq(draftPreviews.testId, id), eq(draftPreviews.checkpointName, from)));
       }
     });
-    return { version: nextVersion, versionId };
+    return { updatedAt: updatedAt.toISOString() };
   }
 
   /**
    * Hard-delete a test and everything it owns — irreversible, no rollback. Removes
-   * the runs' results + steps, the runs themselves, the test's baselines, every
-   * test_version, then the test row (`test_tags` + `suite_tests` cascade in the DB).
+   * the runs' results + steps, the runs themselves, the test's baselines, then the test
+   * row (`test_tags` + `suite_tests` cascade in the DB).
    * These FK chains don't cascade, so they're deleted explicitly in dependency order
    * inside one transaction. Storage artifacts (screenshots, baselines, diffs, traces)
    * are purged best-effort afterwards — the DB delete is the source of truth, and an
@@ -1368,15 +1339,8 @@ export class TestsService {
       .limit(1);
     if (!exists) throw new NotFoundException(`Test ${id} not found`);
 
-    // The test's versions → their runs (the non-cascading FK chain).
-    const versionRows = await this.db
-      .select({ id: testVersions.id })
-      .from(testVersions)
-      .where(eq(testVersions.testId, id));
-    const versionIds = versionRows.map((v) => v.id);
-    const runRows = versionIds.length
-      ? await this.db.select({ id: runs.id }).from(runs).where(inArray(runs.testVersionId, versionIds))
-      : [];
+    // The test's runs (the non-cascading FK chain), reached directly off the run's own test_id.
+    const runRows = await this.db.select({ id: runs.id }).from(runs).where(eq(replayedTestId, id));
     const runIds = runRows.map((r) => r.id);
 
     // Gather artifact keys to purge BEFORE deleting the rows that reference them.
@@ -1428,7 +1392,6 @@ export class TestsService {
       }
       await tx.delete(baselines).where(eq(baselines.testId, id));
       await tx.delete(draftPreviews).where(eq(draftPreviews.testId, id));
-      await tx.delete(testVersions).where(eq(testVersions.testId, id));
       await tx.delete(tests).where(eq(tests.id, id)); // test_tags + suite_tests cascade
     });
 

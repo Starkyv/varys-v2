@@ -10,17 +10,14 @@ import {
 import { captureFingerprint } from "@varys/capture";
 import {
   currentDefinitionOf,
-  currentVersionRow,
   environments,
   replayedDefinition,
   replayedTestId,
-  replayedVersion,
   runAssertions,
   runNetwork,
   runResults,
   runs,
   tests as testsTable,
-  testVersions,
 } from "@varys/db";
 import { verify, type VerifyOutcome, type VerifyStatus } from "@varys/locator-engine";
 import {
@@ -376,17 +373,17 @@ function resolveFingerprintTokens(
 }
 
 /**
- * What a repair session is parked on: the failed Run, the exact definition VERSION that ran, and
- * the step being diagnosed. Held on the session so a candidate locator can be merged onto the
- * right step and re-checked against the parked page without re-reading the DB or re-driving.
+ * What a repair session is parked on: the failed Run, the definition that Run REPLAYED, and the
+ * step being diagnosed. Held on the session so a candidate locator can be merged onto the right
+ * step and re-checked against the parked page without re-reading the DB or re-driving.
+ *
+ * The definition here is the Run's own copy, not the test's — a diagnosis must reproduce the
+ * failure, and the test may already have moved on.
  */
 export interface RepairContext {
   runId: string;
   testId: string;
   testName: string;
-  /** The version that RAN — not necessarily the test's latest; a diagnosis must reproduce the
-   *  failure, and the latest version may already differ. */
-  version: number;
   environmentName: string;
   profile: EnvironmentProfile | null;
   definition: TestDefinition;
@@ -410,7 +407,7 @@ export interface RepairSessionResult {
   sessionId: string;
   mode: "repair";
   run: { id: string; error: string | null; failedStepIndex: number | null };
-  test: { id: string; name: string; version: number; environment: string };
+  test: { id: string; name: string; environment: string };
   /** The step being diagnosed, and where it sits in the test. */
   step: { index: number; of: number; label: string; type: Step["type"] };
   /** Whether this re-drive reproduced the original failure, and where it actually stopped. */
@@ -461,13 +458,9 @@ export interface ApplyFixResult {
   ok: true;
   testId: string;
   stepIndex: number;
-  /** The new test_version's id — what the review surface addresses it by. */
-  versionId: string;
-  /** The new test_version the fix was written as. The version it replaced is retained, so the
-   *  edit is auditable and recoverable rather than destructive. */
-  version: number;
-  /** The version it was applied on top of. */
-  baseVersion: number;
+  /** When the test's definition now says it last changed — attribution, not a revision to
+   *  report: the fix IS the test's definition now, and there is no earlier one to name. */
+  updatedAt: string;
   patch: FingerprintPatch;
   /** The verdict that authorised the write — an unresolvable candidate is never written. */
   verdict: LocatorVerdict;
@@ -553,7 +546,7 @@ export interface TestEditInsert {
 /** An arbitrary edit to a test: any step, any field, plus structure (add / remove / reorder). */
 export interface TestEditInput {
   /** Who is making the edit. Only consulted when there is no `sessionId` to read the owner off —
-   *  it supplies the email the version is attributed to. */
+   *  it supplies the email the edit is attributed to. */
   actor?: SessionActor;
   /** An open repair session — supplies the test being repaired, and the live page a `ref` names. */
   sessionId?: string;
@@ -574,12 +567,9 @@ export interface TestEditInput {
 export interface TestEditResult {
   ok: true;
   testId: string;
-  /** The new test_version's id, or empty for a name/notes-only edit that wrote none. */
-  versionId: string;
-  /** The version the edit was written as (unchanged for a name/notes-only edit). */
-  version: number;
-  /** The version it was applied on top of, which is retained. */
-  baseVersion: number;
+  /** When the test's definition now says it last changed (unchanged by a name/notes-only edit,
+   *  which touches the row rather than the definition). */
+  updatedAt: string;
   /** What was actually applied, in plain words, so it can be reported back verbatim. */
   changes: string[];
   /** The test's steps AFTER the edit — indices shift when steps are added, removed or reordered,
@@ -603,7 +593,7 @@ interface PendingHover {
 }
 
 /** Who is driving one call, when there is no session to read it off (an `edit_test` addressed by
- *  `testId` alone). It supplies the email the version it writes is attributed to. */
+ *  `testId` alone). It supplies the email the write it makes is attributed to. */
 export interface SessionActor {
   id: string;
   email: string;
@@ -673,8 +663,8 @@ function modeGuidance(mode: AuthoringMode): string {
       "Repair mode: this session records no NEW test — it opens an EXISTING one for diagnosis and editing. The browser has been driven through the test's own steps to the point the Run failed and parked there, so the page in front of you is the page the failing step faced.",
       "Diagnose first: read `diagnosis` (the matcher's verdict on the recorded locator), compare `recordedLocator` against the `nodes` actually on the page, and use observe/hover to look around. `goto_step` re-drives to any other step when the problem is not where the Run said it was.",
       "Then fix it. For a broken locator, try_locator → apply_fix: the candidate is re-checked against this live page and refused unless it resolves, which is the one edit that must never be a guess.",
-      "For everything else, read_test and edit_test can change ANY part of the test — a checkpoint's name, capture mode, compare mode, judge prompt, threshold or masks; a typed value; a navigate URL; waits; adding, removing or reordering steps; re-capturing a step's element off the live page. Same write path as the web editor: a new audited version, previous version retained.",
-      "Do only what the user asked for, and say afterwards exactly what you changed and the new version number. edit_test is not verified against the page the way apply_fix is, so when you edit a locator through it, check it with try_locator (and goto_step to re-drive) rather than declaring it fixed.",
+      "For everything else, read_test and edit_test can change ANY part of the test — a checkpoint's name, capture mode, compare mode, judge prompt, threshold or masks; a typed value; a navigate URL; waits; adding, removing or reordering steps; re-capturing a step's element off the live page. Same write path as the web editor, landing on the same one definition the test has.",
+      "Do only what the user asked for, and say afterwards exactly WHAT you changed — the steps and fields, in plain words. There is no version number to quote: a test has one definition and your edit is now it. edit_test is not verified against the page the way apply_fix is, so when you edit a locator through it, check it with try_locator (and goto_step to re-drive) rather than declaring it fixed.",
     ].join(" ");
   }
   return "You have the whole brief: walk it end to end without pausing for confirmation between steps. Take a checkpoint ONLY where the brief explicitly asks for one (e.g. 'screenshot', 'capture', 'snapshot', 'checkpoint', 'verify this screen') — never add one on your own. When every step in the brief is done, call finish_session to save the draft; nobody is waiting to tell you to.";
@@ -682,7 +672,6 @@ function modeGuidance(mode: AuthoringMode): string {
 
 export interface FinishResult {
   testId: string;
-  version: number;
   checkpointCount: number;
   /** Declared Assertions (Slice 19, slice 12), and the split that matters: `pinned` is evaluated
    *  exactly in the worker with no model call, `judged` is a model reading the page. Reported
@@ -1035,7 +1024,7 @@ export class AuthoringSessionService implements OnApplicationShutdown {
    * fingerprint can be resolved against it, the live alternatives listed, and candidate fixes
    * tried — see {@link tryLocator}.
    *
-   * It replays the definition VERSION the run actually used, not the test's latest, so the
+   * It replays the run's OWN copy of the definition, not the test as it reads today, so the
    * failure being diagnosed is the one that happened.
    *
    * Nothing is recorded and nothing is saved: `finish` and `checkpoint` refuse a repair session.
@@ -1098,7 +1087,6 @@ export class AuthoringSessionService implements OnApplicationShutdown {
         failedStepIndex: runs.failedStepIndex,
         environmentId: runs.environmentId,
         testId: replayedTestId,
-        version: replayedVersion,
         definition: replayedDefinition,
         testName: testsTable.name,
       })
@@ -1132,7 +1120,7 @@ export class AuthoringSessionService implements OnApplicationShutdown {
     }
     if (stepIndex >= definition.steps.length) {
       throw new BadRequestException(
-        `Step ${stepIndex} is out of range — this test version has ${definition.steps.length} steps.`,
+        `Step ${stepIndex} is out of range — the definition this run replayed has ${definition.steps.length} steps.`,
       );
     }
 
@@ -1203,7 +1191,6 @@ export class AuthoringSessionService implements OnApplicationShutdown {
         runId,
         testId: row.testId,
         testName: row.testName,
-        version: row.version,
         environmentName,
         profile,
         definition,
@@ -1329,7 +1316,6 @@ export class AuthoringSessionService implements OnApplicationShutdown {
       test: {
         id: repair.testId,
         name: repair.testName,
-        version: repair.version,
         environment: repair.environmentName,
       },
       step: { index: stepIndex, of: definition.steps.length, label: describeStep(step), type: step.type },
@@ -1424,7 +1410,7 @@ export class AuthoringSessionService implements OnApplicationShutdown {
   }
 
   /**
-   * Write a verified fix onto the test — a new audited `test_version` with the patched locator.
+   * Write a verified fix onto the test — the patched locator, onto the test's definition.
    *
    * Two gates stand between a suggestion and the stored test, and neither is optional:
    *
@@ -1432,14 +1418,14 @@ export class AuthoringSessionService implements OnApplicationShutdown {
    *     matcher a Run uses, immediately before the write. A candidate that is `not-found` or
    *     `ambiguous` is refused outright — this can only ever replace a broken locator with one
    *     that demonstrably resolves, never with another guess.
-   *  2. **It must be the same step.** The patch is applied to the test's LATEST version, which may
-   *     have moved on since the Run failed. If the step at that index is no longer the step being
-   *     repaired, the write is refused rather than silently landing on someone else's step.
+   *  2. **It must be the same step.** The patch is applied to the test's CURRENT definition, which
+   *     may have moved on since the Run failed. If the step at that index is no longer the step
+   *     being repaired, the write is refused rather than silently landing on someone else's step.
    *
    * The write itself goes through `TestsService.saveConfig` — the exact path the web locator
-   * editor uses — so an MCP-applied fix and a hand-applied one are the same operation, with the
-   * same validation, the same optimistic-concurrency check, and the same audit trail. The prior
-   * version is retained; this appends, it never overwrites.
+   * editor uses — so an MCP-applied fix and a hand-applied one are the same operation, landing on
+   * the same definition, with the same validation, the same stale-editor guard, and the same
+   * attribution.
    */
   async applyFix(sessionId: string, patch: FingerprintPatch): Promise<ApplyFixResult> {
     const s = this.require(sessionId);
@@ -1459,11 +1445,10 @@ export class AuthoringSessionService implements OnApplicationShutdown {
       );
     }
 
-    // Gate 2: the test may have changed since the run. Patch the LATEST version, and only if the
-    // step at this index is still the one under repair.
-    const latest = await currentVersionRow(this.db, repair.testId);
-    if (!latest) throw new NotFoundException(`Test ${repair.testId} not found`);
-    const latestDef = latest.definition as TestDefinition;
+    // Gate 2: the test may have changed since the run. Patch the test's CURRENT definition, and
+    // only if the step at this index is still the one under repair.
+    const current = await this.tests.getById(repair.testId);
+    const latestDef = current.definition;
     const target = latestDef.steps[repair.stepIndex];
     const expected = repair.definition.steps[repair.stepIndex];
     if (!target || describeStep(target) !== describeStep(expected)) {
@@ -1472,9 +1457,9 @@ export class AuthoringSessionService implements OnApplicationShutdown {
       );
     }
 
-    const { version, versionId } = await this.tests.saveConfig(
+    const { updatedAt } = await this.tests.saveConfig(
       repair.testId,
-      { baseVersion: latest.version, steps: [{ index: repair.stepIndex, target: patch }] },
+      { baseUpdatedAt: current.updatedAt, steps: [{ index: repair.stepIndex, target: patch }] },
       `${s.ownerEmail} (Claude repair)`,
     );
 
@@ -1489,20 +1474,18 @@ export class AuthoringSessionService implements OnApplicationShutdown {
       ? null
       : `Applied, but this locator matched on ${tried.matchedSignal ?? "a weak signal"} (${tried.verdict}) — ${tried.advice}`;
     this.log.log(
-      `repair ${sessionId}: wrote v${version} of test ${repair.testId} (step ${repair.stepIndex}, ${tried.matchedSignal}) for ${s.ownerEmail}`,
+      `repair ${sessionId}: wrote test ${repair.testId} (step ${repair.stepIndex}, ${tried.matchedSignal}) for ${s.ownerEmail}`,
     );
     return {
       ok: true,
       testId: repair.testId,
       stepIndex: repair.stepIndex,
-      versionId,
-      version,
-      baseVersion: latest.version,
+      updatedAt,
       patch,
       verdict: tried.verdict,
       matchedSignal: tried.matchedSignal,
       warning,
-      summary: `Step ${repair.stepIndex + 1} of "${repair.testName}" now matches on ${tried.matchedSignal}. Saved as v${version} (was v${latest.version}); the previous version is retained.`,
+      summary: `Step ${repair.stepIndex + 1} of "${repair.testName}" now matches on ${tried.matchedSignal}. The test's definition is saved with that change — it is what the next run will replay.`,
     };
   }
 
@@ -1517,7 +1500,7 @@ export class AuthoringSessionService implements OnApplicationShutdown {
   //
   // So `readTest`/`editTest` expose the WHOLE editable definition, through the very same
   // `TestsService.saveConfig` seam the web editor writes through — same validation, same optimistic
-  // lock, same audited new version, previous version retained. The difference from `applyFix` is
+  // lock, same attribution, and the same one definition overwritten. The difference from `applyFix` is
   // deliberate and worth stating plainly: a general edit is NOT verified against a live page. It
   // can write a locator that does not resolve, in the same way the web editor can.
 
@@ -1553,13 +1536,16 @@ export class AuthoringSessionService implements OnApplicationShutdown {
    * every field an edit can address. The prerequisite for changing anything — an edit is keyed by
    * step index, and an index guessed from a run's error message is how you edit the wrong step.
    *
-   * Always the LATEST version, not the one a failed run used: an edit lands on the latest, so this
-   * has to describe what the edit will actually hit.
+   * Always the test's own definition, not the one a failed run replayed: an edit lands on the
+   * test, so this has to describe what the edit will actually hit.
    */
   async readTest(input: { sessionId?: string; testId?: string }): Promise<{
     testId: string;
     name: string;
-    version: number;
+    /** When this definition last changed, and who changed it — so a repair can say whether it is
+     *  looking at something someone else has just touched. */
+    lastChangedAt: string;
+    lastChangedBy: string | null;
     notes: string | null;
     needsEnvironment: boolean;
     defaults: unknown[];
@@ -1576,7 +1562,8 @@ export class AuthoringSessionService implements OnApplicationShutdown {
     return {
       testId: config.id,
       name: config.name,
-      version: config.version,
+      lastChangedAt: config.updatedAt,
+      lastChangedBy: config.updatedBy,
       notes: config.notes,
       needsEnvironment: config.needsEnvironment,
       defaults: config.defaults,
@@ -1587,21 +1574,21 @@ export class AuthoringSessionService implements OnApplicationShutdown {
   }
 
   /**
-   * Apply an arbitrary edit to the test and write it as a new audited version.
+   * Apply an arbitrary edit to the test's definition.
    *
    * Everything the definition holds is reachable from here: per-step field edits (checkpoint name /
    * capture mode / compare mode / judge prompt / threshold / masks / region rect, the typed value,
    * a navigate URL, waits, the locator), step removal, step insertion, and reordering — plus the
    * test's name and notes, which live on the row rather than the definition and so are written
-   * separately, without bumping a version.
+   * separately, leaving the definition untouched.
    *
    * Two things it does that the web editor cannot:
    *  - `ref` — a step's locator can be RE-CAPTURED from the page the session is parked on, or an
    *    inserted click/hover/type/checkpoint can be built on a real captured fingerprint rather than
    *    a hand-written selector. That is the difference between a step that self-heals and a step
    *    hanging off one brittle CSS path.
-   *  - `baseVersion` is resolved here rather than supplied. The model has no editor tab open to go
-   *    stale, and making it guess a version number only invents 409s.
+   *  - `baseUpdatedAt` is resolved here rather than supplied. The model has no editor tab open to
+   *    go stale, and making it carry a token it cannot observe only invents 409s.
    */
   async editTest(input: TestEditInput): Promise<TestEditResult> {
     const testId = this.resolveTestId(input);
@@ -1610,8 +1597,8 @@ export class AuthoringSessionService implements OnApplicationShutdown {
     const changes: string[] = [];
 
     // Name / notes live on the test ROW (organization metadata, like folder and tags), not in the
-    // versioned definition — so they are written through the structural update and never bump a
-    // version. Deferred until the definition patch has gone through: a rejected edit should leave
+    // definition — so they are written through the structural update and leave it alone.
+    // Deferred until the definition patch has gone through: a rejected edit should leave
     // NOTHING applied, and a rename that survives a refusal is the confusing half-state.
     const rename = input.name?.trim();
     const renamesTest = rename !== undefined && rename !== "" && rename !== config.name;
@@ -1770,7 +1757,7 @@ export class AuthoringSessionService implements OnApplicationShutdown {
     }
 
     const patch: TestConfigPatch = {
-      baseVersion: config.version,
+      baseUpdatedAt: config.updatedAt,
       ...(input.defaults !== undefined ? { defaults: input.defaults } : {}),
       ...(steps.length ? { steps } : {}),
       ...(inserts.length ? { inserts } : {}),
@@ -1789,22 +1776,20 @@ export class AuthoringSessionService implements OnApplicationShutdown {
           "edit_test was given nothing to change. Pass `steps`, `inserts`, `order`, `defaults`, `assertions`, `name` or `notes` — call read_test first to see what is there.",
         );
       }
-      // A name/notes-only edit is a row update; there is no new version to report.
+      // A name/notes-only edit is a row update; the definition itself is untouched.
       await applyRowEdits();
       const after = await this.tests.getConfig(testId);
       return {
         ok: true,
         testId,
-        versionId: "",
-        version: after.version,
-        baseVersion: after.version,
+        updatedAt: after.updatedAt,
         changes,
         steps: after.steps.map((step) => this.toEditableStep(step)),
-        note: "Name/notes live on the test row, so no new test version was written.",
+        note: "Name/notes live on the test row, so the test's definition is unchanged.",
       };
     }
 
-    const { version, versionId } = await this.tests.saveConfig(
+    const { updatedAt } = await this.tests.saveConfig(
       testId,
       patch,
       `${session?.ownerEmail ?? input.actor?.email ?? "mcp"} (Claude edit)`,
@@ -1819,23 +1804,20 @@ export class AuthoringSessionService implements OnApplicationShutdown {
     if (repair && repair.testId === testId) {
       const written = await currentDefinitionOf(this.db, testId);
       if (written) repair.definition = written as TestDefinition;
-      repair.version = version;
       repair.stepIndex = Math.min(repair.stepIndex, repair.definition.steps.length - 1);
     }
     this.log.log(
-      `edit_test: wrote v${version} of test ${testId} (${changes.length} change(s)) for ${session?.ownerEmail ?? "mcp"}`,
+      `edit_test: wrote test ${testId} (${changes.length} change(s)) for ${session?.ownerEmail ?? "mcp"}`,
     );
     return {
       ok: true,
       testId,
-      versionId,
-      version,
-      baseVersion: config.version,
+      updatedAt,
       changes,
       steps: after.steps.map((step) => this.toEditableStep(step)),
       note: repair
-        ? `Saved as v${version} (v${config.version} is retained). The browser is still parked on the drive from BEFORE this edit — call goto_step to re-drive the edited test if you want to see or verify the change on the live page.`
-        : `Saved as v${version}; v${config.version} is retained.`,
+        ? "Saved onto the test's definition — that is what the next run replays. The browser is still parked on the drive from BEFORE this edit, so call goto_step to re-drive the edited test if you want to see or verify the change on the live page."
+        : "Saved onto the test's definition — that is what the next run replays.",
     };
   }
 
@@ -2507,7 +2489,7 @@ export class AuthoringSessionService implements OnApplicationShutdown {
     const s = this.require(sessionId);
     if (s.repair) {
       throw new BadRequestException(
-        `This is a repair session on run ${s.repair.runId} — there is no draft to save, and saving one would fork the test you are trying to fix. Edits here are written straight onto test ${s.repair.testId} by apply_fix / edit_test (each one a new audited version), so there is nothing left to finish: report what you changed, then call close_repair_session.`,
+        `This is a repair session on run ${s.repair.runId} — there is no draft to save, and saving one would fork the test you are trying to fix. Edits here are written straight onto test ${s.repair.testId}'s definition by apply_fix / edit_test, so there is nothing left to finish: report what you changed, then call close_repair_session.`,
       );
     }
     const definition = s.rec.getDefinition(s.name, s.viewport);
@@ -2519,19 +2501,18 @@ export class AuthoringSessionService implements OnApplicationShutdown {
     const pinnedCount = declared.filter((a) => a.pinned).length;
     const judgedCount = declared.length - pinnedCount;
     const previews = [...s.previews].map(([checkpointName, bytes]) => ({ checkpointName, bytes }));
-    const { id, version } = await this.tests.createDraft(definition, {
+    const { id } = await this.tests.createDraft(definition, {
       intent: s.intent,
       previews,
       createdBy: s.ownerEmail,
     });
-    this.sessionEvents.next({ sessionId, testId: id, version, checkpointCount, name: s.name });
+    this.sessionEvents.next({ sessionId, testId: id, checkpointCount, name: s.name });
     await this.teardown(sessionId);
     this.log.log(
-      `finished authoring session ${sessionId} → draft ${id} (v${version}, ${declared.length} assertion(s))`,
+      `finished authoring session ${sessionId} → draft ${id} (${declared.length} assertion(s))`,
     );
     return {
       testId: id,
-      version,
       checkpointCount,
       assertionCount: declared.length,
       pinnedAssertionCount: pinnedCount,

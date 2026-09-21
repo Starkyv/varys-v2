@@ -130,9 +130,9 @@ export function RunDetail({ runId }: { runId: string }) {
 
   /**
    * Re-run THIS run: the same test, against the same environment, with the same trace request —
-   * one click, no dialog, because every input is already on screen. It replays the test's LATEST
-   * version, not the one this run used (`RunsService.create` always pins the newest): the point of
-   * a re-run is "does it pass now", and re-running a superseded definition would answer a question
+   * one click, no dialog, because every input is already on screen. It replays the test's
+   * definition AS IT READS NOW, not this run's own copy of it: the point of a re-run is "does it
+   * pass now", and re-running a definition the test has moved on from would answer a question
    * nobody asked.
    *
    * The one case that cannot be one click is an environment deleted since the run — there is no id

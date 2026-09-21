@@ -36,7 +36,7 @@ const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
  * rectangles over the captured image to suppress volatile regions and nudge the per-checkpoint
  * threshold; every change re-diffs the STORED baseline+actual server-side (no re-run) and previews
  * the new verdict live. Flip the canvas to "Masked diff" to inspect the recomputed result at the
- * same zoom. Save persists masks + threshold as a new test version and re-judges the checkpoint.
+ * same zoom. Save writes masks + threshold onto the test's definition and re-judges the checkpoint.
  *
  * Zoom is a multiplier on fit-to-width (1 = fits the panel), realized as the canvas width so the
  * viewport scrolls past 100%. Masks are stored in screenshot-pixel (natural) space and positioned
@@ -135,7 +135,7 @@ export function MaskTuning({ checkpoint: cp, runId }: { checkpoint: CheckpointVi
     persist.mutate(
       { masks, threshold },
       {
-        onSuccess: (r) => toast(`Masks & threshold saved → version v${r.version}`),
+        onSuccess: () => toast("Masks & threshold saved onto the test"),
         onError: (e) => toast(e instanceof Error ? e.message : "Save failed"),
       },
     );

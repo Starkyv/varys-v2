@@ -59,7 +59,7 @@ export interface McpRunResult {
  * Running a test from an authoring or repair session (Slice 19, slice 14).
  *
  * The loop this closes: diagnose → fix → **prove it** → report. Before this, an attended repair
- * ended at "I wrote a new version" and the person who asked for it had to go and press Run to find
+ * ended at "I changed the test" and the person who asked for it had to go and press Run to find
  * out whether it worked. The fix and the proof of the fix were in different hands, which is a poor
  * place to leave a conversation that began "this test is broken, fix it".
  *
@@ -78,7 +78,7 @@ export class RunToolService {
 
   constructor(@Inject(RunsService) private readonly runs: RunsService) {}
 
-  /** Queue a run of a test's LATEST version and wait for the verdict. */
+  /** Queue a run of the test's definition AS IT READS NOW, and wait for the verdict. */
   async runTest(
     testId: string,
     opts: { actor: string; environmentId?: string; waitSeconds?: number },
@@ -89,8 +89,8 @@ export class RunToolService {
         "run_test needs a testId — pass the id of the test to run, or a sessionId to run the test a repair session is open on.",
       );
     }
-    // `create` pins the latest version, so a fix written moments ago is what this replays — which
-    // is the only reason the tool is worth having.
+    // `create` snapshots the test's definition as it reads now, so a fix written moments ago is
+    // what this replays — which is the only reason the tool is worth having.
     const { runId } = await this.runs.create(id, {
       environmentId: opts.environmentId,
       triggeredBy: opts.actor,
@@ -178,7 +178,7 @@ function noteFor(view: RunView, finished: boolean, awaiting: number): string {
   }
   switch (view.outcome) {
     case "passed":
-      return "The test verified against its baseline. If you have just repaired it, this is the evidence the repair works — say so, and say which version now runs.";
+      return "The test verified against its baseline. If you have just repaired it, this is the evidence the repair works — say so, and say in plain words what you changed.";
     case "baseline":
       return "This run set or updated the golden baseline. It verified nothing — do not report it as a pass.";
     case "pending-baseline":

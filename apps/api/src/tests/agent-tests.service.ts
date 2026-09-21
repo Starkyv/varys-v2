@@ -12,18 +12,17 @@ import type {
   CreateAgentTestRequest,
 } from "@varys/review-contract";
 import type { TestDefinition } from "@varys/step-schema";
-import { agentCheckpoints, baselines, tests, testVersions } from "@varys/db";
+import { agentCheckpoints, baselines, tests } from "@varys/db";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
 
 /**
- * The viewport recorded on an Agent-Driven Test's stub version.
+ * The viewport recorded on an Agent-Driven Test's stub definition.
  *
- * It exists only so the one `test_versions` row is a structurally valid definition; Varys does
- * not drive the browser for this kind, so nothing honours it as a capture setting. The value is
- * still the ordinary desktop default rather than something obviously fake, because
- * `baselines.viewport_key` is derived from it and a baseline keyed off a nonsense viewport reads
- * as a bug to whoever finds it later.
+ * It exists only so that definition is structurally valid; Varys does not drive the browser for
+ * this kind, so nothing honours it as a capture setting. The value is still the ordinary desktop
+ * default rather than something obviously fake, because `baselines.viewport_key` is derived from
+ * it and a baseline keyed off a nonsense viewport reads as a bug to whoever finds it later.
  */
 const STUB_VIEWPORT = { width: 1280, height: 800, deviceScaleFactor: 1 } as const;
 
@@ -42,10 +41,11 @@ function isUniqueViolation(err: unknown): boolean {
  *
  * Two properties shape everything here:
  *
- * **Unversioned.** Instructions and checkpoints are edited in place and never write a
- * `test_version`. Iterating on the wording of a prompt is not an audit event. The single version
- * row exists only because `runs.test_version_id` is `NOT NULL`, so every run still has something
- * to hang off and no join, dashboard or report needs to know this kind is different.
+ * **No definition to edit.** Instructions and checkpoints are edited in place and never touch the
+ * test's definition, which stays the zero-step placeholder written at creation. Iterating on the
+ * wording of a prompt is not an audit event. The placeholder exists only so every read of a
+ * definition gets a structurally valid one back, and no join, dashboard or report needs to know
+ * this kind is different.
  *
  * **Identity is the row id, not the name.** `baselines` is keyed by `checkpoint_name`, so a
  * rename would orphan every approved baseline for that slot. Because the checkpoint carries a
@@ -66,7 +66,7 @@ export class AgentTestsService {
    * that does the work for this kind is baseline approval, which is per-environment and already
    * exists.
    */
-  async create(input: CreateAgentTestRequest, createdBy?: string): Promise<{ id: string; version: number }> {
+  async create(input: CreateAgentTestRequest, createdBy?: string): Promise<{ id: string }> {
     return await this.insert(input, { status: "active", origin: "human", createdBy });
   }
 
@@ -86,46 +86,42 @@ export class AgentTestsService {
   async createDraft(
     input: CreateAgentTestRequest,
     createdBy?: string,
-  ): Promise<{ id: string; version: number }> {
+  ): Promise<{ id: string }> {
     return await this.insert(input, { status: "draft", origin: "ai", createdBy });
   }
 
   private async insert(
     input: CreateAgentTestRequest,
     opts: { status: "active" | "draft"; origin: "human" | "ai"; createdBy?: string },
-  ): Promise<{ id: string; version: number }> {
+  ): Promise<{ id: string }> {
     const name = input?.name?.trim();
     if (!name) throw new BadRequestException("test name cannot be empty");
     const instructions = input.instructions?.trim() || null;
 
     // Deliberately assembled rather than parsed: `testDefinition` requires at least one step, and
     // an Agent-Driven Test has none by definition. Nothing replays this — it is a placeholder that
-    // keeps the run→version foreign key intact.
+    // holds the viewport a baseline is keyed by, and nothing else.
     const definition = { name, viewport: { ...STUB_VIEWPORT }, steps: [] } as unknown as TestDefinition;
 
-    return await this.db.transaction(async (tx) => {
-      const [created] = await tx
-        .insert(tests)
-        .values({
-          name,
-          kind: "agent",
-          status: opts.status,
-          origin: opts.origin,
-          intent: instructions,
-          createdBy: opts.createdBy ?? null,
-          // Dual-write (ADR 0008): the same placeholder on the test itself. An Agent-Driven Test
-          // is unaffected in substance — it had exactly one version row before and carries
-          // exactly one definition now.
-          definition,
-          updatedBy: opts.createdBy ?? null,
-        })
-        .returning({ id: tests.id });
+    // One row, one statement: the second write this used to be wrapped in a transaction for was
+    // the version row, and there is no longer one to keep in step with it (ADR 0008). An
+    // Agent-Driven Test is unaffected in substance — it held exactly one version, written at
+    // creation and never again, and carries exactly one definition now.
+    const [created] = await this.db
+      .insert(tests)
+      .values({
+        name,
+        kind: "agent",
+        status: opts.status,
+        origin: opts.origin,
+        intent: instructions,
+        createdBy: opts.createdBy ?? null,
+        definition,
+        updatedBy: opts.createdBy ?? null,
+      })
+      .returning({ id: tests.id });
 
-      // The one and only version row, written here and never again.
-      await tx.insert(testVersions).values({ testId: created.id, version: 1, definition });
-
-      return { id: created.id, version: 1 };
-    });
+    return { id: created.id };
   }
 
   /** The test's Checkpoints in journey order. Throws if the test is not agent-driven. */

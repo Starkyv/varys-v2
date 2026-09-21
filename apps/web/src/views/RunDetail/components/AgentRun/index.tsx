@@ -430,7 +430,7 @@ function Evidence({ items }: { items: RunEvidenceView[] }) {
  * The composed AI Instructions, copied onto the run when the session started.
  *
  * Collapsed by default because it is long and is not what anyone opens a run to read — but present,
- * because instructions and checkpoints are unversioned by design: edit the wording and every past
+ * because instructions and checkpoints are edited in place: edit the wording and every past
  * run becomes unexplainable without this copy. It is also where the plaintext credentials live, by
  * explicit decision, so it is not put on screen unasked.
  */

@@ -143,7 +143,7 @@ export function CheckpointViewer({
 
         {isPending && !isContext && (
           // First capture — no baseline to diff yet, so edit the ignore regions directly on the
-          // capture that's about to become the baseline (draw / move / resize; saves a version).
+          // capture that's about to become the baseline (draw / move / resize; saves the test).
           <PendingMaskEditor checkpoint={cp} runId={runId} />
         )}
 

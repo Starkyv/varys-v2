@@ -122,8 +122,8 @@ export function TestRow({
 
 /**
  * Inline organize editor: rename, (un)file, and edit tags in one save. Pure
- * organization metadata — the server writes only organization rows (no new test
- * version), so this never touches baselines or review state.
+ * organization metadata — the server writes only organization rows, never the
+ * definition, so this never touches baselines or review state.
  */
 function OrganizeEditor({
   test,

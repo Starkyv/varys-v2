@@ -17,12 +17,12 @@ import { RunToolService } from "./run-tool.service";
 
 @Module({
   // TestsModule exports TestsService — the authoring session persists its result as a
-  // Draft through it (so all tests/test_versions writes stay in one place) — and
+  // Draft through it (so every write of a test's definition stays in one place) — and
   // AgentInstructionsService, which composes the three AI Instructions layers for an Agent Run
   // Session through the SAME path the author's preview endpoint reads, so a preview and the run
   // it previews cannot be two different documents.
   // RunsModule exports RunsService — `run_test` queues a run through the SAME path the web app's
-  // Run button uses (version pin + enqueue), rather than a second way to start a run.
+  // Run button uses (definition snapshot + enqueue), rather than a second way to start a run.
   // SettingsModule supplies the global default judge prompt an Agent-Driven Test's blank
   // compare_prompt falls back to, and the team-wide comparison default its seeded rows carry.
   imports: [TestsModule, RunsModule, SettingsModule],

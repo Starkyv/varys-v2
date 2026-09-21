@@ -5,15 +5,12 @@ export {
   baselines,
   currentDefinition,
   currentDefinitionOf,
-  currentVersion,
-  currentVersionRow,
   DDL,
   draftPreviews,
   environments,
   folders,
   replayedDefinition,
   replayedTestId,
-  replayedVersion,
   runAssertions,
   runEvidence,
   runNetwork,
@@ -27,6 +24,5 @@ export {
   tests,
   testSchedules,
   testTags,
-  testVersions,
 } from "@varys/db";
 export type { Db, DbHandle, RunStatus } from "@varys/db";

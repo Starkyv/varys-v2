@@ -338,7 +338,7 @@ export async function discardDraft(id: string): Promise<void> {
 
 /** Relational metadata for a test — name, folder (null unfiles), tags (full-list
  *  replace), and/or the cron schedule (`null` clears it, Slice 8). Never the
- *  definition: the server writes only relational rows (no new test version). */
+ *  definition: the server writes only relational rows. */
 export interface UpdateTestBody {
   name?: string;
   folderId?: string | null;
@@ -347,7 +347,7 @@ export interface UpdateTestBody {
   /** Free-form note; `null`/empty clears it. Omit to leave unchanged. */
   notes?: string | null;
   /** The test's Brief — what it is for, in the author's words; `null`/empty clears it. Omit to
-   *  leave unchanged. Writes no new test_version, so editing it never disturbs the history. */
+   *  leave unchanged. It lives on the test row, so editing it never touches the definition. */
   brief?: string | null;
   /** The wall-clock lease an Agent Run Session on this test is bounded by, in SECONDS. Omit to
    *  leave unchanged. Refused on a pinned test, which Varys runs itself. */
@@ -376,8 +376,8 @@ async function errorText(res: Response, fallback: string): Promise<string> {
 
 /* ---- Agent-Driven Tests ------------------------------------------------------------- *
  * The authoring surface for the kind with no steps: test-level AI Instructions (which reuse
- * `brief` on updateTest above) and an ordered list of Checkpoints. None of these writes a new
- * test version — iterating on wording is deliberately not an audit event. */
+ * `brief` on updateTest above) and an ordered list of Checkpoints. All of it is edited in
+ * place — iterating on wording is deliberately not an audit event. */
 
 /** Create an Agent-Driven Test. Active on create: there is no Draft and no Promote for this
  *  kind, because a person types every word of it. */
@@ -507,7 +507,7 @@ export async function deleteRun(id: string): Promise<void> {
   }
 }
 
-/** Fetch a test's editable config (waits + threshold of its latest version). */
+/** Fetch a test's editable config (the waits + thresholds of its definition). */
 export async function fetchTestConfig(id: string): Promise<TestConfigView> {
   const res = await fetch(`${API_BASE}/tests/${id}/config`);
   if (!res.ok) {
@@ -516,8 +516,8 @@ export async function fetchTestConfig(id: string): Promise<TestConfigView> {
   return (await res.json()) as TestConfigView;
 }
 
-/** Save a config patch — writes a new test version. A 409 means the test changed
- *  since it was opened (stale baseVersion); surface that distinctly so the caller can
+/** Save a config patch — changes the test's definition in place. A 409 means the test changed
+ *  since it was opened (stale `baseUpdatedAt`); surface that distinctly so the caller can
  *  prompt a reload. Throws on any non-2xx. */
 export async function saveTestConfig(
   id: string,
@@ -531,7 +531,7 @@ export async function saveTestConfig(
   if (!res.ok) {
     throw new Error(
       res.status === 409
-        ? "This test changed since you opened it. Reload to get the latest, then re-apply your edits."
+        ? "This test changed since you opened it — someone else's edit is what it says now. Reload, then re-apply your changes."
         : `Failed to save test config (${res.status})`,
     );
   }
@@ -880,7 +880,7 @@ export async function reEvaluateCheckpoint(
   return (await res.json()) as ReEvaluation;
 }
 
-/** Commit masks/threshold: writes a new test version and re-judges this
+/** Commit masks/threshold: writes them onto the test's definition and re-judges this
  *  checkpoint. Throws on failure so the caller can surface it. */
 export async function persistCheckpointMasks(
   runId: string,

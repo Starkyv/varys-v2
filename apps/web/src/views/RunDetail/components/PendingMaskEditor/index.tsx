@@ -11,7 +11,7 @@ import styles from "./styles.module.scss";
  * Mask editor for a checkpoint on its FIRST run (pending baseline). There's no prior baseline to
  * diff against yet, so unlike the run-review `MaskTuning` there's no re-evaluate/threshold preview
  * — you just draw / move / resize the regions to ignore, over the capture that's about to become
- * the baseline. Save writes a new test version (via the pending-aware `persistMasks`), so the masks
+ * the baseline. Save writes them onto the test's definition (via the pending-aware `persistMasks`), so the masks
  * are in place the moment this capture is approved and on every future run. Masks recorded during
  * authoring show up here pre-filled, so you can see and adjust them before approving.
  */
@@ -28,7 +28,7 @@ export function PendingMaskEditor({ runId, checkpoint: cp }: { runId: string; ch
     persist.mutate(
       { masks },
       {
-        onSuccess: (r) => toast(`Masks saved → version v${r.version}`),
+        onSuccess: () => toast("Masks saved onto the test"),
         onError: (e) => toast(e instanceof Error ? e.message : "Save failed"),
       },
     );

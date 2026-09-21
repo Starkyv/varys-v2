@@ -31,7 +31,7 @@ export type ReviewState = "pending-baseline" | "diff" | "passed" | "missing";
  *
  * The rows are **cumulative** — `instructions` describe only the increment from the previous
  * checkpoint, because one Agent Run Session walks the list top to bottom carrying its own session
- * state. They are also **unversioned**: editing them writes no `test_version`.
+ * state. They are also edited **in place**: rewording one is not an audit event.
  *
  * `id` is durable and `name` is a label, which is the distinction that lets a rename carry the
  * checkpoint's approved baselines rather than orphaning them.
@@ -124,14 +124,13 @@ export interface ReEvaluation {
 }
 
 /** Result of persisting masks/threshold: the named checkpoint's run_result was
- *  re-judged against the stored artifacts, and a new test_version was written. */
+ *  re-judged against the stored artifacts, and the masks were written onto the test's
+ *  definition. */
 export interface PersistResult {
   /** The checkpoint's new review state (`passed` once within threshold). */
   reviewState: ReviewState;
   diffScore: number;
   threshold: number;
-  /** The version number of the newly written test_version. */
-  version: number;
 }
 
 /** Who authored a test: a human extension recording, or Claude via the MCP authoring
@@ -147,7 +146,7 @@ export type TestOrigin = "human" | "ai";
  * Checkpoints that a locally-run Claude re-walks on every Run.
  *
  * The kind is a property of the TEST, not of its definition, because an Agent-Driven Test's
- * behaviour is unversioned — see {@link AgentCheckpoint}.
+ * behaviour lives in relational rows beside the definition — see {@link AgentCheckpoint}.
  */
 export type TestKind = "pinned" | "agent";
 
@@ -187,15 +186,8 @@ export type RunFailureKind =
   | null;
 
 /**
- * Whether a `test_version` has been through human review. Everything a person writes is
- * `reviewed` on arrival; `rejected` marks one a reviewer threw away (the test having been
- * reverted by appending its previous definition as a new version).
- */
-export type VersionReviewState = "reviewed" | "unreviewed" | "rejected";
-
-/**
  * A test's optional cron schedule (Slice 8 — Scheduling). Operational "when-to-run"
- * metadata, NOT part of the versioned definition: setting it writes no new test_version.
+ * metadata, NOT part of the definition: setting it leaves the definition untouched.
  * A row exists ⇒ the test is scheduled; `enabled` gates firing (pause without losing the
  * cron). Full shape returned by `GET /tests/:id/config`.
  */
@@ -269,10 +261,10 @@ export interface TestSummary {
   promotedAt: string | null;
   /** True when the test uses `{{baseUrl}}` — so it needs an environment (which supplies
    *  the base URL + cookies + localStorage) before it can run. Computed server-side from
-   *  the latest version's definition. */
+   *  the test's definition. */
   needsEnvironment: boolean;
   /** The test's folder (organization metadata, relational — never part of the
-   *  versioned definition). Null = Unfiled. */
+   *  definition). Null = Unfiled. */
   folderId: string | null;
   folderName: string | null;
   /** Free-form tags (many-to-many slicing across folder boundaries). */
@@ -400,18 +392,27 @@ export interface LocatorVerifyResult {
   failedStepLabel: string | null;
 }
 
-/** The test-config read-model — the latest version's editable surface (waits +
+/** The test-config read-model — the editable surface of the test's definition (waits +
  *  threshold). Produced by `GET /tests/:id/config`. */
 export interface TestConfigView {
   id: string;
   name: string;
   /** Which kind of test this is. `agent` has no steps to configure at all — its behaviour is its
-   *  AI Instructions plus its ordered Checkpoints, edited in place and never versioned — so the
-   *  detail page branches on this rather than rendering an empty step editor. */
+   *  AI Instructions plus its ordered Checkpoints, edited in place — so the detail page branches
+   *  on this rather than rendering an empty step editor. */
   kind: TestKind;
-  /** The latest version number this config reflects — echoed back as `baseVersion`
-   *  in a save so the server can reject a stale edit (optimistic concurrency). */
-  version: number;
+  /**
+   * When the test's definition was last changed, ISO-8601 — echoed back as `baseUpdatedAt` in a
+   * save so the server can reject a stale edit (optimistic concurrency).
+   *
+   * A test has ONE definition, so there is no revision number to compare against; what a second
+   * tab has to notice is that the definition moved under it, and "when it last moved" answers
+   * that exactly as well. Not shown to anyone — it is a token, not a label.
+   */
+  updatedAt: string;
+  /** Who last changed the definition (the editing user's email, or the attribution an MCP edit
+   *  wrote), or null for a test whose definition has not been edited since it was created. */
+  updatedBy: string | null;
   /** Test-level default waits applied before every wait-supporting step. */
   defaults: ConfigWait[];
   steps: TestConfigStep[];
@@ -423,8 +424,8 @@ export interface TestConfigView {
   /**
    * The test's BRIEF (`tests.intent`) — the author's statement of what this test is for, or null
    * when it has none. Editable here, and written via the structural `PATCH /tests/:id`, so
-   * changing it writes NO new test_version: the Brief says what the test is for, not what it
-   * does, and re-stating it must not disturb the test's history or its baselines.
+   * changing it leaves the DEFINITION alone: the Brief says what the test is for, not what it
+   * does, and re-stating it must not disturb what the test runs or its baselines.
    *
    * Load-bearing since Slice 19 slice 05: an automated repair has to be justified against a
    * clause of this, and a test with no Brief cannot be repaired automatically at all.
@@ -436,8 +437,8 @@ export interface TestConfigView {
   /**
    * The wall-clock lease an Agent Run Session on this test is given, in seconds — the bound on an
    * agent that will not stop. Meaningful only for `kind: "agent"`; a pinned test carries the
-   * default and ignores it. Written via the structural `PATCH /tests/:id`, so changing it writes
-   * no test_version — the lease is operational metadata, like the schedule.
+   * default and ignores it. Written via the structural `PATCH /tests/:id`, so changing it leaves
+   * the definition alone — the lease is operational metadata, like the schedule.
    */
   agentLeaseSeconds: number;
   /** The test's declared Assertions (slice 09), with their pinned form spelled out — which
@@ -462,7 +463,7 @@ export interface TestConfigStepPatch {
   remove?: boolean;
   /** Screenshot-only: RENAME the checkpoint. The name is part of the baseline key, so the
    *  server moves this test's baselines and draft previews onto the new name in the same
-   *  transaction as the version write — a rename re-points the golden rather than orphaning
+   *  transaction as the definition write — a rename re-points the golden rather than orphaning
    *  it. Names must stay unique within the test. */
   name?: string;
   /** Screenshot-only: switch how the checkpoint is CAPTURED. `element` needs a target (the
@@ -538,11 +539,13 @@ export interface TestConfigStepInsert {
   step: NewStepInput;
 }
 
-/** The body of `PUT /tests/:id/config`: a targeted patch the server applies onto the
- *  latest definition, writing a new audited test version. */
+/** The body of `PUT /tests/:id/config`: a targeted patch the server applies onto the test's
+ *  definition, changing it in place. */
 export interface TestConfigPatch {
-  /** The version the edit was based on — the server returns 409 if a newer one exists. */
-  baseVersion: number;
+  /** `updatedAt` as it was when the edit was opened — the server returns 409 if the test's
+   *  definition has changed since. The stale-editor guard, keyed on when the definition last
+   *  moved rather than on a revision number. */
+  baseUpdatedAt: string;
   /** Replace the test-level default waits (authorable kinds only). Omit to leave as-is. */
   defaults?: EditableWait[];
   /** Per-step edits. Omit to leave all steps as-is. */
@@ -583,9 +586,10 @@ export interface TestConfigAssertionPatch {
   remove?: boolean;
 }
 
-/** Result of a config save: the version number of the newly written test_version. */
+/** Result of a config save: when the definition now says it last changed — the token the next
+ *  save from this editor is guarded against. */
 export interface SaveConfigResult {
-  version: number;
+  updatedAt: string;
 }
 
 /**
@@ -847,7 +851,6 @@ export interface AuthoringDraftEvent {
   sessionId: string;
   /** The created Draft test id. */
   testId: string;
-  version: number;
   checkpointCount: number;
   /** The authored test's name. */
   name: string;
@@ -1176,8 +1179,8 @@ export interface CheckpointView {
   threshold: number;
   /** Whether the locator fell back to a lower-priority signal during the run. */
   healed: boolean;
-  /** The checkpoint's current masks (from the latest test version) — the regions
-   *  the diff ignores; what the in-viewer mask editor renders and edits. */
+  /** The checkpoint's current masks (from the TEST's definition, not this run's copy of it) —
+   *  the regions the diff ignores; what the in-viewer mask editor renders and edits. */
   masks: Rect[];
   /** Authenticated artifact-route URLs. baseline/diff are null on a first seed. */
   actualUrl: string | null;
@@ -1658,9 +1661,9 @@ export interface RunView {
   /**
    * The fully composed AI Instructions this run was started with, copied onto it verbatim.
    *
-   * The compensating control for unversioned instructions: suite, test and checkpoint text are all
-   * editable without writing a `test_version`, so without this copy a run from six weeks ago is
-   * unexplainable. Null for a pinned run.
+   * The compensating control for instructions edited in place: suite, test and checkpoint text
+   * are all editable, so without this copy a run from six weeks ago is unexplainable. Null for a
+   * pinned run.
    */
   agentInstructions: string | null;
   /** Extra screenshots the agent attached during the session, oldest first. Empty for a pinned

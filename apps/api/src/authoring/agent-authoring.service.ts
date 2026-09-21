@@ -24,7 +24,7 @@ import { decodePng, type CallerContext, type ImageArg } from "./png";
  * **These are the editor's own operations, not a second way to write the same rows.** Creation and
  * checkpoint insertion both go through {@link AgentTestsService}, so the unique index on
  * `(test_id, name)` — which the Checkpoint Manifest's closed-set property rests on — is enforced
- * identically whoever is writing, and the single `test_versions` row is written by the same code
+ * identically whoever is writing, and the test's stub definition is written by the same code
  * that writes it for a person.
  */
 @Injectable()

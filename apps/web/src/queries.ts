@@ -361,9 +361,9 @@ export function useTestConfig(id: string, opts?: { enabled?: boolean }) {
   });
 }
 
-/** Save a config patch (new test version). On success, refresh this test's config (so
- *  the editor rebases on the new version) and the tests list (its needs-environment
- *  flag is derived from the latest definition). */
+/** Save a config patch. On success, refresh this test's config (so the editor rebases on the
+ *  definition as saved) and the tests list (its needs-environment flag is derived from that
+ *  definition). */
 export function useSaveTestConfig(id: string) {
   const qc = useQueryClient();
   return useMutation({

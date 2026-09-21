@@ -3,7 +3,7 @@ import { BadRequestException, Inject, Injectable, Logger, NotFoundException } fr
 import {
   agentCheckpoints,
   baselines,
-  currentVersionRow,
+  currentDefinitionOf,
   environments,
   replayedDefinition,
   replayedTestId,
@@ -163,7 +163,7 @@ export interface AgentRunSession {
  * Call the tool, walk away, and the run is already correctly red.
  *
  * The composed instruction text is **copied onto the run**, not referenced: instructions and
- * checkpoints are unversioned by design, so without the copy a run from six weeks ago becomes
+ * checkpoints are edited in place, so without the copy a run from six weeks ago becomes
  * unexplainable once its layers have been edited.
  */
 @Injectable()
@@ -290,12 +290,14 @@ export class AgentRunService {
 
     const env = await this.instructions.resolveEnvironment(opts.environmentId);
 
-    const version = await currentVersionRow(this.db, id);
-    if (!version) throw new NotFoundException(`Test ${id} has no version row`);
-    // The stub version's viewport, so a baseline seeded by approving one of these captures is
+    // The definition, from the test. An Agent-Driven Test's is the zero-step placeholder written
+    // at creation — it holds no steps, but it does hold the viewport.
+    const definition = (await currentDefinitionOf(this.db, id)) as TestDefinition | null;
+    if (!definition) throw new NotFoundException(`Test ${id} has no definition`);
+    // The definition's viewport, so a baseline seeded by approving one of these captures is
     // keyed exactly as the next session looks it up. Nothing honours it as a capture setting —
     // Varys does not perform the capture — but the two sides must agree on the key.
-    const vpKey = viewportKeyOf((version.definition as TestDefinition).viewport);
+    const vpKey = viewportKeyOf(definition.viewport);
 
     const comparison = await this.settings.getImageComparison();
 
@@ -323,11 +325,10 @@ export class AgentRunService {
       const [run] = await tx
         .insert(runs)
         .values({
-          testVersionId: version.id,
-          // Dual-write (ADR 0008): the Run's own copy of the (placeholder) definition it was
-          // opened against, and its direct link to the test.
+          // The Run's own copy of the (placeholder) definition it was opened against, and its
+          // direct link to the test (ADR 0008).
           testId: id,
-          definition: version.definition,
+          definition,
           environmentId: env.id,
           status: "failed",
           // Red from the outset, and truthfully so: nothing has been reached yet. This is not a

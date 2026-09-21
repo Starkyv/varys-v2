@@ -84,7 +84,7 @@ export class SuiteRunsService {
    * Trigger `suite × env(s)`: snapshot the membership NOW, insert the parent
    * (with the suite-name snapshot), then fan out one ordinary child run per
    * (member test × environment) through the existing single-run creation path
-   * (latest-version pin + enqueue). No environments selected ⇒ one env-less
+   * (definition snapshot + enqueue). No environments selected ⇒ one env-less
    * ("default") child per test, mirroring the optional-env single run.
    */
   async trigger(
@@ -148,7 +148,7 @@ export class SuiteRunsService {
    * Re-run a past fan-out: the SAME suite against the SAME environments, resolved fresh.
    * Membership is re-read at trigger time (that is what `trigger` does), so a re-run answers
    * "does the suite pass now", not "did that exact set of tests pass" — the same choice the
-   * single-run re-run makes by pinning the latest version.
+   * single-run re-run makes by snapshotting the test's definition as it reads now.
    *
    * Two things can make it impossible, and both are refusals rather than a quiet substitution:
    * the suite is gone (nothing to re-resolve membership from), or every environment the fan-out

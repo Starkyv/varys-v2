@@ -41,8 +41,9 @@ import styles from "./styles.module.scss";
  * overlap: this kind has no fingerprints to tune, no waits to insert and no thresholds to set.
  * What it has is prose a person writes and an ordered list of Checkpoints.
  *
- * Nothing here writes a test version. That is the point of the kind, and the copy says so, because
- * an author used to every edit being audited will otherwise assume it silently was.
+ * Nothing here touches a definition: the instructions and the checkpoints ARE the test, edited in
+ * place. The copy says so, because an author who has seen the step editor will otherwise assume
+ * there is a saved revision of this somewhere.
  */
 export function AgentTestEditor({ config }: { config: TestConfigView }) {
   const checkpoints = useAgentCheckpoints(config.id);
@@ -170,7 +171,7 @@ function ComposedInstructionsCard({ config }: { config: TestConfigView }) {
  * The test-level AI Instructions.
  *
  * Stored on `tests.intent` — the same field a pinned test's Brief uses — and written through the
- * structural test patch, so saving writes no new version.
+ * structural test patch, so saving touches no definition.
  */
 function InstructionsCard({ config }: { config: TestConfigView }) {
   const update = useUpdateTest();
@@ -508,7 +509,8 @@ export function AgentTestNotice() {
       <span>
         This is an <strong>agent-driven</strong> test: it has no recorded steps. Your own local
         Claude walks these instructions each run, so it can’t be added to a suite or a schedule —
-        there is nothing to run it unattended. Editing anything here writes no new version.
+        there is nothing to run it unattended. Everything here is edited in place and takes effect on
+        the next run.
       </span>
     </div>
   );
