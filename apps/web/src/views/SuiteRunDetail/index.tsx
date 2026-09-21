@@ -47,11 +47,9 @@ function matches(child: SuiteRunChild, filter: Filter): boolean {
     case "failed":
       return child.status === "failed";
     case "review":
-      // A healed child is a queue item too — it verified on a repair nobody has accepted — so it
-      // belongs with the things waiting on a person, even though its status reads `passed`.
-      return child.status === "needs_review" || child.outcome === "healed";
+      return child.status === "needs_review";
     case "passed":
-      return child.status === "passed" && child.outcome !== "healed";
+      return child.status === "passed";
   }
 }
 
@@ -92,11 +90,6 @@ export function SuiteRunDetail({ suiteRunId }: { suiteRunId: string }) {
 
   const tiles = [
     { label: "Passed", value: c.passed, cls: styles.passed },
-    // A SUBSET of Passed, not a sibling: a healed child verified, so it stays counted as passed
-    // and the suite still reads green — this tile is how much of that green is resting on repairs
-    // nobody has accepted yet. Shown only when there are any, so a suite with no repairs in play
-    // is not asked to explain a zero.
-    ...(c.healed > 0 ? [{ label: "Healed", value: c.healed, cls: styles.review }] : []),
     { label: "Review", value: c.needsReview, cls: styles.review },
     { label: "Failed", value: c.failed, cls: styles.failed },
     { label: "Running", value: c.running, cls: styles.neutral },

@@ -433,18 +433,8 @@
   }
 }
 
-/* --- two mode cards (step 2) --- */
-.twoUp {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--space-16);
-
-  @media (max-width: 640px) {
-    grid-template-columns: 1fr;
-  }
-}
-
-.modeCard {
+/* --- the brief card (step 2) --- */
+.briefCard {
   display: flex;
   flex-direction: column;
   gap: var(--space-12);
@@ -460,65 +450,13 @@
   }
 }
 
-.modeHead {
-  display: flex;
-  align-items: center;
-  gap: var(--space-12);
-}
-
-.modeIcon {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 38px;
-  height: 38px;
-  border-radius: var(--radius-md);
-  background: var(--color-primary-soft);
-  color: var(--color-primary);
-}
-
-.modeTitleWrap {
-  flex: 1;
-  min-width: 0;
-}
-
-.modeTitle {
-  font-family: var(--font-display);
-  font-size: var(--font-size-md);
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text-strong);
-  line-height: 1.2;
-}
-
-.modeTags {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  margin-top: 3px;
-}
-
-.modeTag {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--color-primary);
-  background: var(--color-primary-soft);
-  padding: 1px 6px;
-  border-radius: var(--radius-sm);
-}
-
-.modeTagSub {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-subtle);
-}
-
-.modeDesc {
+.briefDesc {
   font-size: var(--font-size-sm);
   line-height: 1.6;
   color: var(--color-text-muted);
 }
 
-.modeExample {
+.briefExample {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -531,7 +469,7 @@
   color: var(--color-text);
 }
 
-.modeLine {
+.briefLine {
   display: flex;
   gap: 7px;
 
@@ -545,11 +483,11 @@
   }
 }
 
-.modeChevron {
+.briefChevron {
   color: var(--color-primary);
 }
 
-.modeShortcut {
+.briefShortcut {
   display: flex;
   align-items: center;
   gap: 7px;
@@ -557,14 +495,14 @@
   color: var(--color-text-subtle);
 }
 
-.modeShortcutLabel {
+.briefShortcutLabel {
   flex: 0 0 auto;
   text-transform: uppercase;
   letter-spacing: var(--letter-spacing-wide);
   font-weight: var(--font-weight-semibold);
 }
 
-.modeShortcutCode {
+.briefShortcutCode {
   font-family: var(--font-mono);
   color: var(--color-primary);
   background: var(--color-primary-soft);
@@ -1196,5 +1134,139 @@
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+/* ── the kind choice ──────────────────────────────────────────────────────
+   Shown before a conversation starts and hidden once one is live. Two cards
+   rather than a select: the difference between them is a paragraph each and a
+   cost consequence, none of which fits in a dropdown option. */
+
+.kindPicker {
+  padding: var(--space-16);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  background: var(--color-bg-surface);
+}
+
+.kindHead {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-10);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-12);
+}
+
+.kindLabel {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+}
+
+.kindHint {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+
+.kindOptions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--space-12);
+}
+
+.kindCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  text-align: left;
+  padding: var(--space-12);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-surface);
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease-standard),
+    background var(--duration-fast) var(--ease-standard);
+
+  &:hover {
+    border-color: var(--color-border-strong);
+    background: var(--color-bg-subtle);
+  }
+
+  &:focus-visible {
+    @include focus-ring;
+  }
+}
+
+.kindCardOn {
+  border-color: var(--color-primary);
+  background: var(--color-bg-subtle);
+}
+
+.kindCardHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.kindCardTitle {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+}
+
+.kindCardTag {
+  padding: 0 var(--space-6);
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--radius-full);
+  background: var(--color-bg-inset);
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.kindCardTick {
+  margin-left: auto;
+  color: var(--color-primary);
+}
+
+.kindCardDesc {
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-relaxed);
+  color: var(--color-text-muted);
+}
+
+/* The cost line is the part people regret not reading, so it is set apart rather
+   than folded into the description. */
+.kindCardCost {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-subtle);
+}
+
+.kindCardCostWarn {
+  color: var(--color-warning-fg);
+}
+
+/* Locked: a conversation is under way and the question is already answered. Kept
+   visible rather than hidden, so the answer stays readable. */
+.kindCard:disabled {
+  cursor: default;
+  opacity: 0.62;
+
+  &:hover {
+    border-color: var(--color-border);
+    background: var(--color-bg-surface);
+  }
+}
+
+.kindCardOn:disabled {
+  opacity: 1;
+  border-color: var(--color-primary);
+
+  &:hover {
+    border-color: var(--color-primary);
+    background: var(--color-bg-subtle);
   }
 }

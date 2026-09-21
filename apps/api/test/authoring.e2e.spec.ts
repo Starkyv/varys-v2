@@ -62,7 +62,6 @@ describe("Authoring → MCP → Draft", () => {
     const opened = await callTool("open_session", {
       startUrl: fixture.url,
       name: "compare modes",
-      mode: "batch",
     });
     const sid: string = opened.sessionId;
 
@@ -106,7 +105,6 @@ describe("Authoring → MCP → Draft", () => {
     const opened = await callTool("open_session", {
       startUrl: fixture.url,
       name: "streamed answer",
-      mode: "batch",
     });
     const sid: string = opened.sessionId;
 
@@ -138,7 +136,6 @@ describe("Authoring → MCP → Draft", () => {
     const opened = await callTool("open_session", {
       startUrl: fixture.url,
       name: "wrong turn",
-      mode: "batch",
     });
     const sid: string = opened.sessionId;
     await callTool("checkpoint", { sessionId: sid, name: "junk", mode: "fullpage" });
@@ -179,17 +176,42 @@ describe("Authoring → MCP → Draft", () => {
     await rpc("notifications/initialized", {}, null).expect(202);
   });
 
+  it("offers one way to author: open_session has no mode, and refuses one if passed", async () => {
+    const list = await rpc("tools/list", {}).expect(200);
+    const tools = list.body.result.tools as Array<{
+      name: string;
+      inputSchema: { properties: Record<string, unknown>; required?: string[] };
+    }>;
+    const open = tools.find((t) => t.name === "open_session");
+    expect(open?.inputSchema.properties).not.toHaveProperty("mode");
+    expect(open?.inputSchema.required).toEqual(["startUrl"]);
+    const finish = tools.find((t) => t.name === "finish_session");
+    expect(finish?.inputSchema.properties).not.toHaveProperty("confirm");
+
+    // Refused rather than ignored: a stale instruction override that still teaches `mode` must
+    // fail loudly instead of opening a session whose steering nobody supplied.
+    const refused = await rpc("tools/call", {
+      name: "open_session",
+      arguments: { startUrl: fixture.url, name: "moded", mode: "interactive" },
+    }).expect(200);
+    expect(refused.body.result.isError).toBe(true);
+    expect(refused.body.result.content[0].text).toMatch(/takes no `mode`/i);
+
+    // And no session was opened by the refused call.
+    const sessions = (await authed(app).get("/authoring/sessions").expect(200)).body as Array<{ name: string }>;
+    expect(sessions.some((x) => x.name === "moded")).toBe(false);
+  });
+
   it("a navigate-only session produces a retrievable Draft (origin ai, 0 checkpoints)", async () => {
     const opened = await callTool("open_session", {
       startUrl: fixture.url,
       name: "smoke test",
       intent: "verify the page loads",
-      mode: "interactive",
     });
     expect(opened.sessionId).toEqual(expect.any(String));
     expect(typeof opened.url).toBe("string");
 
-    const finished = await callTool("finish_session", { sessionId: opened.sessionId, confirm: true });
+    const finished = await callTool("finish_session", { sessionId: opened.sessionId });
     expect(finished.testId).toEqual(expect.any(String));
     expect(finished.checkpointCount).toBe(0);
     expect(finished.warning).toMatch(/no checkpoints/i);
@@ -224,7 +246,6 @@ describe("Authoring → MCP → Draft", () => {
       startUrl: fixture.url,
       name: "login flow",
       intent: "log in and reach the welcome state",
-      mode: "interactive",
     });
     const sid: string = opened.sessionId;
     const nodes: Array<{ ref: string; tag: string; name: string; role: string }> = opened.nodes;
@@ -247,7 +268,7 @@ describe("Authoring → MCP → Draft", () => {
     const cp = await callTool("checkpoint", { sessionId: sid, name: "welcome", mode: "fullpage" });
     expect(cp.recorded).toMatchObject({ type: "screenshot", checkpoint: "welcome" });
 
-    const finished = await callTool("finish_session", { sessionId: sid, confirm: true });
+    const finished = await callTool("finish_session", { sessionId: sid });
     expect(finished.checkpointCount).toBe(1);
     expect(finished.warning).toBeNull();
 
@@ -279,7 +300,6 @@ describe("Authoring → MCP → Draft", () => {
     const opened = await callTool("open_session", {
       startUrl: fixture.url,
       name: "locator signals",
-      mode: "batch",
     });
     const sid: string = opened.sessionId;
     type Node = {
@@ -344,7 +364,7 @@ describe("Authoring → MCP → Draft", () => {
     expect(cardProbe.advice).toMatch(/do not record/i);
 
     // The probe records nothing: the session is still empty apart from the entry navigate.
-    const finished = await callTool("finish_session", { sessionId: sid, confirm: true });
+    const finished = await callTool("finish_session", { sessionId: sid });
     expect(finished.checkpointCount).toBe(0);
   }, 60_000);
 

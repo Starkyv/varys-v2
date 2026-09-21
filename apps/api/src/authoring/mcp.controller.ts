@@ -1,7 +1,6 @@
 import type { IncomingHttpHeaders } from "node:http";
-import { BadRequestException, Body, Controller, Get, Headers, HttpException, Inject, Post, Res } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Headers, HttpException, Inject, Post, Req, Res } from "@nestjs/common";
 import { Public } from "../auth/public.decorator";
-import { RepairJobsService } from "../repair-jobs/repair-jobs.service";
 import type { PinAssertionInput } from "./authoring-session.service";
 import { AuthoringInstructionsService } from "./authoring-instructions.service";
 import {
@@ -9,8 +8,16 @@ import {
   type CheckpointInput,
   type TestEditInput,
 } from "./authoring-session.service";
+import { AgentAuthoringService } from "./agent-authoring.service";
+import {
+  AgentRunService,
+  type AgentCaptureMeta,
+  type AgentVerdict,
+} from "./agent-run.service";
+import { BridgeService } from "./bridge.service";
 import { McpAuthService, type McpPrincipal, McpUnauthorized } from "./mcp-auth.service";
 import { McpStatusService } from "./mcp-status.service";
+import type { CallerContext } from "./png";
 import { RunToolService } from "./run-tool.service";
 
 /** The slice of the HTTP response we touch — avoids depending on express types directly
@@ -18,6 +25,66 @@ import { RunToolService } from "./run-tool.service";
 interface HttpRes {
   status(code: number): unknown;
   setHeader(name: string, value: string): unknown;
+}
+
+/** The slice of the HTTP request we touch, for the same reason. Only the peer address: the
+ *  headers already arrive separately, and the socket is the one thing a caller cannot forge. */
+interface HttpReq {
+  socket?: { remoteAddress?: string | undefined } | undefined;
+}
+
+/**
+ * The screenshot arguments every capture-taking tool shares, and the order of preference they
+ * teach.
+ *
+ * `imagePath` is listed FIRST and described as preferred for a reason that is not stylistic: a
+ * screenshot sent as `image` travels through the model's own output, where a megabyte of base64
+ * is a megabyte of tokens, and base64 that gets cut short decodes without complaint into a
+ * perfectly-formed half-image. Varys now refuses those (the IEND check in `decodePng`) — but
+ * refusing is recovery, and a path is prevention: the bytes never enter the conversation at all.
+ *
+ * `sha256` exists for the times a path is impossible. It costs one shell command and turns
+ * "corrupted and stored" into "corrupted and refused".
+ *
+ * The path's description changes with the caller because its availability does: a client that is
+ * not on this machine would be naming a file on the server, so it is refused there, and a tool
+ * schema that offered it anyway would be sending the model at a wall.
+ */
+function imageArgs(subject: string, ctx: CallerContext): Record<string, unknown> {
+  return {
+    imagePath: {
+      type: "string",
+      description: ctx.local
+        ? `PREFERRED — the absolute path to ${subject} on this machine, which Varys opens itself. Use it whenever the capture is on disk, and write it to disk if it is not: bytes read from a file cannot be truncated on the way here, and a truncated screenshot is not something anyone can spot afterwards. \`~\` is expanded; a \`file://\` URL is accepted.`
+        : `Not available on this connection — you are not on the same machine as Varys, so a path here would name a file on the server rather than one of yours. Send \`image\` with \`sha256\`.`,
+    },
+    image: {
+      type: "string",
+      description: `${subject}, as base64-encoded PNG bytes (a \`data:\` URL is fine too). Needed only when you cannot give \`imagePath\`. Send \`sha256\` with it: a long base64 string is easy to cut short and impossible to recognise as cut short.`,
+    },
+    sha256: {
+      type: "string",
+      description:
+        "Hex SHA-256 of the PNG file's own bytes (`shasum -a 256 shot.png`). Optional, and worth it with `image` — it is the difference between a corrupted upload being refused and being stored for a human to puzzle over.",
+    },
+  };
+}
+
+/**
+ * Is the client a process on THIS machine?
+ *
+ * It decides one thing only: whether `imagePath` is honoured, i.e. whether "the file at
+ * /Users/…/shot.png" names the caller's file or a stranger's. The peer address is the
+ * authority because it is the one property of a request nobody can assert — and a forwarding
+ * header is treated as disqualifying rather than as evidence, because a proxy hop means the
+ * socket peer is the proxy and the real client is somewhere else entirely. Varys sets no
+ * `trust proxy`, so there is no configured hop to make an exception for.
+ */
+function callerContext(req: HttpReq, headers: IncomingHttpHeaders): CallerContext {
+  const forwarded = headers["x-forwarded-for"] ?? headers.forwarded;
+  const addr = req?.socket?.remoteAddress ?? "";
+  const loopback = addr === "::1" || addr === "127.0.0.1" || addr.startsWith("::ffff:127.");
+  return { local: loopback && !forwarded };
 }
 
 /**
@@ -130,96 +197,6 @@ const LOCATOR_PATCH_SCHEMA = {
   },
 } as const;
 
-/**
- * The toolset a Repair Agent principal may reach (ADR-0005 / slice 02): the repair path plus the
- * perception and interaction tools needed to investigate a parked page. Everything else is absent
- * from `tools/list` AND unresolvable in `tools/call`, so this is a capability boundary, not a hint.
- *
- * Three deliberate exclusions:
- *  - `open_session`, `checkpoint`, `pin_assertion`, `declare_unpinnable_assertion`,
- *    `finish_session`, `discard_session` — authoring a NEW test is a human act; an agent that could
- *    open an Authoring Session could invent tests unattended. The two assertion tools sit here for
- *    a sharper reason than the rest: an agent able to DECLARE a check could answer a red run by
- *    writing a new assertion that passes, which is the failure the whole repair-safety story is
- *    built to prevent. A drainer changes assertions only through `edit_test`, which refuses any id
- *    the test does not already declare.
- *  - `failed_runs` — a cross-test read. A drainer is handed its work by the job it claimed; it has
- *    no business browsing every other test's failures.
- *  - `find_elements` — read-only perception, and arguably harmless for a drainer diagnosing why an
- *    assertion could not read a value. Withheld anyway: widening an agent's capability surface is
- *    a decision to take deliberately, not a side effect of the slice that introduced the tool.
- *  - baseline approval — not an MCP tool at anyone's disposal, and permanently off-limits to an
- *    agent per DESIGN.md §4 (approving deletes the previous baseline with no rollback).
- */
-const AGENT_TOOLS: readonly string[] = [
-  "claim_repair_job",
-  "release_repair_job",
-  "report_repair",
-  "report_triage",
-  "open_repair_session",
-  "close_repair_session",
-  "read_test",
-  "edit_test",
-  "try_locator",
-  "apply_fix",
-  "goto_step",
-  "observe",
-  "click",
-  "hover",
-  "navigate",
-  "type",
-  "verify_locator",
-];
-
-/**
- * Tools only an AGENT principal may see (slice 03). Draining the queue is a machine's job: a
- * human who wants a test repaired opens a Repair Session on it directly, and a claim taken by a
- * person is a claim no drainer can finish and nothing can lapse. Filtered out of `tools/list` and
- * `tools/call` for a human exactly as `AGENT_TOOLS` filters the other way, so an out-of-scope
- * tool reads as "Unknown tool" for either principal.
- */
-const AGENT_ONLY_TOOLS: readonly string[] = [
-  "claim_repair_job",
-  "release_repair_job",
-  "report_repair",
-  "report_triage",
-];
-
-/**
- * Tools that CHANGE a test, and therefore need a claim on a `repair` job specifically (Slice 19,
- * slice 08).
- *
- * This is the enforcement half of "a triage claim grants observation only". It is structural rather
- * than advisory: a drainer holding a triage claim reaches the page, the definition and the failure
- * to READ them, and is refused here the moment it tries to write — no matter how convinced it is
- * that it knows the fix.
- *
- * `report_repair` is on the list because it is the act that makes a repair stand; it also refuses a
- * triage job on its own, so the two checks agree rather than one covering for the other.
- *
- * Baseline approval is absent for a different reason: it is not an MCP tool at all, for anyone.
- * Per DESIGN.md §4 approving deletes the previous baseline with no rollback, so an agent that could
- * approve one could permanently erase the evidence that a regression happened.
- */
-const REPAIR_CLAIM_TOOLS: readonly string[] = ["apply_fix", "edit_test", "report_repair"];
-
-/**
- * For an agent principal: which arguments of a tool name the TEST it would reach, and whether one
- * is mandatory. Declared per tool rather than sniffed off the argument names, because `testId` on
- * `try_locator`/`apply_fix` is the target's *data-testid* — treating that as a Varys test id would
- * check the scope of the wrong thing entirely.
- *
- * A tool listed here with none of its id arguments supplied is addressing an open SESSION instead;
- * that is covered separately, and twice over: `assertOwner` refuses a session this principal does
- * not own, and the claim on the session's test is re-checked on every call (slice 04) so a
- * released or lapsed claim cannot be outlived by a session opened under it.
- */
-const AGENT_TEST_SCOPE: Record<string, { args: readonly ("testId" | "runId")[]; required: boolean }> = {
-  open_repair_session: { args: ["runId", "testId"], required: true },
-  read_test: { args: ["testId"], required: false },
-  edit_test: { args: ["testId"], required: false },
-};
-
 // `@Public()` exempts this route from the COOKIE guard only — Claude Code is a separate
 // process with no browser cookie. It is not unauthenticated: `rpc` below requires an OAuth
 // bearer token on every request and 401s without one (Slice 16, superseding the earlier
@@ -232,10 +209,18 @@ export class McpController {
     @Inject(McpStatusService) private readonly mcpStatus: McpStatusService,
     @Inject(McpAuthService) private readonly mcpAuth: McpAuthService,
     @Inject(AuthoringInstructionsService) private readonly instructions: AuthoringInstructionsService,
-    @Inject(RepairJobsService) private readonly repairJobs: RepairJobsService,
     // Running a test and reading the verdict back (slice 14) — the half of "fix it" that proves
     // the fix. Human principals only; see `RunToolService` for why an agent may not reach it.
     @Inject(RunToolService) private readonly runTool: RunToolService,
+    // Starting an Agent Run Session (Agent-Driven Tests) — the one MCP surface that hands work
+    // OUT to the caller's own machine rather than driving anything here.
+    @Inject(AgentRunService) private readonly agentRun: AgentRunService,
+    // Only so a Run STARTING can close out the web-app request that asked for it. The relay holds
+    // that request; nothing about the session depends on the relay knowing.
+    @Inject(BridgeService) private readonly bridge: BridgeService,
+    // WRITING an Agent-Driven Test, as opposed to running one. Human principals only, and only
+    // ever into a Draft — see `AgentAuthoringService`.
+    @Inject(AgentAuthoringService) private readonly agentAuthoring: AgentAuthoringService,
   ) {}
 
   // Streamable HTTP: this server doesn't push, so the optional server→client SSE stream
@@ -249,6 +234,7 @@ export class McpController {
   async rpc(
     @Body() body: JsonRpcMessage | JsonRpcMessage[],
     @Headers() headers: IncomingHttpHeaders,
+    @Req() req: HttpReq,
     @Res({ passthrough: true }) res: HttpRes,
   ): Promise<unknown> {
     // Authenticate BEFORE anything else — including before touching the status service, so
@@ -262,14 +248,15 @@ export class McpController {
     }
 
     this.mcpStatus.touch(user.id); // record activity so THIS user's web app shows "active"
+    const ctx = callerContext(req, headers);
     let result: unknown;
     if (Array.isArray(body)) {
-      const out = (await Promise.all(body.map((m) => this.handle(m, user)))).filter(
+      const out = (await Promise.all(body.map((m) => this.handle(m, user, ctx)))).filter(
         (r): r is JsonRpcResponse => r !== undefined,
       );
       result = out.length ? out : undefined;
     } else {
-      result = await this.handle(body, user);
+      result = await this.handle(body, user, ctx);
     }
     // Streamable HTTP: a POST carrying only notifications/responses (nothing to answer)
     // gets 202 Accepted with no body; a request gets its JSON-RPC response with 200.
@@ -303,11 +290,12 @@ export class McpController {
   private async handle(
     msg: JsonRpcMessage,
     user: McpPrincipal,
+    ctx: CallerContext,
   ): Promise<JsonRpcResponse | undefined> {
     const id = msg?.id ?? null;
     const isNotification = msg?.id === undefined || msg?.id === null;
     try {
-      const result = await this.dispatch(msg?.method, msg?.params ?? {}, user);
+      const result = await this.dispatch(msg?.method, msg?.params ?? {}, user, ctx);
       return isNotification ? undefined : { jsonrpc: "2.0", id, result };
     } catch (err) {
       if (isNotification) return undefined;
@@ -320,6 +308,7 @@ export class McpController {
     method: string | undefined,
     params: Record<string, unknown>,
     user: McpPrincipal,
+    ctx: CallerContext,
   ): Promise<unknown> {
     switch (method) {
       case "initialize": {
@@ -341,14 +330,14 @@ export class McpController {
         return {};
       case "tools/list":
         return {
-          tools: this.tools(user).map((t) => ({
+          tools: this.tools(user, ctx).map((t) => ({
             name: t.name,
             description: t.description,
             inputSchema: t.inputSchema,
           })),
         };
       case "tools/call":
-        return this.callTool(params, user);
+        return this.callTool(params, user, ctx);
       default:
         throw new MethodNotFound(`Method not found: ${method}`);
     }
@@ -356,12 +345,14 @@ export class McpController {
 
   /** Run a tool; tool-execution failures surface as an `isError` result (not a JSON-RPC
    *  error), per the MCP spec, so Claude sees the message and can recover. */
-  private async callTool(params: Record<string, unknown>, user: McpPrincipal): Promise<unknown> {
+  private async callTool(
+    params: Record<string, unknown>,
+    user: McpPrincipal,
+    ctx: CallerContext,
+  ): Promise<unknown> {
     const name = params.name as string | undefined;
-    const tool = this.tools(user).find((t) => t.name === name);
+    const tool = this.tools(user, ctx).find((t) => t.name === name);
     if (!tool) {
-      // For an agent principal, a tool outside its scope is reported exactly like a tool that
-      // does not exist — the same reasoning as the not-found on another user's session id.
       return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
     }
     const args = (params.arguments as Record<string, unknown>) ?? {};
@@ -372,167 +363,65 @@ export class McpController {
       if (args.sessionId !== undefined) {
         this.authoring.assertOwner(String(args.sessionId), user.id);
       }
-      // The scope half of ADR-0005: a Repair Agent reaches only the tests covered by a job it
-      // has claimed. A human principal is untouched by this.
-      if (user.kind === "agent") {
-        await this.assertAgentScope(name ?? "", args, user);
-      }
       const result = await tool.handler(args);
-      // Surface a screenshot (`observe` with screenshot=true) as a viewable MCP image block
-      // so Claude can SEE the page — e.g. to compare it against a reference design you gave
-      // it — with the rest of the snapshot as JSON text. Other results are a text block.
-      if (
-        result &&
-        typeof result === "object" &&
-        typeof (result as { screenshot?: unknown }).screenshot === "string"
-      ) {
-        const { screenshot, ...rest } = result as { screenshot: string } & Record<string, unknown>;
-        return {
-          content: [
-            { type: "text", text: JSON.stringify(rest) },
-            { type: "image", data: screenshot, mimeType: "image/png" },
-          ],
-        };
-      }
-      return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      const { json, pngs } = splitImages(result);
+      return {
+        content: [
+          { type: "text", text: JSON.stringify(json) },
+          ...pngs.map((data) => ({ type: "image", data, mimeType: "image/png" })),
+        ],
+      };
     } catch (err) {
       return { content: [{ type: "text", text: (err as Error).message }], isError: true };
     }
   }
 
-  /**
-   * Refuse a Repair Agent that is reaching for a test no claimed job of its own covers
-   * (ADR-0005). Thrown as a plain error, so it reaches the caller as an `isError` tool result
-   * with a message a drainer can act on.
-   *
-   * Two things are checked, because a claim can end in two ways: the test named by an argument
-   * must be covered by a claim this principal holds, and — for a call addressing an open repair
-   * SESSION — the claim that session was opened under must still hold. The second is what makes
-   * revocation immediate: releasing a job, or letting its lease lapse, stops the tools working on
-   * the next call rather than when the browser eventually closes.
-   */
-  private async assertAgentScope(
-    name: string,
-    args: Record<string, unknown>,
-    user: McpPrincipal,
-  ): Promise<void> {
-    // A session-addressed tool: the session was opened under a claim, but a claim can be released
-    // or lapse while the browser is still parked — so ownership of the session is NOT enough. The
-    // claim is re-checked on every call, which is what makes "losing the claim revokes tool
-    // access immediately" true rather than true-until-the-session-closes.
-    //
-    // `close_repair_session` is exempt on purpose: refusing it would leave a real browser running
-    // with no way for its owner to shut it down, which is a worse outcome than letting a drainer
-    // tidy up after a claim it no longer holds. It changes nothing about any test.
-    const sessionId = args.sessionId === undefined ? "" : String(args.sessionId);
-    if (sessionId && name !== "close_repair_session") {
-      const sessionTestId = this.authoring.sessionTestId(sessionId);
-      if (sessionTestId && !(await this.repairJobs.hasClaimOn(user.id, sessionTestId))) {
-        throw new Error(
-          `${user.name} no longer holds a claim on test ${sessionTestId} — the claim was released or has lapsed, so this session may no longer change it. Claim the job again, or close the session.`,
-        );
-      }
-      // A session opened under a TRIAGE claim may drive and observe, and may not write (slice 08).
-      if (sessionTestId) await this.assertMayMutate(name, sessionTestId, user);
-    }
-
-    const scope = AGENT_TEST_SCOPE[name];
-    if (!scope) return; // nothing else names a test: the claim re-check above is the whole check
-
-    const ids: string[] = [];
-    for (const arg of scope.args) {
-      const raw = args[arg];
-      if (raw === undefined || raw === null || String(raw) === "") continue;
-      const testId = arg === "runId" ? await this.repairJobs.testIdForRun(String(raw)) : String(raw);
-      // An unresolvable runId is left to the tool's own not-found; there is no test to scope to.
-      if (testId) ids.push(testId);
-    }
-    if (ids.length === 0) {
-      if (!scope.required) return;
-      throw new Error(
-        `${user.name} must name the test it has claimed a repair job for — pass the job's runId or testId.`,
-      );
-    }
-    for (const testId of ids) {
-      if (!(await this.repairJobs.hasClaimOn(user.id, testId))) {
-        throw new Error(
-          `${user.name} has no claimed repair job for test ${testId}. Claim the job for this test first — an agent credential may only touch tests covered by a claim it holds.`,
-        );
-      }
-      await this.assertMayMutate(name, testId, user);
-    }
-  }
-
-  /**
-   * Refuse a WRITE attempted under a triage claim (Slice 19, slice 08).
-   *
-   * A Triage Job's only output is a written finding on the run; it may not change the test, and
-   * that is enforced here rather than asked for in a prompt. The check is "does a REPAIR claim
-   * exist on this test?" rather than "what kind is the claim?", because a drainer can hold both —
-   * a repair claim on a broken locator and a triage claim on the same test's pixel regression — and
-   * only the first of those grants the write.
-   *
-   * The message says what to do instead, because the drainer is not misbehaving: it has correctly
-   * diagnosed something and reached for the wrong verb.
-   */
-  private async assertMayMutate(
-    name: string,
-    testId: string,
-    user: McpPrincipal,
-  ): Promise<void> {
-    if (!REPAIR_CLAIM_TOOLS.includes(name)) return;
-    if (await this.repairJobs.hasClaimOfKind(user.id, testId, "repair")) return;
-    throw new Error(
-      `${name} needs a REPAIR claim on test ${testId}, and ${user.name} holds a triage claim on it. A triage job diagnoses and never fixes: drive to the failure, look, and call report_triage with what you found. The run stays red — that is the point, not a shortcoming.`,
-    );
-  }
-
-  /** The MCP tool surface for this principal. A human sees all of it; a Repair Agent sees only
-   *  `AGENT_TOOLS` (ADR-0005) — the same filter `tools/list` and `tools/call` read, so a tool an
-   *  agent cannot list is also a tool it cannot call.
+  /** The MCP tool surface. ONE list, the same for every caller (ADR-0008): `/mcp` authenticates
+   *  exactly one sort of principal, so there is nothing to filter by and no tool that exists for
+   *  some callers and not others. `tools/list` and `tools/call` read this same list, so a tool
+   *  that can be listed can be called.
    *
    *  Slice 2 = open/finish; Slices 3/4 add perception, interaction, and checkpoint tools to this
    *  list. Promotion is deliberately NOT a tool (web-UI only; Claude must not be able to
    *  self-promote — ADR 0001 / PRD safety). */
-  private tools(user: McpPrincipal): McpTool[] {
-    const all = this.allTools(user);
-    return user.kind === "agent"
-      ? all.filter((t) => AGENT_TOOLS.includes(t.name))
-      : all.filter((t) => !AGENT_ONLY_TOOLS.includes(t.name));
+  private tools(user: McpPrincipal, ctx: CallerContext): McpTool[] {
+    return this.allTools(user, ctx);
   }
 
-  private allTools(user: McpPrincipal): McpTool[] {
+  private allTools(user: McpPrincipal, ctx: CallerContext): McpTool[] {
     const a = this.authoring;
     return [
       {
         name: "open_session",
         description:
-          "Open a Varys authoring session: launch a browser, navigate to the start URL, and begin recording. Returns a sessionId used by every later tool, plus the session `mode` and mode-specific `guidance` — read the guidance and follow it for the rest of the session. The entry URL's origin becomes {{baseUrl}} so the test stays environment-agnostic.",
+          "Open a Varys authoring session: launch a browser, navigate to the start URL, and begin recording. Returns a sessionId used by every later tool, plus `guidance` — read it and follow it for the rest of the session. There is one way to drive a session and it is not a choice you make: you have the whole brief, so walk it end to end and call finish_session when it is done. The entry URL's origin becomes {{baseUrl}} so the test stays environment-agnostic.",
         inputSchema: {
           type: "object",
           properties: {
             startUrl: { type: "string", description: "The URL to open the session on (e.g. the app's login page)." },
             name: { type: "string", description: "A name for the test being authored." },
             intent: { type: "string", description: "What this test should verify — the steering instruction (shown in the review queue)." },
-            mode: {
-              type: "string",
-              enum: ["interactive", "batch"],
-              description:
-                "REQUIRED — how you'll drive this session; there is no default, so you must set it. Rule: use 'batch' ONLY when the user explicitly says 'batch' or points you at a plan/instructions file to run; use 'interactive' when the user is directing you one step at a time. Do NOT guess — if it is genuinely unclear which the user wants, ask them before opening the session. 'interactive': the user gives one instruction at a time — do that one action, then stop and wait; NEVER finish on your own — the session ends only when the user explicitly tells you to, and then you call finish_session with confirm: true. 'batch': run the whole plan/file end-to-end without pausing, then call finish_session. In BOTH modes, checkpoint only when explicitly asked.",
-            },
           },
-          required: ["startUrl", "mode"],
+          required: ["startUrl"],
         },
-        handler: (args) =>
-          a.open({
+        handler: (args) => {
+          // A session has no mode to declare. Refused rather than ignored: a stale instruction
+          // file or a cached tool list that still teaches `mode` would otherwise look accepted
+          // while steering nothing, and a wrong guess costs a draft to delete.
+          if ("mode" in args) {
+            throw new Error(
+              "open_session takes no `mode` — there is one way to author and it is not a choice. You have the whole brief: walk it end to end and call finish_session when it is done. Call open_session again without `mode`.",
+            );
+          }
+          return a.open({
             // Ownership comes from the bearer token, never from tool arguments — the model
             // has no way to open a session as somebody else.
             owner: { id: user.id, email: user.email },
             startUrl: String(args.startUrl ?? ""),
             name: args.name ? String(args.name) : undefined,
             intent: args.intent ? String(args.intent) : undefined,
-            mode: args.mode === "batch" ? "batch" : args.mode === "interactive" ? "interactive" : undefined,
-          }),
+          });
+        },
       },
       {
         name: "observe",
@@ -636,77 +525,9 @@ export class McpController {
           }),
       },
       {
-        name: "claim_repair_job",
-        description:
-          "Take the next queued job for yourself — a REPAIR job or a TRIAGE job; check `kind`. Returns the job id, the test, its Brief, the step that failed with the run's error, and `claimExpiresAt` — the instant your claim lapses.\n\n`kind: \"triage\"` is a READ-ONLY job, for a failure nobody may fix automatically — a pixel regression, a failed judge, a false assertion, a crash, a timeout. Drive to the failure, look, and call report_triage with what you found. apply_fix and edit_test are refused under a triage claim, and the run stays red on purpose: the value is the explanation, not a green. `kind: \"repair\"` is the fix path — report it with report_repair. Returns `job: null` when the queue is empty, which is the normal answer, not an error: stop and try again on your next drain rather than retrying in a loop.\n\nA claim is exclusive and first-claim-wins: nobody else can see or take this job while your claim holds, and while it holds you may read and edit THAT test (open_repair_session, read_test, edit_test, try_locator, apply_fix) — and no other. It is also a deadline: if you stop reporting before `claimExpiresAt`, the job returns to the queue for someone else and the attempt is counted against it. If you cannot fix it, call release_repair_job rather than going quiet — that returns it immediately. `attemptsRemaining` tells you how many tries the job has left before Varys abandons it.\n\nRead the `brief` before you repair anything: every repair has to be justified against a clause of it when you call report_repair, and one that cannot be is refused and reverted. A test with no Brief cannot be repaired automatically at all.\n\n`failingAssertion` is set when an ASSERTION is what made the run red — and then `failingStep` is null, because every step of that run passed. Read `repairable`: `true` means the assertion's extraction target no longer resolves, which is a broken locator like any other — re-pin that side with edit_test (`assertions: [{id, left|right: {...}}]`) and report it as a repair. `false` means the values were both read and they DISAGREE, or one could not be used as asked; there is nothing to re-pin, the job you are holding will be a triage job, and re-pinning an assertion until its numbers agree would hide the exact bug it exists to catch. `side` says which target to fix.\n\n`clusterTests` is the FAILURE CLUSTER: every test the same app change broke, and exactly what your claim reaches. Repair the anchor (`testId`) only — Varys fans your fix out across the rest when you report, as ONE reviewable change. Do not try to repair them individually, and do not describe the job as being about one test when it covers several.",
-        inputSchema: { type: "object", properties: {} },
-        handler: async () => ({ job: await this.repairJobs.claimNext(user.id) }),
-      },
-      {
-        name: "release_repair_job",
-        description:
-          "Give a job you claimed back to the queue, right away — 'I can't fix this one.' Use it whenever you stop working on a claimed job for any reason other than reporting a repair; it beats letting the claim lapse, which parks the work until the deadline passes. It counts as one attempt either way, so a job you keep claiming and releasing is eventually abandoned rather than draining you forever.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            jobId: { type: "string", description: "The `jobId` claim_repair_job handed you." },
-          },
-          required: ["jobId"],
-        },
-        handler: (args) => this.repairJobs.release(user.id, String(args.jobId ?? "")),
-      },
-      {
-        name: "report_repair",
-        description:
-          "Report that you have repaired the test of a job you hold, and close the job. Call it AFTER the fix is written (apply_fix, or edit_test) — it records what you did against the version you wrote and finishes the job; it does not write anything itself, so a report with no version behind it is refused.\n\nEVERY repair is gated on its `justification`. You must name the clause of the test's BRIEF (claim_repair_job handed it to you) that the element you re-pinned to satisfies, and show it is the SAME control the step was always exercising — renamed, re-worded or re-marked-up, not a different control that happens to look right. A judge reads that claim against the Brief and the actual before/after signals. If it does not hold, the repair is ABANDONED: your version is reverted, the test goes back to what it said before, and the run stays failed. So if the control the test used is simply GONE, do not re-pin to the nearest plausible substitute — call release_repair_job instead.\n\nWhat it does NOT do, and what you must therefore not claim: it does not turn the failing run green. The version you wrote is saved UNREVIEWED and waits for a human to accept or reject it, and the run that failed is still failed. Report your work as a proposed fix awaiting review — never as fixed. The response carries the version number, the run's unchanged status, and the wording to use.\n\nIf this job covers a Failure Cluster, the fix you applied to the anchor is applied to every other test in it here, as one reviewable change accepted or rejected together — `clusterTestIds` says which. If the fix cannot be written across all of them, NONE of it stands: everything is reverted and the job goes back in the queue.\n\nA re-run IS queued for you against the repaired definition (one per repaired test), and the anchor's id comes back as `rerunId`. If it verifies it reads HEALED — amber, a review queue item — not passed. So \"a re-run is under way\" is accurate; \"the test passes now\" is not, however the re-run turns out.\n\nReporting ends your claim, so your access to that test stops here: do everything you need to do to the test first, then report. If you could NOT fix it, call release_repair_job instead.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            jobId: { type: "string", description: "The `jobId` claim_repair_job handed you." },
-            summary: {
-              type: "string",
-              description:
-                "What you changed and why, in a couple of sentences — this is what the reviewer reads beside the version, so name the element you re-pinned to and the signal it now matches on.",
-            },
-            justification: {
-              type: "string",
-              description:
-                "Which clause of the test's BRIEF the element you re-pinned to satisfies, and the evidence that it is the SAME control the step was exercising before — quote the clause, then say what changed about the element (its label, accessible name, test id, markup, position) and what shows it is still that control. Do NOT argue that a different element serves the same purpose: sameness of purpose is not sameness of control, and it is refused. This is judged, and a claim that does not hold abandons the repair.",
-            },
-          },
-          required: ["jobId", "summary", "justification"],
-        },
-        handler: (args) =>
-          this.repairJobs.reportRepair(
-            user.id,
-            String(args.jobId ?? ""),
-            String(args.summary ?? ""),
-            String(args.justification ?? ""),
-          ),
-      },
-      {
-        name: "report_triage",
-        description:
-          "Report what you found on a TRIAGE job you hold, and close it. This is the only output a triage job has, and the only write it is allowed: one paragraph, recorded on the failing run and shown to a human beside the failure.\n\nWrite the CAUSE, not the symptom. \"The chart is empty because /api/metrics returns 401 for the seeded user\" is the finding worth having; \"the chart did not render\" is what the run already said. Say what you saw, where you saw it, and what you think is responsible — and if you are not sure, say what you ruled out.\n\nWhat it does NOT do, and what you must therefore not claim: it changes NOTHING. The run is still red afterwards, no version of the test is written, and no baseline is touched. A diagnosis is not a fix. If you believe you know the repair, say so IN the finding and leave it to a human — do not attempt apply_fix or edit_test, which are refused under a triage claim.\n\nIf you could not work out why it failed, call release_repair_job instead: an empty finding is refused, because a triage job closed with nothing written is indistinguishable later from one that explained nothing.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            jobId: { type: "string", description: "The `jobId` claim_repair_job handed you." },
-            finding: {
-              type: "string",
-              description:
-                "What is actually wrong, in plain prose, for a human who has not looked at the page. Cause over symptom.",
-            },
-          },
-          required: ["jobId", "finding"],
-        },
-        handler: (args) =>
-          this.repairJobs.reportTriage(user.id, String(args.jobId ?? ""), String(args.finding ?? "")),
-      },
-      {
         name: "open_repair_session",
         description:
-          "Open an existing test for diagnosis and editing, by re-driving it yourself. Takes either a `runId` (a specific failure) or a `testId` (that test's most recent failure — use this when the user names a test rather than a run). Launches a browser, seeds the run's environment, replays the test's OWN steps (the exact version that ran, with the same drive a Run uses) up to the step that failed, and PARKS there — so the page the failing step faced is live in front of you. Returns why it failed: the run's error, what the recorded locator was looking for (`recordedLocator`), the matcher's verdict on that locator against the page as it is now (`diagnosis`), the API requests the ORIGINAL run made during this step (`runNetwork`), every element actually on the page (`nodes`, with testId/id/duplicate flags), and a screenshot.\n\nCheck `runNetwork` BEFORE you conclude the locator is at fault. A run whose element never rendered because its data call failed is recorded as a `locator` failure — the exception type is identical, and the matcher cannot tell a renamed button from one that was never going to be there. A 500, a `net::ERR_*` or a `no response` request in that list means the page was missing its data, and re-pinning to the nearest plausible element would bury a live backend fault under a green test. That is a finding to report, not a locator to fix.\n\nInvestigate with observe/hover, move to any other step with goto_step, and test candidate locators with try_locator.\n\nThis session can change the test in any way the user asks. A broken locator goes through try_locator → apply_fix, which re-checks the candidate against the live page and refuses one that does not resolve. Everything else — a checkpoint's name, capture mode, compare mode, judge prompt, threshold or masks, a typed value, a navigate URL, waits, adding/removing/reordering steps, re-capturing a step's element off the live page — goes through read_test → edit_test. Both write a new audited version of the test with the previous one retained; always tell the user what you changed and the new version number. What it does NOT do is record a new test: `checkpoint` and `finish_session` are refused, because there is no draft here.\n\nRead `replay.note` first — if the drive broke EARLIER than the run did, the step you were sent to was never reached, so deal with the earlier step first (goto_step with that index). Close with close_repair_session when done.",
+          "Open an existing test for diagnosis and editing, by re-driving it yourself. Takes either a `runId` (a specific failure) or a `testId` (that test's most recent failure — use this when the user names a test rather than a run). Launches a browser, seeds the run's environment, replays the test's OWN steps (the definition that Run actually replayed, with the same drive a Run uses — not whatever the test says today) up to the step that failed, and PARKS there — so the page the failing step faced is live in front of you. Returns why it failed: the run's error, what the recorded locator was looking for (`recordedLocator`), the matcher's verdict on that locator against the page as it is now (`diagnosis`), the API requests the ORIGINAL run made during this step (`runNetwork`), every element actually on the page (`nodes`, with testId/id/duplicate flags), and a screenshot.\n\nCheck `runNetwork` BEFORE you conclude the locator is at fault. A run whose element never rendered because its data call failed is recorded as a `locator` failure — the exception type is identical, and the matcher cannot tell a renamed button from one that was never going to be there. A 500, a `net::ERR_*` or a `no response` request in that list means the page was missing its data, and re-pinning to the nearest plausible element would bury a live backend fault under a green test. That is a finding to report, not a locator to fix.\n\nInvestigate with observe/hover, move to any other step with goto_step, and test candidate locators with try_locator.\n\nThis session can change the test in any way the user asks. A broken locator goes through try_locator → apply_fix, which re-checks the candidate against the live page and refuses one that does not resolve. Everything else — a checkpoint's name, capture mode, compare mode, judge prompt, threshold or masks, a typed value, a navigate URL, waits, adding/removing/reordering steps, re-capturing a step's element off the live page — goes through read_test → edit_test. Both write onto the test's one definition — the same definition the web editor changes — so always tell the user what you changed, in plain words; there is no version number to quote. What it does NOT do is record a new test: `checkpoint` and `finish_session` are refused, because there is no draft here.\n\nRead `replay.note` first — if the drive broke EARLIER than the run did, the step you were sent to was never reached, so deal with the earlier step first (goto_step with that index). Close with close_repair_session when done.",
         inputSchema: {
           type: "object",
           properties: {
@@ -725,7 +546,7 @@ export class McpController {
         },
         handler: (args) =>
           a.openRepair({
-            owner: { id: user.id, email: user.email, kind: user.kind },
+            owner: { id: user.id, email: user.email },
             runId: args.runId ? String(args.runId) : undefined,
             testId: args.testId ? String(args.testId) : undefined,
             stepIndex: args.stepIndex !== undefined ? Number(args.stepIndex) : undefined,
@@ -767,7 +588,7 @@ export class McpController {
       {
         name: "apply_fix",
         description:
-          "WRITE the fix onto the test. Applies your locator patch to the step under repair and saves it as a new test version — the same operation, validation and audit trail as editing it by hand in the web app. Two things are enforced before anything is written: the candidate is re-verified against the live page (a patch that is not-found or ambiguous is REFUSED — this can only ever replace a broken locator with one that demonstrably resolves), and the step at that index must still be the step you diagnosed (if the test changed since the session opened, the write is refused rather than landing on the wrong step). The previous version is retained, so this appends rather than overwrites. Use try_locator to find the right patch FIRST — apply the one that came back `recommend: true`. A patch that resolves on a weak signal is still written, but comes back with a `warning`: report that caveat instead of declaring the test fixed. Tell the user the new version number afterwards. This tool is the LOCATOR path only, and only for the step the session is parked on — for any other change to the test (a checkpoint's settings, a typed value, a URL, waits, adding/removing/reordering steps, or a locator on a different step) use edit_test.",
+          "WRITE the fix onto the test. Applies your locator patch to the step under repair and saves it onto the test's definition — the same operation, validation and attribution as editing it by hand in the web app. Two things are enforced before anything is written: the candidate is re-verified against the live page (a patch that is not-found or ambiguous is REFUSED — this can only ever replace a broken locator with one that demonstrably resolves), and the step at that index must still be the step you diagnosed (if the test changed since the session opened, the write is refused rather than landing on the wrong step). This CHANGES the test: the repaired locator is what the next run replays, and the broken one is not kept. Use try_locator to find the right patch FIRST — apply the one that came back `recommend: true`. A patch that resolves on a weak signal is still written, but comes back with a `warning`: report that caveat instead of declaring the test fixed. Tell the user which step you re-pinned and what it now matches on. This tool is the LOCATOR path only, and only for the step the session is parked on — for any other change to the test (a checkpoint's settings, a typed value, a URL, waits, adding/removing/reordering steps, or a locator on a different step) use edit_test.",
         inputSchema: {
           type: "object",
           properties: {
@@ -810,7 +631,7 @@ export class McpController {
       {
         name: "read_test",
         description:
-          "Read a test's CURRENT definition as an editable surface: every step with its 0-based `index`, human label, and every field an edit can address, plus every declared ASSERTION with its stable id and pinned form — the checkpoint's name/captureMode/compareMode/prompt/threshold/masks/rect, a type step's `value`, a navigate step's `url`, the waits before it, and its `locator`. ALWAYS call this before edit_test: an edit is keyed by step index, and an index inferred from a run's error message or from your memory of the flow is how you edit the wrong step. It reports the LATEST version — which is what an edit lands on, even inside a repair session opened on an older one. Pass `sessionId` to read the test that session is repairing, or `testId` to read any test (no session needed). Read-only.",
+          "Read a test's CURRENT definition as an editable surface: every step with its 0-based `index`, human label, and every field an edit can address, plus every declared ASSERTION with its stable id and pinned form — the checkpoint's name/captureMode/compareMode/prompt/threshold/masks/rect, a type step's `value`, a navigate step's `url`, the waits before it, and its `locator`. ALWAYS call this before edit_test: an edit is keyed by step index, and an index inferred from a run's error message or from your memory of the flow is how you edit the wrong step. It reports the test's CURRENT definition — which is what an edit lands on, even inside a repair session opened on a run that replayed an older one. Pass `sessionId` to read the test that session is repairing, or `testId` to read any test (no session needed). Read-only.",
         inputSchema: {
           type: "object",
           properties: {
@@ -827,7 +648,7 @@ export class McpController {
       {
         name: "edit_test",
         description:
-          "CHANGE ANYTHING in a test, and save it as a new audited version. This is the general editor: whatever the user asks to change about an existing test, do it here.\n\n• Any step field — a checkpoint's `name` (baselines follow the rename), `captureMode` (element/fullpage/region), `rect`, `compareMode` (pixel/context), judge `prompt`, `threshold`, `masks`; a type step's `value`; a navigate step's `url`; the `waitBefore` list.\n• Any locator — `locator` patches the recorded signals; `ref` RE-CAPTURES the element off the live page of a repair session (use this when the element changed wholesale rather than one of its signals).\n• Structure — `remove` a step, `inserts` to add one (a `ref` builds it on a real captured fingerprint that self-heals; a `selector` is used as-is with nothing behind it), `order` to reorder.\n• Any ASSERTION — `assertions` rewords a check, re-pins either side's extraction target (`left`/`right`, the repair for an assertion whose target no longer resolves), or removes one. Never re-pin an assertion whose relation was FALSE: that is the app disagreeing with itself, and re-pinning it hides the bug.\n• The test itself — `name`, `notes` (these live on the test row, so they write no new version).\n\nCall read_test FIRST and key every edit off the indices it reports; after an edit that adds, removes or reorders steps, the indices in the response are the new truth. Only make the change the user asked for. The write goes through the same path as the web editor — same validation, previous version retained — and the response lists what was applied plus the new version number, which you must report back.\n\nUnlike apply_fix, an edit here is NOT verified against a live page: it will happily write a locator that does not resolve. When you edit a locator this way, verify it (goto_step to re-drive, then try_locator) before you tell the user it is fixed.",
+          "CHANGE ANYTHING in a test's definition. This is the general editor: whatever the user asks to change about an existing test, do it here.\n\n• Any step field — a checkpoint's `name` (baselines follow the rename), `captureMode` (element/fullpage/region), `rect`, `compareMode` (pixel/context), judge `prompt`, `threshold`, `masks`; a type step's `value`; a navigate step's `url`; the `waitBefore` list.\n• Any locator — `locator` patches the recorded signals; `ref` RE-CAPTURES the element off the live page of a repair session (use this when the element changed wholesale rather than one of its signals).\n• Structure — `remove` a step, `inserts` to add one (a `ref` builds it on a real captured fingerprint that self-heals; a `selector` is used as-is with nothing behind it), `order` to reorder.\n• Any ASSERTION — `assertions` rewords a check, re-pins either side's extraction target (`left`/`right`, the repair for an assertion whose target no longer resolves), or removes one. Never re-pin an assertion whose relation was FALSE: that is the app disagreeing with itself, and re-pinning it hides the bug.\n• The test itself — `name`, `notes` (these live on the test row, so they leave the definition untouched).\n\nCall read_test FIRST and key every edit off the indices it reports; after an edit that adds, removes or reorders steps, the indices in the response are the new truth. Only make the change the user asked for. The write goes through the same path as the web editor and lands on the same one definition — same validation, and the previous definition is NOT kept. The response lists what was applied; report that back in plain words, not as a version number.\n\nUnlike apply_fix, an edit here is NOT verified against a live page: it will happily write a locator that does not resolve. When you edit a locator this way, verify it (goto_step to re-drive, then try_locator) before you tell the user it is fixed.",
         inputSchema: {
           type: "object",
           properties: {
@@ -903,7 +724,7 @@ export class McpController {
             assertions: {
               type: "array",
               description:
-                "Edits to the test's declared ASSERTIONS, each addressing one by its stable `id` (from read_test). This is the assertion REPAIR path: an assertion whose extraction target no longer resolves is a broken locator like any other, and `left`/`right` re-pin it.\n\nWhat you must NOT do here: an assertion that FAILED because its relation is false — both values were read and they disagree — is the application being wrong, and re-pinning it until the numbers agree hides the exact bug the assertion exists to catch. Never touch an assertion for that reason. `claim_repair_job` tells you which case you have (`failingAssertion.repairable`).",
+                "Edits to the test's declared ASSERTIONS, each addressing one by its stable `id` (from read_test). This is the assertion REPAIR path: an assertion whose extraction target no longer resolves is a broken locator like any other, and `left`/`right` re-pin it.\n\nWhat you must NOT do here: an assertion that FAILED because its relation is false — both values were read and they disagree — is the application being wrong, and re-pinning it until the numbers agree hides the exact bug the assertion exists to catch. Never touch an assertion for that reason: `open_repair_session` shows you which case you have.",
               items: {
                 type: "object",
                 properties: {
@@ -920,7 +741,7 @@ export class McpController {
         },
         handler: (args) =>
           a.editTest({
-            actor: { id: user.id, email: user.email, kind: user.kind },
+            actor: { id: user.id, email: user.email },
             sessionId: args.sessionId ? String(args.sessionId) : undefined,
             testId: args.testId ? String(args.testId) : undefined,
             ...(args.name !== undefined ? { name: String(args.name) } : {}),
@@ -935,7 +756,7 @@ export class McpController {
       {
         name: "close_repair_session",
         description:
-          "Close a repair session and shut its browser down. Nothing is lost: a repair session holds no unsaved work — every edit it makes (apply_fix, edit_test) was already written to the test as its own version. Call it once you have reported the diagnosis and any changes you made.",
+          "Close a repair session and shut its browser down. Nothing is lost: a repair session holds no unsaved work — every edit it makes (apply_fix, edit_test) was already written onto the test's definition. Call it once you have reported the diagnosis and any changes you made.",
         inputSchema: {
           type: "object",
           properties: { sessionId: { type: "string" } },
@@ -944,9 +765,219 @@ export class McpController {
         handler: (args) => a.discard(String(args.sessionId ?? "")),
       },
       {
+        name: "create_agent_test",
+        description:
+          "Write an **Agent-Driven Test** into Varys as a **Draft** — a test with no recorded steps, which a future run walks by following the instructions you write here.\n\nReach for this when the flow you are being asked to capture will not sit still: a chart that redraws, a dashboard whose numbers change hourly, anything behind a login that a recorder's fingerprints would go stale on by next week. A pinned test (open_session) replays a fixed sequence for free and is the right answer whenever the DOM is stable enough for one. This kind is not free — every run of it spends the author's Claude subscription — so it should earn that.\n\nWalk the app FIRST, with whatever tooling you have. Varys hosts no browser for authoring, exactly as it hosts none for a run, and offers you no perception or action tools: use Chrome DevTools, Playwright, computer use, whatever actually works on the app in front of you. Write the instructions from what you actually saw, not from what the user described.\n\n`instructions` are the standing orders for every future run, composed above each Checkpoint's own. Put the durable things there: where the app is, how to sign in (credentials go in as plain text — that is the design), what to dismiss, what never to touch. Do NOT put the user's request to you in here, and do not restate the journey step by step; the Checkpoints carry that.\n\nThen add one Checkpoint per state you reached, with add_agent_checkpoint. There is no session and no finish step: the Draft is in the review queue from the moment this returns, so if you stop half way a human sees exactly how far you got. A human promotes it in the web app — you cannot, and neither can you touch it again once they have.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+              description: "What this test is called in the Varys web app — the journey, not the app (e.g. \"checkout with a saved card\").",
+            },
+            instructions: {
+              type: "string",
+              description:
+                "The AI Instructions every future run is driven by: where the app is, how to sign in, what to ignore, what never to touch. Written from what you saw walking it. NOT the request that asked you for this test — that is not recorded anywhere, deliberately.",
+            },
+          },
+          required: ["name", "instructions"],
+        },
+        handler: (args) =>
+          this.agentAuthoring.createTest({
+            name: String(args.name ?? ""),
+            instructions: String(args.instructions ?? ""),
+            createdBy: user.email,
+          }),
+      },
+      {
+        name: "add_agent_checkpoint",
+        description:
+          "Add one **Checkpoint** to a Draft you created with create_agent_test: a state on the journey, how to get back to it, what counts as still being right — and the screenshot proving you actually reached it.\n\nCall it once per state, in journey order. The rows are cumulative: each Checkpoint's `instructions` continue from where the previous one left the app, so write them as the next thing to do and not as a fresh start from the login page.\n\n**The image is required and there is no way around it.** Prose about a state you reached and prose about one you imagined read identically on the page, so the picture is the only thing separating them — which is why Varys refuses the write rather than asking you nicely. Capture the state you are looking at, right now, before you move on.\n\n**Save the capture to a file and send `imagePath`.** Base64 in `image` still works, but it goes through your own output, and base64 that gets cut short decodes into a valid-looking half-image rather than an error — Varys refuses those now, which costs you the call. A path cannot be truncated. If you must send `image`, send `sha256` with it. A Checkpoint's name is permanent and taken once, so a rejected capture is a slot you cannot retry. If you could not reach a state, do not write a Checkpoint for it: say so to the user instead. A Checkpoint nobody can reach is `unreached` in every future run, and because the Manifest is a closed set the only fix is editing the test.\n\n`comparePrompt` is what a future run judges its screenshot against, and both directions of it are worth writing. Say what must hold, and say what is allowed to vary — figures that move, dates, avatars, anything seeded per-environment. Too tight and the test goes red on legitimate change; too loose and it passes through a regression. You have just seen the page, so you know which is which better than the author will.\n\nYour capture is stored as a REFERENCE image, never a baseline. The first run against an environment proposes the baselines and a human approves them there — nothing you submit here can pass a future run on its own.\n\nOnly Drafts can be written to. Once a human promotes the test it is in service and these tools no longer reach it; make the Draft right before it is promoted, because there is no second pass.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            testId: { type: "string", description: "The Draft create_agent_test gave you." },
+            name: {
+              type: "string",
+              description:
+                "A short, stable name for this state — `dashboard-loaded`, `cart-has-two-items`. It is the slot's permanent identity: baselines hang off it, and it must be unique within the test.",
+            },
+            instructions: {
+              type: "string",
+              description:
+                "How a future run gets from the PREVIOUS Checkpoint to this state. Continue the journey; do not restate the whole flow.",
+            },
+            comparePrompt: {
+              type: "string",
+              description:
+                "What counts as this state still being right, and what is allowed to differ. Both halves — the second is what stops the test going red on data that was always going to move.",
+            },
+            ...imageArgs("the screenshot of the state you reached", ctx),
+          },
+          required: ["testId", "name", "instructions", "comparePrompt"],
+        },
+        handler: (args) =>
+          this.agentAuthoring.addCheckpoint(
+            {
+              testId: String(args.testId ?? ""),
+              name: String(args.name ?? ""),
+              instructions: String(args.instructions ?? ""),
+              comparePrompt: String(args.comparePrompt ?? ""),
+              image: String(args.image ?? ""),
+              imagePath: String(args.imagePath ?? ""),
+              sha256: String(args.sha256 ?? ""),
+            },
+            ctx,
+          ),
+      },
+      {
+        name: "start_agent_run",
+        description:
+          "Start an **Agent Run Session** on an Agent-Driven Test — a test with no recorded steps, which YOU walk yourself. This is the opposite of run_test: nothing is queued, Varys drives no browser, and no worker replays anything. You do the work, on this machine, right now.\n\nThe call returns everything the run needs in one go: the fully composed AI Instructions, the ordered **Checkpoint Manifest**, and the approved baseline images for that environment (attached as images, named in `baselineImages` in the order they follow the JSON). Each Manifest slot says whether it HAS a baseline — one that does not has nothing to compare against, so its capture goes to a human for approval and cannot pass on its own however good it looks.\n\nHow you reach each state is entirely yours to choose — Chrome DevTools, Playwright, computer use, whatever actually works on the app in front of you. Varys does not watch you drive and has no opinion about it. Read the instructions and follow them; they are written by the test's author and carry the credentials, the things to ignore and the things never to touch. They are composed from up to three layers, general to specific — the suite's shared context, then the test's own, then each checkpoint's — and CONCATENATED, never overridden: a later layer adds to what came before it and does not replace it. Where two layers appear to disagree, that is a contradiction the author needs told about, not one for you to resolve by picking the more specific.\n\nUnderstand what starting it does, because it is the point of the tool: the run is created **already failed**, with reason `unreached`, and one row per Manifest slot is written as `missing` BEFORE this call returns. That is not a placeholder — it is the honest answer to \"what did this run verify?\" until a slot is actually reported. If you stop, crash or lose the connection, the run stays exactly that red, and nothing will infer anything from work you did but did not report. So do not describe a started session as a run that is going well; it is a run that is currently failing, and every slot you fill is what changes that.\n\nThe Manifest is a CLOSED set. Those names are the only ones this run can ever be reported under: do not invent a slot, rename one, merge two, or skip ahead. If the instructions cannot be followed as written, say so to the user — the honest red is the finding.\n\nThe session is bounded by a server-side **wall-clock lease**, returned as `leaseSeconds` and `leaseExpiresAt`. Varys enforces it and nothing in the instructions can extend it. Retrying a state you could not reach is entirely your own call — you know why it failed and can vary your approach, which is why nothing here retries for you — but budget against that clock: when it runs out the session is CLOSED, every tool stops accepting anything for this run, and whatever went unreported is what the run verified.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            testId: {
+              type: "string",
+              description: "The Agent-Driven Test to run (the id in the test's web-app URL).",
+            },
+            environmentId: {
+              type: "string",
+              description:
+                "Run against this environment — it decides which approved baselines you are compared against, and supplies the base URL. Omit only for a test with no environment.",
+            },
+          },
+          required: ["testId"],
+        },
+        handler: async (args) => {
+          const session = await this.agentRun.start(String(args.testId ?? ""), {
+            environmentId: args.environmentId ? String(args.environmentId) : undefined,
+            actor: user.email,
+          });
+          // Close out a run request this user pressed in the web app, if there was one. Reporting
+          // only — nothing about the session, its lease or its pre-seeded `missing` rows depends
+          // on it, and a session started straight from a terminal matches nothing and is
+          // unaffected. It is what turns the author's wait into `fulfilled` instead of a wait
+          // that quietly expires beside a run that did start.
+          //
+          // When it DID close one out, the Run is also stamped as having been requested from
+          // Varys, so a reader puzzling over it later can tell which of the two doors it came
+          // through. The relay's own record of the press decides that, and only it can: `args`
+          // carries no such claim and is never consulted, because an agent's account of how it
+          // came to be running is not evidence of anything.
+          if (this.bridge.noteAgentRunStarted(user.id, session.testId, session.runId)) {
+            await this.agentRun.markRequestedFromVarys(session.runId);
+          }
+          return session;
+        },
+      },
+      {
+        name: "submit_checkpoint",
+        description:
+          "Fill ONE slot of the Checkpoint Manifest of a run you started with start_agent_run: the screenshot you captured, your verdict on it, and your reasoning.\n\n`name` must be one of the Manifest's own names, spelled exactly. The Manifest is a closed set and anything else is refused — not to be awkward, but because a name that drifts between runs (`Dashboard loaded` this week, `dashboard-empty` last week) makes a test red forever for reasons that have nothing to do with the application.\n\n`reasoning` is REQUIRED and there is no polite default. You drove, and you are also the judge — Varys watched none of it, makes no model call of its own here, and holds no second opinion. Your rationale is the entire audit trail a human will read next to the two pictures, so write what you compared, what matched, and what you decided to overlook. \"Looks right\" is not reviewable.\n\nRead back what Varys actually RECORDED, because it is not always what your verdict asked for. A `pass` on a slot with no approved baseline is stored as `pending-baseline`: there was no golden to compare against, so the verdict is inert and your capture is a proposal awaiting a human's approval. Do not report such a slot as passing, however carefully you looked. A `fail` against a real baseline is stored as `diff` and stands — nothing retries it, and you must not re-capture the slot hoping for a kinder answer.\n\nCapture however you like; say how you did it in `capture` so a reviewer puzzling over two very different pictures can see whether they were even taken the same way. Write it to a file and send `imagePath` rather than base64 — a slot is filled exactly once, so a capture corrupted in transit is not something this run gets a second go at.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            runId: { type: "string", description: "The run start_agent_run gave you." },
+            name: {
+              type: "string",
+              description:
+                "The Manifest slot this capture is for — exactly as start_agent_run named it.",
+            },
+            ...imageArgs("the screenshot you captured", ctx),
+            verdict: {
+              type: "string",
+              enum: ["pass", "fail"],
+              description:
+                "Your comparison against the baseline you were given. Say `fail` when it genuinely differs — a false pass is far worse than a red a human can look at.",
+            },
+            reasoning: {
+              type: "string",
+              description:
+                "Why. What you compared, what matched, what you judged to be legitimate variation. Required.",
+            },
+            capture: {
+              type: "object",
+              description: "How this screenshot was taken. Recorded as evidence; nothing is enforced against it.",
+              properties: {
+                tool: { type: "string", description: "e.g. chrome-devtools, playwright, computer-use." },
+                viewport: { type: "string", description: "e.g. 1440x900." },
+                deviceScale: { type: "number", description: "Device pixel ratio, e.g. 2 on a Retina display." },
+              },
+            },
+          },
+          required: ["runId", "name", "verdict", "reasoning"],
+        },
+        handler: (args) =>
+          this.agentRun.submitCheckpoint(
+            {
+              runId: String(args.runId ?? ""),
+              name: String(args.name ?? ""),
+              image: String(args.image ?? ""),
+              imagePath: String(args.imagePath ?? ""),
+              sha256: String(args.sha256 ?? ""),
+              verdict: args.verdict as AgentVerdict,
+              reasoning: String(args.reasoning ?? ""),
+              capture: (args.capture ?? undefined) as AgentCaptureMeta | undefined,
+            },
+            ctx,
+          ),
+      },
+      {
+        name: "submit_evidence",
+        description:
+          "Attach an extra screenshot to the run — as many as you like, and none of them fills a Manifest slot or keys a baseline.\n\nThis is where \"I could not find the filter, here is what the page actually looked like\" belongs. A reviewer trying to tell a broken application from a wrong instruction usually cannot, from the checkpoints alone; a picture of what you were staring at is often the only thing that settles it. Use it freely when something surprises you, when a state will not come up, and when you are about to report a slot you could not reach.\n\nIt changes nothing about the run's outcome, by design: evidence is context, never a claim.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            runId: { type: "string", description: "The run start_agent_run gave you." },
+            ...imageArgs("the screenshot", ctx),
+            note: {
+              type: "string",
+              description: "What this shows and why you kept it — the caption a reviewer reads first.",
+            },
+          },
+          required: ["runId"],
+        },
+        handler: (args) =>
+          this.agentRun.submitEvidence(
+            {
+              runId: String(args.runId ?? ""),
+              image: String(args.image ?? ""),
+              imagePath: String(args.imagePath ?? ""),
+              sha256: String(args.sha256 ?? ""),
+              note: args.note === undefined ? undefined : String(args.note),
+            },
+            ctx,
+          ),
+      },
+      {
+        name: "finish_agent_run",
+        description:
+          "Close the session with your written account of it, and read back what the run actually came to.\n\nThe summary is the part of the session nobody else can reconstruct. Varys has the pictures, the verdicts and your per-slot reasoning; what it does not have is what you tried, what surprised you, what you worked around, and what you could not reach. Write that.\n\nFinishing does NOT decide the outcome — the run's state was kept honest by every submission you made, so a session that crashes before reaching this call has already left a correct run behind. What comes back is `outcome`, and it is the word to report the run in. Three of them are not passes: `pending-baseline` means every capture was a first one and NOTHING was verified (a human must approve them before any future run can compare); `regression` means something differs from its baseline; `failed` with unreached slots means the journey broke. Report the outcome you are given, not the impression you formed.\n\nOnce finished, the run is closed and accepts no further submissions.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            runId: { type: "string", description: "The run start_agent_run gave you." },
+            summary: {
+              type: "string",
+              description:
+                "Your account of the session: what you did, what surprised you, what you could not reach and why. Required.",
+            },
+          },
+          required: ["runId", "summary"],
+        },
+        handler: (args) =>
+          this.agentRun.finish({
+            runId: String(args.runId ?? ""),
+            summary: String(args.summary ?? ""),
+          }),
+      },
+      {
         name: "run_test",
         description:
-          "Run a test for real and wait for the verdict — the ONLY thing that proves a repair worked.\n\nUse it to close your own loop: after apply_fix or edit_test, run the test and read what came back, then tell the user what you changed AND whether it now works. A locator that resolves against a parked page is not the same claim as a test that replays end to end.\n\nIt queues a run of the test's LATEST version — so the fix you just wrote is what executes — against the same worker a human's Run button uses, and waits up to `waitSeconds`. If the wait elapses the answer says `finished: false`; call run_status with the runId rather than reporting anything.\n\nRead `outcome`, not `status`, and report it in those terms — three of them are NOT passes and are easy to misreport:\n · `passed` — verified against its baseline. This is the evidence a repair worked.\n · `pending-baseline` — there was no baseline, so NOTHING was compared. A human must approve the capture in Needs review. You cannot approve it and must not call this passing.\n · `baseline` — this run set the golden. It verified nothing.\n · `regression` — the capture differs from the baseline. A human decides; this is not something to fix by re-pinning a locator.\n · `healed` — it verified, but on a repair nobody has accepted yet.\n · `failed` — read `failureKind`: `locator` is the one class a re-pin fixes (open a repair session on this run), anything else is a crash, a timeout, a failed judge or an assertion that does not hold, and re-pinning must not be used to make it go away.\n\n`failingAssertions` lists only the checks that did not hold, with both values that were read — often the fastest way to see what is actually wrong.\n\nBe honest about cost and effect: this drives a real browser against the real app, and every run is visible to the user in Varys. Run it when you need the answer, not as a reflex after every edit.",
+          "Run a test for real and wait for the verdict — the ONLY thing that proves a repair worked.\n\nUse it to close your own loop: after apply_fix or edit_test, run the test and read what came back, then tell the user what you changed AND whether it now works. A locator that resolves against a parked page is not the same claim as a test that replays end to end.\n\nIt queues a run of the test's CURRENT definition — so the fix you just wrote is what executes — against the same worker a human's Run button uses, and waits up to `waitSeconds`. If the wait elapses the answer says `finished: false`; call run_status with the runId rather than reporting anything.\n\nRead `outcome`, not `status`, and report it in those terms — three of them are NOT passes and are easy to misreport:\n · `passed` — verified against its baseline. This is the evidence a repair worked.\n · `pending-baseline` — there was no baseline, so NOTHING was compared. A human must approve the capture in Needs review. You cannot approve it and must not call this passing.\n · `baseline` — this run set the golden. It verified nothing.\n · `regression` — the capture differs from the baseline. A human decides; this is not something to fix by re-pinning a locator.\n · `failed` — read `failureKind`: `locator` is the one class a re-pin fixes (open a repair session on this run), anything else is a crash, a timeout, a failed judge or an assertion that does not hold, and re-pinning must not be used to make it go away.\n\n`failingAssertions` lists only the checks that did not hold, with both values that were read — often the fastest way to see what is actually wrong.\n\nBe honest about cost and effect: this drives a real browser against the real app, and every run is visible to the user in Varys. Run it when you need the answer, not as a reflex after every edit.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1249,25 +1280,20 @@ export class McpController {
       {
         name: "finish_session",
         description:
-          "Finish the session: assemble the recorded steps into a draft test and end the session. Returns the draft testId and a warning if it has no checkpoints. Finishing with zero checkpoints IS allowed (the draft just carries that warning) — do NOT invent a checkpoint to avoid the warning; only the user/plan decides what to assert. INTERACTIVE sessions end ONLY on the user's explicit instruction: do not call this until the user tells you to finish or save, and then pass confirm: true — the server refuses an interactive finish without it. BATCH sessions finish when the plan's steps are done; confirm is not required. A human reviews and promotes the draft in the Varys web app.",
+          "Finish the session: assemble the recorded steps into a draft test and end the session. Returns the draft testId and a warning if it has no checkpoints. Call it when the brief is walked — the session is yours to end and there is nothing to confirm first. Finishing with zero checkpoints IS allowed (the draft just carries that warning) — do NOT invent a checkpoint to avoid the warning; only the brief decides what to assert. A human reviews and promotes the draft in the Varys web app.",
         inputSchema: {
           type: "object",
           properties: {
             sessionId: { type: "string" },
-            confirm: {
-              type: "boolean",
-              description:
-                "Set true ONLY when the user has explicitly told you to finish/save the session. Required to finish an INTERACTIVE session; ignored in batch.",
-            },
           },
           required: ["sessionId"],
         },
-        handler: (args) => a.finish(String(args.sessionId ?? ""), { confirm: Boolean(args.confirm) }),
+        handler: (args) => a.finish(String(args.sessionId ?? "")),
       },
       {
         name: "discard_session",
         description:
-          "Throw the session away WITHOUT saving anything: close the browser and drop every recorded step. Use this instead of finish_session when the session went wrong and its steps are not worth keeping — the wrong app or page, a flow that turned out to be a dead end, or a restart after a mistake. Saving a junk draft just to end the session makes work for whoever reviews the queue, so discard it instead. This is NOT how you end a good session (use finish_session) and it cannot be undone. As with finishing, do not discard an interactive session on your own initiative — ask the user first.",
+          "Throw the session away WITHOUT saving anything: close the browser and drop every recorded step. Use this instead of finish_session when the session went wrong and its steps are not worth keeping — the wrong app or page, a flow that turned out to be a dead end, or a restart after a mistake. Saving a junk draft just to end the session makes work for whoever reviews the queue, so discard it instead. This is NOT how you end a good session (use finish_session) and it cannot be undone, so say what went wrong and what you are throwing away.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1291,4 +1317,36 @@ export class McpController {
       },
     ];
   }
+}
+
+
+/**
+ * Split a tool result into the JSON a model reads and the PNGs it LOOKS at.
+ *
+ * Two shapes feed it, both meaning "these bytes are for your eyes, not your parser": a single
+ * `screenshot` (what `observe` returns, so Claude can see the page it is driving) and an ordered
+ * `images` array (the approved baselines `start_agent_run` hands over). Neither field survives
+ * into the JSON — base64 in a text block is noise a model cannot use.
+ *
+ * MCP image blocks carry no label, so a result with several must name them in its own payload —
+ * `start_agent_run` does that with `baselineImages`. "Which baseline is this?" is not a question
+ * to leave to positional luck.
+ */
+function splitImages(result: unknown): { json: unknown; pngs: string[] } {
+  if (!result || typeof result !== "object") return { json: result, pngs: [] };
+  const { screenshot, images, ...rest } = result as {
+    screenshot?: unknown;
+    images?: unknown;
+  } & Record<string, unknown>;
+  const pngs: string[] = [];
+  if (typeof screenshot === "string") pngs.push(screenshot);
+  if (Array.isArray(images)) {
+    for (const img of images) {
+      const data = (img as { data?: unknown })?.data;
+      if (typeof data === "string") pngs.push(data);
+    }
+  }
+  // Nothing to split: hand back the ORIGINAL object, so a result that happens to carry an
+  // unrelated `images` or `screenshot` key of another type keeps it.
+  return pngs.length === 0 ? { json: result, pngs } : { json: rest, pngs };
 }

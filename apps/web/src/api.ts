@@ -1,10 +1,10 @@
 import type {
-  AgentCredentialSummary,
   AuthoringInstructionsView,
+  AgentRunRequestResult,
+  AgentRunRequestState,
   AuthoringSessionSummary,
   BridgeChatState,
-  CreateAgentCredentialRequest,
-  CreatedAgentCredential,
+  BridgeHelperPresence,
   DashboardView,
   McpStatus,
   DraftSummary,
@@ -20,19 +20,9 @@ import type {
   SlackSettingsView,
   LocatorVerifyRequest,
   LocatorVerifyResult,
-  NeedsReviewItem,
   PromoteDraftBody,
   PersistResult,
   ReEvaluation,
-  RepairJobSummary,
-  RepairReviewDecision,
-  RepairBreakerOverride,
-  RepairBreakerSettings,
-  RepairBreakerView,
-  RepairReviewItem,
-  RepairPolicy,
-  SetRepairPolicyRequest,
-  SetRepairPolicyResult,
   RunSummary,
   RunView,
   SaveConfigResult,
@@ -40,6 +30,11 @@ import type {
   SuiteRunView,
   SuiteSummary,
   SuiteView,
+  AgentCheckpoint,
+  AgentCheckpointDeleteImpact,
+  AgentCheckpointInput,
+  AgentInstructionsPreview,
+  CreateAgentTestRequest,
   TestConfigPatch,
   TestConfigView,
   TestScheduleInput,
@@ -55,6 +50,18 @@ import type {
  * build time via VITE_API_BASE for a split-origin deploy.
  */
 export const API_BASE = import.meta.env.VITE_API_BASE ?? "";
+
+/**
+ * Where the API is reachable from OUTSIDE this browser tab — what a command the user copies out of
+ * the page has to name.
+ *
+ * Not the same thing as {@link API_BASE}, which is empty in the common same-origin case because
+ * the ingress (prod) or the Vite proxy (dev) forwards for us. A Bridge Helper on the user's laptop
+ * and an MCP client in their terminal have no such proxy: in dev the SPA is on :5174 and the API
+ * on :4000, so a command that copied the page's own origin would point at the SPA and fail.
+ */
+export const API_ORIGIN =
+  API_BASE || (import.meta.env.DEV ? "http://localhost:4000" : window.location.origin);
 
 /** Fetch the per-run review read-model. Throws on a non-2xx response. */
 export async function fetchRunView(runId: string): Promise<RunView> {
@@ -73,15 +80,6 @@ export async function fetchDashboard(): Promise<DashboardView> {
     throw new Error(`Failed to load the dashboard (${res.status})`);
   }
   return (await res.json()) as DashboardView;
-}
-
-/** Fetch the flat "needs review" list. Throws on a non-2xx response. */
-export async function fetchNeedsReview(): Promise<NeedsReviewItem[]> {
-  const res = await fetch(`${API_BASE}/runs/needs-review`);
-  if (!res.ok) {
-    throw new Error(`Failed to load the review queue (${res.status})`);
-  }
-  return (await res.json()) as NeedsReviewItem[];
 }
 
 /** Fetch the Runs history (every run, newest first). Throws on a non-2xx response. */
@@ -130,6 +128,57 @@ export async function createBridge(): Promise<BridgeChatState> {
     throw new Error(`Failed to start an authoring session (${res.status})`);
   }
   return (await res.json()) as BridgeChatState;
+}
+
+/**
+ * Whether this user has a Bridge Helper listening right now (Slice 17).
+ *
+ * Owner-scoped and carries no chat id, because the Run control on a test page is nowhere near a
+ * chat: the server answers for whoever is signed in.
+ */
+export async function fetchBridgeHelperPresence(): Promise<BridgeHelperPresence> {
+  const res = await fetch(`${API_BASE}/authoring/bridge/helper`);
+  if (!res.ok) {
+    throw new Error(await errorMessage(res, "Failed to check for a Bridge Helper"));
+  }
+  return (await res.json()) as BridgeHelperPresence;
+}
+
+/**
+ * Ask your own Claude to run an Agent-Driven Test (Slice 17).
+ *
+ * This creates no Run. The Run comes into existence when Claude calls `start_agent_run` — so a
+ * resolved promise means the request reached a paired helper, not that anything has started.
+ * The server's refusal message is the whole content of a failure here (pinned test, empty
+ * Checkpoint Manifest, no helper paired), so it is surfaced verbatim.
+ */
+export async function requestAgentRun(
+  testId: string,
+  environmentId?: string,
+): Promise<AgentRunRequestResult> {
+  const res = await fetch(`${API_BASE}/authoring/bridge/run-agent-test`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ testId, environmentId }),
+  });
+  if (!res.ok) {
+    throw new Error(await errorMessage(res, "Failed to ask your Claude to run this test"));
+  }
+  return (await res.json()) as AgentRunRequestResult;
+}
+
+/**
+ * What became of a run request for this test (Slice 18).
+ *
+ * Polled, because the press writes nothing durable and there is no row to subscribe to. Answers
+ * `none` rather than 404 for a test nobody has asked about — "no request" is an answer.
+ */
+export async function fetchAgentRunRequest(testId: string): Promise<AgentRunRequestState> {
+  const res = await fetch(`${API_BASE}/authoring/bridge/run-request/${encodeURIComponent(testId)}`);
+  if (!res.ok) {
+    throw new Error(await errorMessage(res, "Failed to check on your run request"));
+  }
+  return (await res.json()) as AgentRunRequestState;
 }
 
 /** Send a prompt down to the paired Bridge Helper for this chat (Slice 15). */
@@ -243,35 +292,6 @@ export async function sendSlackTest(): Promise<{ ok: true }> {
   return (await res.json()) as { ok: true };
 }
 
-/** Repair Agent credentials — the unattended `/mcp` issuer (ADR-0005). The list never carries a
- *  token; only `createAgentCredential` returns one, once. */
-export async function fetchAgentCredentials(): Promise<AgentCredentialSummary[]> {
-  const res = await fetch(`${API_BASE}/settings/agent-credentials`);
-  if (!res.ok) throw new Error(`Failed to load agent credentials (${res.status})`);
-  return (await res.json()) as AgentCredentialSummary[];
-}
-
-export async function createAgentCredential(
-  body: CreateAgentCredentialRequest,
-): Promise<CreatedAgentCredential> {
-  const res = await fetch(`${API_BASE}/settings/agent-credentials`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const err = (await res.json().catch(() => ({}))) as { message?: string };
-    throw new Error(err.message ?? `Failed to create the credential (${res.status})`);
-  }
-  return (await res.json()) as CreatedAgentCredential;
-}
-
-export async function revokeAgentCredential(id: string): Promise<AgentCredentialSummary> {
-  const res = await fetch(`${API_BASE}/settings/agent-credentials/${id}/revoke`, { method: "POST" });
-  if (!res.ok) throw new Error(`Failed to revoke the credential (${res.status})`);
-  return (await res.json()) as AgentCredentialSummary;
-}
-
 /** Whether Claude Code has recently driven the MCP server — an activity-based "connected" proxy
  *  (the MCP transport is stateless HTTP). Slice 15. */
 export async function fetchMcpStatus(): Promise<McpStatus> {
@@ -318,7 +338,7 @@ export async function discardDraft(id: string): Promise<void> {
 
 /** Relational metadata for a test — name, folder (null unfiles), tags (full-list
  *  replace), and/or the cron schedule (`null` clears it, Slice 8). Never the
- *  definition: the server writes only relational rows (no new test version). */
+ *  definition: the server writes only relational rows. */
 export interface UpdateTestBody {
   name?: string;
   folderId?: string | null;
@@ -326,11 +346,12 @@ export interface UpdateTestBody {
   schedule?: TestScheduleInput | null;
   /** Free-form note; `null`/empty clears it. Omit to leave unchanged. */
   notes?: string | null;
-  /** The test's Repair Policy (Slice 19). Omit to leave unchanged. */
-  repairPolicy?: RepairPolicy;
   /** The test's Brief — what it is for, in the author's words; `null`/empty clears it. Omit to
-   *  leave unchanged. Writes no new test_version, so editing it never disturbs the history. */
+   *  leave unchanged. It lives on the test row, so editing it never touches the definition. */
   brief?: string | null;
+  /** The wall-clock lease an Agent Run Session on this test is bounded by, in SECONDS. Omit to
+   *  leave unchanged. Refused on a pinned test, which Varys runs itself. */
+  agentLeaseSeconds?: number;
 }
 
 /** Rename / (un)file a test. Throws on a non-2xx response. */
@@ -343,6 +364,117 @@ export async function updateTest(id: string, body: UpdateTestBody): Promise<void
   if (!res.ok) {
     throw new Error(`Failed to update test (${res.status})`);
   }
+}
+
+/** The server's own error message when it has one, else a generic fallback. These endpoints
+ *  refuse things for reasons the author needs to read — "cannot join a suite because nothing can
+ *  run it unattended" is the answer to a question they are about to ask anyway. */
+async function errorText(res: Response, fallback: string): Promise<string> {
+  const body = (await res.json().catch(() => ({}))) as { message?: string };
+  return body.message ?? `${fallback} (${res.status})`;
+}
+
+/* ---- Agent-Driven Tests ------------------------------------------------------------- *
+ * The authoring surface for the kind with no steps: test-level AI Instructions (which reuse
+ * `brief` on updateTest above) and an ordered list of Checkpoints. All of it is edited in
+ * place — iterating on wording is deliberately not an audit event. */
+
+/** Create an Agent-Driven Test. Active on create: there is no Draft and no Promote for this
+ *  kind, because a person types every word of it. */
+export async function createAgentTest(body: CreateAgentTestRequest): Promise<{ id: string }> {
+  const res = await fetch(`${API_BASE}/tests/agent`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await errorText(res, "Failed to create test"));
+  return (await res.json()) as { id: string };
+}
+
+/**
+ * The fully composed AI Instructions — suite, test and checkpoint layers assembled exactly as
+ * `start_agent_run` would assemble them, without starting anything.
+ *
+ * Read before running, because three layers composed out of sight are what produce a baffling run
+ * an hour later.
+ */
+export async function fetchAgentInstructions(
+  testId: string,
+  environmentId?: string,
+): Promise<AgentInstructionsPreview> {
+  const qs = environmentId ? `?environmentId=${encodeURIComponent(environmentId)}` : "";
+  const res = await fetch(`${API_BASE}/tests/${testId}/agent-instructions${qs}`);
+  if (!res.ok) throw new Error(await errorText(res, "Failed to compose the instructions"));
+  return (await res.json()) as AgentInstructionsPreview;
+}
+
+/** The test's Checkpoints, in journey order. */
+export async function fetchAgentCheckpoints(testId: string): Promise<AgentCheckpoint[]> {
+  const res = await fetch(`${API_BASE}/tests/${testId}/agent-checkpoints`);
+  if (!res.ok) throw new Error(`Failed to load checkpoints (${res.status})`);
+  return (await res.json()) as AgentCheckpoint[];
+}
+
+export async function addAgentCheckpoint(
+  testId: string,
+  body: AgentCheckpointInput,
+): Promise<AgentCheckpoint> {
+  const res = await fetch(`${API_BASE}/tests/${testId}/agent-checkpoints`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await errorText(res, "Failed to add checkpoint"));
+  return (await res.json()) as AgentCheckpoint;
+}
+
+/** Edit one Checkpoint. A rename carries its approved baselines in every environment. */
+export async function updateAgentCheckpoint(
+  testId: string,
+  checkpointId: string,
+  body: AgentCheckpointInput,
+): Promise<AgentCheckpoint> {
+  const res = await fetch(`${API_BASE}/tests/${testId}/agent-checkpoints/${checkpointId}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await errorText(res, "Failed to save checkpoint"));
+  return (await res.json()) as AgentCheckpoint;
+}
+
+/** What deleting this Checkpoint would cost — asked before the delete, shown in its confirm. */
+export async function fetchAgentCheckpointDeleteImpact(
+  testId: string,
+  checkpointId: string,
+): Promise<AgentCheckpointDeleteImpact> {
+  const res = await fetch(
+    `${API_BASE}/tests/${testId}/agent-checkpoints/${checkpointId}/delete-impact`,
+  );
+  if (!res.ok) throw new Error(`Failed to check what this would delete (${res.status})`);
+  return (await res.json()) as AgentCheckpointDeleteImpact;
+}
+
+export async function deleteAgentCheckpoint(testId: string, checkpointId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/tests/${testId}/agent-checkpoints/${checkpointId}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error(await errorText(res, "Failed to delete checkpoint"));
+}
+
+/** Reorder the whole journey. Must name every checkpoint exactly once — the rows are
+ *  cumulative, so a partial reorder would change what each later instruction may assume. */
+export async function reorderAgentCheckpoints(
+  testId: string,
+  ids: string[],
+): Promise<AgentCheckpoint[]> {
+  const res = await fetch(`${API_BASE}/tests/${testId}/agent-checkpoints/reorder`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ids }),
+  });
+  if (!res.ok) throw new Error(await errorText(res, "Failed to reorder checkpoints"));
+  return (await res.json()) as AgentCheckpoint[];
 }
 
 /** Hard-delete a test — removes it and ALL its runs, baselines, and history. No
@@ -375,7 +507,7 @@ export async function deleteRun(id: string): Promise<void> {
   }
 }
 
-/** Fetch a test's editable config (waits + threshold of its latest version). */
+/** Fetch a test's editable config (the waits + thresholds of its definition). */
 export async function fetchTestConfig(id: string): Promise<TestConfigView> {
   const res = await fetch(`${API_BASE}/tests/${id}/config`);
   if (!res.ok) {
@@ -384,8 +516,8 @@ export async function fetchTestConfig(id: string): Promise<TestConfigView> {
   return (await res.json()) as TestConfigView;
 }
 
-/** Save a config patch — writes a new test version. A 409 means the test changed
- *  since it was opened (stale baseVersion); surface that distinctly so the caller can
+/** Save a config patch — changes the test's definition in place. A 409 means the test changed
+ *  since it was opened (stale `baseUpdatedAt`); surface that distinctly so the caller can
  *  prompt a reload. Throws on any non-2xx. */
 export async function saveTestConfig(
   id: string,
@@ -399,7 +531,7 @@ export async function saveTestConfig(
   if (!res.ok) {
     throw new Error(
       res.status === 409
-        ? "This test changed since you opened it. Reload to get the latest, then re-apply your edits."
+        ? "This test changed since you opened it — someone else's edit is what it says now. Reload, then re-apply your changes."
         : `Failed to save test config (${res.status})`,
     );
   }
@@ -524,6 +656,7 @@ export async function createSuite(body: {
   name: string;
   testIds?: string[];
   folderIds?: string[];
+  agentInstructions?: string | null;
 }): Promise<{ id: string }> {
   const res = await fetch(`${API_BASE}/suites`, {
     method: "POST",
@@ -531,7 +664,7 @@ export async function createSuite(body: {
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    throw new Error(`Failed to create suite (${res.status})`);
+    throw new Error(await errorText(res, "Failed to create suite"));
   }
   return (await res.json()) as { id: string };
 }
@@ -544,6 +677,7 @@ export async function updateSuite(
     name?: string;
     testIds?: string[];
     folderIds?: string[];
+    agentInstructions?: string | null;
     schedule?: TestScheduleInput | null;
   },
 ): Promise<void> {
@@ -553,7 +687,7 @@ export async function updateSuite(
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    throw new Error(`Failed to update suite (${res.status})`);
+    throw new Error(await errorText(res, "Failed to update suite"));
   }
 }
 
@@ -746,7 +880,7 @@ export async function reEvaluateCheckpoint(
   return (await res.json()) as ReEvaluation;
 }
 
-/** Commit masks/threshold: writes a new test version and re-judges this
+/** Commit masks/threshold: writes them onto the test's definition and re-judges this
  *  checkpoint. Throws on failure so the caller can surface it. */
 export async function persistCheckpointMasks(
   runId: string,
@@ -786,8 +920,7 @@ export async function postDecision(
 }
 
 /** The server's `message` if it sent one, else a status-code fallback. Nest's exception
- *  filter puts the reason a request was refused there, and for the repair surfaces that
- *  reason ("only a run that failed on an unresolvable locator can be repaired") is the
+ *  filter puts the reason a request was refused there, and that reason is usually the
  *  whole point of the error. */
 async function errorMessage(res: Response, fallback: string): Promise<string> {
   try {
@@ -797,108 +930,4 @@ async function errorMessage(res: Response, fallback: string): Promise<string> {
     /* non-JSON error body — fall through */
   }
   return `${fallback} (${res.status})`;
-}
-
-/**
- * Set a Repair Policy across a scope — one or more tests, a whole folder (including its
- * subfolders), or a tag. The server rejects an empty scope rather than applying to everything.
- * Throws on a non-2xx response.
- */
-export async function setRepairPolicy(
-  body: SetRepairPolicyRequest,
-): Promise<SetRepairPolicyResult> {
-  const res = await fetch(`${API_BASE}/tests/repair-policy`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    throw new Error(await errorMessage(res, "Failed to set the repair policy"));
-  }
-  return res.json() as Promise<SetRepairPolicyResult>;
-}
-
-/** The repair queue. Open jobs (queued + claimed) by default; `all` includes finished ones. */
-export async function fetchRepairJobs(opts?: { all?: boolean }): Promise<RepairJobSummary[]> {
-  const res = await fetch(`${API_BASE}/repair-jobs${opts?.all ? "?all=1" : ""}`);
-  if (!res.ok) throw new Error(`Failed to load the repair queue (${res.status})`);
-  return res.json() as Promise<RepairJobSummary[]>;
-}
-
-/** Enqueue a repair by hand for a run that failed on an unresolvable locator. */
-export async function enqueueRepairJob(runId: string): Promise<RepairJobSummary> {
-  const res = await fetch(`${API_BASE}/repair-jobs`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ runId }),
-  });
-  if (!res.ok) {
-    throw new Error(await errorMessage(res, "Failed to enqueue the repair"));
-  }
-  return res.json() as Promise<RepairJobSummary>;
-}
-
-/**
- * Repaired versions awaiting a human accept/reject — the repair review queue (slice 04). Nested
- * under `/repair-jobs` so it needs no new dev-proxy prefix.
- */
-export async function fetchRepairReviews(): Promise<RepairReviewItem[]> {
-  const res = await fetch(`${API_BASE}/repair-jobs/reviews`);
-  if (!res.ok) throw new Error(`Failed to load the repair reviews (${res.status})`);
-  return res.json() as Promise<RepairReviewItem[]>;
-}
-
-/** Accept a repaired version (it stays the active definition) or reject it (the test reverts). */
-export async function decideRepairReview(
-  versionId: string,
-  action: "accept" | "reject",
-): Promise<RepairReviewDecision> {
-  const res = await fetch(`${API_BASE}/repair-jobs/reviews/${versionId}/${action}`, {
-    method: "POST",
-  });
-  if (!res.ok) {
-    throw new Error(await errorMessage(res, `Failed to ${action} the repair`));
-  }
-  return res.json() as Promise<RepairReviewDecision>;
-}
-
-/** The repair circuit breaker's state (slice 07) — why the queue may have stopped filling. */
-export async function fetchRepairBreaker(): Promise<RepairBreakerView> {
-  const res = await fetch(`${API_BASE}/repair-jobs/breaker`);
-  if (!res.ok) throw new Error(`Failed to load the circuit breaker (${res.status})`);
-  return res.json() as Promise<RepairBreakerView>;
-}
-
-/** Release everything the breaker suppressed into the queue — the deliberate human override. */
-export async function releaseRepairBreaker(): Promise<RepairBreakerOverride> {
-  const res = await fetch(`${API_BASE}/repair-jobs/breaker/release`, { method: "POST" });
-  if (!res.ok) throw new Error(await errorMessage(res, "Failed to release the circuit breaker"));
-  return res.json() as Promise<RepairBreakerOverride>;
-}
-
-/** The circuit-breaker threshold as the Configurations page reads and writes it. */
-export async function fetchRepairBreakerSettings(): Promise<RepairBreakerSettings> {
-  const res = await fetch(`${API_BASE}/settings/repair-breaker`);
-  if (!res.ok) throw new Error(`Failed to load the repair breaker settings (${res.status})`);
-  return res.json() as Promise<RepairBreakerSettings>;
-}
-
-export async function saveRepairBreakerSettings(
-  threshold: number,
-): Promise<RepairBreakerSettings> {
-  const res = await fetch(`${API_BASE}/settings/repair-breaker`, {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ threshold }),
-  });
-  if (!res.ok) throw new Error(await errorMessage(res, "Failed to save the threshold"));
-  return res.json() as Promise<RepairBreakerSettings>;
-}
-
-/** Cancel a queued (unclaimed) repair job. */
-export async function cancelRepairJob(id: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/repair-jobs/${id}/cancel`, { method: "POST" });
-  if (!res.ok) {
-    throw new Error(await errorMessage(res, "Failed to cancel the job"));
-  }
 }

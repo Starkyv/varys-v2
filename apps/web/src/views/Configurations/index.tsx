@@ -1,5 +1,4 @@
 import {
-  type AgentCredentialSummary,
   DEFAULT_PER_PIXEL_THRESHOLD,
   DEFAULT_RATIO_THRESHOLD,
   type ImageComparisonSettings,
@@ -12,26 +11,19 @@ import {
   Badge,
   Button,
   ErrorState,
-  IconButton,
   Input,
   Select,
   Skeleton,
   Sliders,
   Switch,
-  Trash,
 } from "@varys/ui";
 import { useEffect, useState } from "react";
 import { useToast } from "../../context/toast";
 import {
-  useAgentCredentials,
-  useCreateAgentCredential,
   useImageComparisonSettings,
   useJudgeSettings,
   useSaveImageComparisonSettings,
   useSaveJudgeSettings,
-  useRevokeAgentCredential,
-  useRepairBreakerSettings,
-  useSaveRepairBreakerSettings,
   useSaveSlackSettings,
   useSendSlackTest,
   useSlackSettings,
@@ -93,8 +85,6 @@ export function Configurations() {
       <ImageComparisonCard settings={query.data} />
       <JudgeCard />
       <SlackCard />
-      <RepairBreakerCard />
-      <AgentCredentialsCard />
       <p className={styles.comingSoon}>More settings coming soon — capture and schedules.</p>
     </div>
   );
@@ -653,288 +643,6 @@ function SlackCardForm({ settings }: { settings: SlackSettingsView }) {
         <Button variant="secondary" size="sm" loading={test.isPending || save.isPending} disabled={!canTest} onClick={() => void onTest()}>
           Send test message
         </Button>
-      </div>
-    </section>
-  );
-}
-
-/**
- * The repair circuit-breaker threshold (Slice 19, slice 07).
- *
- * The setting reads as a safety limit rather than a tuning knob, because that is what it is: below
- * it Varys repairs drift unattended, above it it refuses and asks a human. The copy leads with the
- * consequence of raising it, since the failure mode is silent — a threshold set too high never
- * announces itself, it just lets a bad deploy rewrite the corpus.
- */
-function RepairBreakerCard() {
-  const query = useRepairBreakerSettings();
-  const save = useSaveRepairBreakerSettings();
-  const { toast } = useToast();
-  const [value, setValue] = useState("");
-
-  const settings = query.data;
-  useEffect(() => {
-    if (settings) setValue(String(settings.threshold));
-  }, [settings]);
-
-  if (query.isLoading) return <Skeleton height={220} radius="var(--radius-xl)" />;
-  if (query.isError || !settings) {
-    return (
-      <ErrorState
-        title="Couldn’t load the repair breaker"
-        description="Fetching the circuit-breaker threshold failed."
-        onRetry={() => query.refetch()}
-      />
-    );
-  }
-
-  const parsed = Number(value);
-  const valid = Number.isFinite(parsed) && Number.isInteger(parsed) && parsed >= 1;
-  const dirty = valid && parsed !== settings.threshold;
-
-  const onSave = () => {
-    save.mutate(parsed, {
-      onSuccess: (next) =>
-        toast(`Repair is suppressed above ${next.threshold} simultaneous locator failures.`),
-      onError: (e) => toast(e instanceof Error ? e.message : "Couldn’t save the threshold"),
-    });
-  };
-
-  return (
-    <section className={styles.card}>
-      <header className={styles.header}>
-        <span className={styles.headerIcon}>
-          <Sliders size={19} />
-        </span>
-        <div className={styles.headerText}>
-          <h2 className={styles.title}>Repair circuit breaker</h2>
-          <p className={styles.subtitle}>
-            How many tests may be broken on a locator at once before Varys stops repairing anything
-            and asks you instead. Mass failure means the app broke or was redesigned — a decision
-            that is yours, not an agent’s.
-          </p>
-        </div>
-      </header>
-
-      <div className={styles.setting}>
-        <div className={styles.settingHead}>
-          <span className={styles.settingTitle}>Threshold</span>
-        </div>
-        <p className={styles.settingDesc}>
-          Above this many tests failing on a locator within {settings.windowMinutes} minutes, no
-          repair jobs are created at all — the failures are recorded, an alert fires, and you can
-          release them for repair once you have confirmed the change was intended. Default{" "}
-          <code>{settings.defaultThreshold}</code>. Raising it is not free: the higher it is, the
-          larger the breakage an agent will quietly repair your tests into agreeing with.
-        </p>
-        <Input
-          type="number"
-          min={1}
-          value={value}
-          aria-label="Circuit breaker threshold"
-          onChange={(e) => setValue(e.target.value)}
-        />
-      </div>
-
-      <div className={styles.setting}>
-        <Button
-          variant="primary"
-          size="md"
-          loading={save.isPending}
-          disabled={!dirty}
-          onClick={onSave}
-        >
-          Save changes
-        </Button>
-      </div>
-    </section>
-  );
-}
-
-/** Status → badge tone. `expired` and `revoked` are both refusals, but only one of them was
- *  somebody's decision, so they don't read the same. */
-const CREDENTIAL_TONE: Record<AgentCredentialSummary["status"], "success" | "warning" | "danger"> = {
-  active: "success",
-  expired: "warning",
-  revoked: "danger",
-};
-
-function formatWhen(iso: string | null): string {
-  if (!iso) return "never";
-  return new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
-}
-
-/**
- * Repair Agent credentials (ADR-0005) — the second issuer on `/mcp`, for an unattended drainer
- * that cannot complete the browser OAuth leg a human does.
- *
- * This surface exists because the credential's safeguard is scope and visibility, not secrecy:
- * expiry, `last used`, and one-click revocation are what make a long-lived machine secret
- * acceptable, so they are the whole content of the card rather than a detail behind a link.
- */
-function AgentCredentialsCard() {
-  const query = useAgentCredentials();
-  const create = useCreateAgentCredential();
-  const revoke = useRevokeAgentCredential();
-  const { toast } = useToast();
-
-  const [label, setLabel] = useState("");
-  const [days, setDays] = useState("30");
-  // The provisioning response is the ONLY time the token is readable, so it is held here until
-  // the admin dismisses it — a reload loses it for good, which the callout says out loud.
-  const [issued, setIssued] = useState<{ label: string; token: string } | null>(null);
-
-  const onCreate = async () => {
-    try {
-      const parsed = Number(days);
-      const result = await create.mutateAsync({
-        label: label.trim(),
-        expiresInDays: Number.isFinite(parsed) && parsed > 0 ? parsed : undefined,
-      });
-      setIssued({ label: result.credential.label, token: result.token });
-      setLabel("");
-    } catch (e) {
-      toast(e instanceof Error ? e.message : "Could not provision the credential");
-    }
-  };
-
-  const onRevoke = async (credential: AgentCredentialSummary) => {
-    try {
-      await revoke.mutateAsync(credential.id);
-      toast(`Revoked “${credential.label}” — refused from its next request.`);
-    } catch (e) {
-      toast(e instanceof Error ? e.message : "Could not revoke the credential");
-    }
-  };
-
-  return (
-    <section className={styles.card}>
-      <header className={styles.header}>
-        <span className={styles.headerIcon}>
-          <Sliders size={19} />
-        </span>
-        <div className={styles.headerText}>
-          <h2 className={styles.title}>Repair Agent credentials</h2>
-          <p className={styles.subtitle}>
-            A token an unattended repair agent presents on <code>/mcp</code> instead of signing in
-            through a browser. It can only work on repair jobs it has claimed — it cannot author a
-            new test, and it can never approve a baseline. Revoke one and it is refused from its
-            very next request.
-          </p>
-        </div>
-      </header>
-
-      {issued && (
-        <div className={styles.tokenCallout}>
-          <div className={styles.settingHead}>
-            <span className={styles.settingTitle}>Token for “{issued.label}”</span>
-            <Badge tone="warning" size="sm">
-              shown once
-            </Badge>
-          </div>
-          <p className={styles.settingDesc}>
-            Copy it into the agent’s configuration now. It is stored hashed, so this is the only
-            time it can be read — leaving this page loses it and you’ll need a new credential.
-          </p>
-          <code className={styles.tokenValue}>{issued.token}</code>
-          <div className={styles.credActions}>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => {
-                void navigator.clipboard?.writeText(issued.token);
-                toast("Token copied to the clipboard.");
-              }}
-            >
-              Copy token
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => setIssued(null)}>
-              Done
-            </Button>
-          </div>
-        </div>
-      )}
-
-      <div className={styles.setting}>
-        <div className={styles.settingHead}>
-          <span className={styles.settingTitle}>Provision a credential</span>
-        </div>
-        <p className={styles.settingDesc}>
-          A label (it becomes the attribution on anything this agent repairs) and how many days it
-          should live for.
-        </p>
-        <div className={styles.createRow}>
-          <Input
-            value={label}
-            placeholder="e.g. nightly-drainer"
-            aria-label="Credential label"
-            onChange={(e) => setLabel(e.target.value)}
-          />
-          <Input
-            value={days}
-            type="number"
-            min={1}
-            max={365}
-            aria-label="Expires in days"
-            onChange={(e) => setDays(e.target.value)}
-          />
-          <Button
-            variant="primary"
-            size="md"
-            loading={create.isPending}
-            disabled={!label.trim()}
-            onClick={() => void onCreate()}
-          >
-            Provision
-          </Button>
-        </div>
-      </div>
-
-      <div className={styles.setting}>
-        <div className={styles.settingHead}>
-          <span className={styles.settingTitle}>Provisioned credentials</span>
-        </div>
-        {query.isLoading && <Skeleton height={72} radius="var(--radius-lg)" />}
-        {query.isError && (
-          <ErrorState
-            title="Couldn’t load the credentials"
-            description="Fetching the Repair Agent credentials failed."
-            onRetry={() => query.refetch()}
-          />
-        )}
-        {query.data?.length === 0 && (
-          <p className={styles.settingDesc}>
-            None yet — no unattended agent can reach <code>/mcp</code>.
-          </p>
-        )}
-        {query.data?.map((c) => (
-          <div key={c.id} className={styles.credRow}>
-            <div className={styles.credMain}>
-              <span className={styles.credLabel}>
-                {c.label} <code>…{c.tokenHint}</code>
-              </span>
-              <span className={styles.credMeta}>
-                {c.status === "revoked"
-                  ? `revoked ${formatWhen(c.revokedAt)}`
-                  : `expires ${formatWhen(c.expiresAt)}`}{" "}
-                · last used {formatWhen(c.lastUsedAt)} · created by {c.createdBy}
-              </span>
-            </div>
-            <Badge tone={CREDENTIAL_TONE[c.status]} size="sm">
-              {c.status}
-            </Badge>
-            {c.status !== "revoked" && (
-              <IconButton
-                icon={<Trash size={16} />}
-                label={`Revoke ${c.label}`}
-                variant="ghost"
-                size="sm"
-                disabled={revoke.isPending}
-                onClick={() => void onRevoke(c)}
-              />
-            )}
-          </div>
-        ))}
       </div>
     </section>
   );

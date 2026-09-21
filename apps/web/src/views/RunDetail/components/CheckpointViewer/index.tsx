@@ -56,7 +56,10 @@ export function CheckpointViewer({
   const [showMaskEditor, setShowMaskEditor] = useState(false);
 
   const isPending = cp.reviewState === "pending-baseline";
-  const hasBaseline = !isPending && cp.baselineUrl != null;
+  // Nothing was captured for this slot, so every comparison affordance below — view modes,
+  // sliders, threshold readout, mask editors — is about an image that does not exist.
+  const unreached = cp.reviewState === "missing";
+  const hasBaseline = !isPending && !unreached && cp.baselineUrl != null;
   const over = cp.diffScore != null && cp.diffScore > cp.threshold;
   // Context checkpoints are judged by an LLM, not pixel-diffed: "failing" is a `diff` reviewState,
   // and the pixel-only knobs (threshold, mask editors, diff-highlight) don't apply.
@@ -85,7 +88,7 @@ export function CheckpointViewer({
           </Badge>
         )}
         <span className={styles.spacer} />
-        {!isPending && modeOptions.length > 1 && (
+        {!isPending && !unreached && modeOptions.length > 1 && (
           <SegmentedControl ariaLabel="Diff view mode" options={modeOptions} value={mode} onValueChange={setMode} />
         )}
       </header>
@@ -109,10 +112,15 @@ export function CheckpointViewer({
 
       <div className={styles.review}>
         <div
-          className={cx(styles.verdict, isPending ? styles.verdictInfo : failing ? styles.verdictDanger : styles.verdictSuccess)}
+          className={cx(
+            styles.verdict,
+            unreached ? styles.verdictDanger : isPending ? styles.verdictInfo : failing ? styles.verdictDanger : styles.verdictSuccess,
+          )}
         >
           <span className={styles.verdictLabel}>
-            {isPending
+            {unreached
+              ? "Never reached — nothing was captured"
+              : isPending
               ? "First capture — no baseline yet"
               : isContext
                 ? failing
@@ -122,20 +130,20 @@ export function CheckpointViewer({
                   ? "Over threshold"
                   : "Within threshold"}
           </span>
-          {!isPending && !isContext && (
+          {!isPending && !unreached && !isContext && (
             <span className={styles.verdictScore}>
               Diff <strong className={styles.mono}>{scorePct(cp.diffScore)}</strong> · threshold{" "}
               <strong className={styles.mono}>{scorePct(cp.threshold, 2)}</strong>
             </span>
           )}
-          {!isPending && isContext && cp.judgeReasoning && (
+          {!isPending && !unreached && isContext && cp.judgeReasoning && (
             <span className={styles.verdictScore}>{cp.judgeReasoning}</span>
           )}
         </div>
 
         {isPending && !isContext && (
           // First capture — no baseline to diff yet, so edit the ignore regions directly on the
-          // capture that's about to become the baseline (draw / move / resize; saves a version).
+          // capture that's about to become the baseline (draw / move / resize; saves the test).
           <PendingMaskEditor checkpoint={cp} runId={runId} />
         )}
 

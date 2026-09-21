@@ -82,7 +82,6 @@ describe("Authoring → live frames", () => {
       startUrl: fixture.url,
       name: "live preview flow",
       intent: "drive a login and assert frames",
-      mode: "interactive",
     });
     const sid: string = opened.sessionId;
     const nodes: Array<{ ref: string; tag: string; name: string }> = opened.nodes;
@@ -107,7 +106,7 @@ describe("Authoring → live frames", () => {
     await callTool("checkpoint", { sessionId: sid, name: "welcome", mode: "fullpage" });
 
     // finish tears the session down and must NOT add a frame.
-    const finished = await callTool("finish_session", { sessionId: sid, confirm: true });
+    const finished = await callTool("finish_session", { sessionId: sid });
     sub.unsubscribe();
     subD.unsubscribe();
     // Finishing persists a Draft and emits the hand-off event the web uses to link to review.
@@ -150,7 +149,7 @@ describe("Authoring → live frames", () => {
         method: "tools/call",
         params: {
           name: "open_session",
-          arguments: { startUrl: fixture.url, name: "owned by user one", mode: "interactive" },
+          arguments: { startUrl: fixture.url, name: "owned by user one" },
         },
       })
       .expect(200);
@@ -199,7 +198,7 @@ describe("Authoring → live frames", () => {
           jsonrpc: "2.0",
           id: 3,
           method: "tools/call",
-          params: { name: "finish_session", arguments: { sessionId: sid, confirm: true } },
+          params: { name: "finish_session", arguments: { sessionId: sid } },
         });
     }
   }, 60_000);

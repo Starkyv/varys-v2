@@ -34,7 +34,7 @@ export function AssertionsEditor({
   assertions: TestConfigAssertion[];
   /** The current (possibly unsaved) check text per assertion id. */
   checks: Record<string, string>;
-  /** Ids staged for removal — struck through until the save writes the new version. */
+  /** Ids staged for removal — struck through until the save lands. */
   removed: Set<string>;
   onCheckChange: (id: string, check: string) => void;
   onRemove: (id: string) => void;

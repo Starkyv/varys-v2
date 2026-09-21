@@ -5,7 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { environments, testVersions } from "@varys/db";
+import { currentDefinitionOf, environments } from "@varys/db";
 import type { LocatorVerifyRequest, LocatorVerifyResult } from "@varys/review-contract";
 import {
   type EnvCookie,
@@ -15,7 +15,7 @@ import {
   verifyLocatorAtStep,
 } from "@varys/runner";
 import type { TestDefinition } from "@varys/step-schema";
-import { desc, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
 import { applyFingerprintPatch } from "../fingerprint-patch";
 
@@ -36,14 +36,9 @@ export class LocatorVerifyService {
   constructor(@Inject(DB) private readonly db: Db) {}
 
   async verify(testId: string, req: LocatorVerifyRequest): Promise<LocatorVerifyResult> {
-    const [row] = await this.db
-      .select({ definition: testVersions.definition })
-      .from(testVersions)
-      .where(eq(testVersions.testId, testId))
-      .orderBy(desc(testVersions.version))
-      .limit(1);
-    if (!row) throw new NotFoundException(`Test ${testId} not found`);
-    const def = row.definition as TestDefinition;
+    const definition = await currentDefinitionOf(this.db, testId);
+    if (!definition) throw new NotFoundException(`Test ${testId} not found`);
+    const def = definition as TestDefinition;
 
     const step = def.steps[req.stepIndex];
     if (!step) throw new BadRequestException(`Step ${req.stepIndex} is out of range`);

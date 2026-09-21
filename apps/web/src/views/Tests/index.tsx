@@ -1,8 +1,4 @@
-import type {
-  FolderSummary,
-  RepairPolicy,
-  SetRepairPolicyRequest,
-} from "@varys/review-contract";
+import type { FolderSummary } from "@varys/review-contract";
 import {
   Button,
   ChevronRight,
@@ -14,16 +10,25 @@ import {
   Play,
   Search,
   SegmentedControl,
-  Select,
   Skeleton,
+  Input,
+  Modal,
+  ModalBody,
+  ModalFooter,
+  ModalHeader,
   Sparkles,
 } from "@varys/ui";
 import { useCallback, useMemo, useState } from "react";
-import { useConfirm } from "../../context/confirm";
 import { useRouter } from "../../context/router";
 import { useRunDialog } from "../../context/run-dialog";
 import { useToast } from "../../context/toast";
-import { useFolders, useSetRepairPolicy, useTags, useTests, useUpdateTest } from "../../queries";
+import {
+  useCreateAgentTest,
+  useFolders,
+  useTags,
+  useTests,
+  useUpdateTest,
+} from "../../queries";
 import { type FolderFilter, FolderRail } from "./components/FolderRail";
 import { TagFilter } from "./components/TagFilter";
 import { TestRow } from "./components/TestRow";
@@ -68,9 +73,6 @@ export function Tests() {
   const update = useUpdateTest();
   const { openRunDialog } = useRunDialog();
   const { toast } = useToast();
-  const confirm = useConfirm();
-  const setPolicy = useSetRepairPolicy();
-  const [bulkPolicy, setBulkPolicy] = useState<RepairPolicy>("auto");
   const { route, navigate } = useRouter();
 
   // The open folder lives in the URL (`?view=tests&folder=<id|unfiled>`) so a shared link reopens
@@ -88,6 +90,7 @@ export function Tests() {
   );
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
+  const [creatingAgent, setCreatingAgent] = useState(false);
   // Finder-style icon grid vs. the detailed list. Persisted per-viewer.
   const [viewMode, setViewMode] = useState<"icons" | "list">(() => {
     try {
@@ -164,56 +167,6 @@ export function Tests() {
         onError: (e) => toast(e instanceof Error ? e.message : "Move failed"),
       },
     );
-  }
-
-  // Bulk Repair Policy (Slice 19) — applies to whatever is currently scoped, with the scope
-  // spelled out in the confirmation rather than inferred. A folder scope resolves on the SERVER
-  // so it includes subfolders the pane isn't showing; a tag scope crosses folder boundaries; and
-  // with neither, it applies to exactly the tests listed. Never "everything" by accident: opting
-  // a whole corpus into unattended editing must be something you asked for.
-  const bulkScope: { label: string; body: SetRepairPolicyRequest } | null =
-    (() => {
-      if (selectedFolder && !tagFilter) {
-        return {
-          label: `every test in “${selectedFolder.name}” and its subfolders`,
-          body: { policy: bulkPolicy, folderId: selectedFolder.id },
-        };
-      }
-      if (tagFilter) {
-        return {
-          label: `every test tagged “${tagFilter}”`,
-          body: { policy: bulkPolicy, tag: tagFilter },
-        };
-      }
-      if (filtered.length > 0) {
-        return {
-          label: `the ${filtered.length} test${filtered.length === 1 ? "" : "s"} listed here`,
-          body: { policy: bulkPolicy, testIds: filtered.map((t) => t.id) },
-        };
-      }
-      return null;
-    })();
-
-  async function applyBulkPolicy() {
-    if (!bulkScope) return;
-    const ok = await confirm({
-      title: bulkPolicy === "auto" ? "Turn on auto-repair?" : "Turn off auto-repair?",
-      message:
-        bulkPolicy === "auto"
-          ? `${bulkScope.label} will queue a repair for Claude when a locator stops resolving. A repair always lands as an unreviewed version — it can never turn a run green on its own.`
-          : `${bulkScope.label} will stop queueing repairs. A broken locator will simply leave the run red.`,
-      confirmLabel: bulkPolicy === "auto" ? "Turn on" : "Turn off",
-    });
-    if (!ok) return;
-    setPolicy.mutate(bulkScope.body, {
-      onSuccess: (r) =>
-        toast(
-          r.updated === 0
-            ? "No tests matched — nothing changed"
-            : `Repair policy set to ${bulkPolicy} on ${r.updated} test${r.updated === 1 ? "" : "s"}`,
-        ),
-      onError: (e) => toast(e instanceof Error ? e.message : "Couldn’t set the repair policy"),
-    });
   }
 
   function clearFilters() {
@@ -304,33 +257,15 @@ export function Tests() {
                 </span>
               )}
             </nav>
-            <div className={styles.policyBulk}>
-              <span className={styles.policyBulkIcon} aria-hidden>
-                <Sparkles size={13} />
-              </span>
-              <span className={styles.policyBulkLabel}>Repair policy</span>
-              <Select
-                ariaLabel="Repair policy to apply"
-                selectSize="sm"
-                options={[
-                  { value: "auto", label: "Auto" },
-                  { value: "manual", label: "Manual" },
-                ]}
-                value={bulkPolicy}
-                onValueChange={(v) => setBulkPolicy(v as RepairPolicy)}
-                className={styles.policyBulkSelect}
-              />
-              <Button
-                variant="secondary"
-                size="sm"
-                disabled={!bulkScope || setPolicy.isPending}
-                loading={setPolicy.isPending}
-                onClick={applyBulkPolicy}
-                title={bulkScope ? `Apply to ${bulkScope.label}` : "Nothing in scope"}
-              >
-                Apply
-              </Button>
-            </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              iconLeft={<Sparkles size={14} />}
+              onClick={() => setCreatingAgent(true)}
+              title="A test with no recorded steps, walked by your own local Claude"
+            >
+              New agent test
+            </Button>
             <SegmentedControl<"icons" | "list">
               ariaLabel="View"
               size="sm"
@@ -401,10 +336,19 @@ export function Tests() {
                   >
                     <span className={styles.fileGlyph}>
                       <FileIcon />
-                      {t.needsEnvironment && (
-                        <span className={styles.fileEnvBadge} title="Needs an environment">
-                          <Lock size={10} />
+                      {t.kind === "agent" ? (
+                        <span
+                          className={styles.fileAgentBadge}
+                          title="Agent-driven — no recorded steps; your own local Claude walks its instructions"
+                        >
+                          <Sparkles size={10} />
                         </span>
+                      ) : (
+                        t.needsEnvironment && (
+                          <span className={styles.fileEnvBadge} title="Needs an environment">
+                            <Lock size={10} />
+                          </span>
+                        )
                       )}
                     </span>
                     <span className={styles.folderLabel}>{t.name}</span>
@@ -488,6 +432,74 @@ export function Tests() {
           )}
         </div>
       </div>
+      <NewAgentTestDialog open={creatingAgent} onClose={() => setCreatingAgent(false)} />
     </div>
+  );
+}
+
+/**
+ * Create an Agent-Driven Test.
+ *
+ * Only a name is asked for. The instructions and checkpoints are written in the editor, where
+ * there is room for them — asking for prose in a modal produces prose written to fit a modal.
+ */
+function NewAgentTestDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const create = useCreateAgentTest();
+  const { navigate } = useRouter();
+  const { toast } = useToast();
+  const [name, setName] = useState("");
+
+  function submit() {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    create.mutate(
+      { name: trimmed },
+      {
+        onSuccess: (created) => {
+          setName("");
+          onClose();
+          // Straight into the editor: a test with no instructions and no checkpoints does
+          // nothing, so landing back on the list would just hide the work that remains.
+          navigate({ name: "testDetail", testId: created.id });
+        },
+        onError: (e) => toast(e instanceof Error ? e.message : "Couldn’t create the test"),
+      },
+    );
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} width={460} labelledBy="new-agent-test-title">
+      <ModalHeader
+        titleId="new-agent-test-title"
+        icon={<Sparkles size={16} />}
+        title="New agent-driven test"
+        onClose={onClose}
+      />
+      <ModalBody>
+        <p className={styles.dialogText}>
+          A test with no recorded steps. You write what it should do and what each screen must
+          show; your own local Claude walks it each run and compares what it captured against the
+          baselines you approve.
+        </p>
+        <Input
+          autoFocus
+          value={name}
+          placeholder="Analytics dashboard survives a bad filter"
+          aria-label="Test name"
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") submit();
+          }}
+        />
+      </ModalBody>
+      <ModalFooter>
+        <Button variant="secondary" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button disabled={!name.trim() || create.isPending} loading={create.isPending} onClick={submit}>
+          Create
+        </Button>
+      </ModalFooter>
+    </Modal>
   );
 }

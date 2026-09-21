@@ -21,7 +21,7 @@ export class SuiteRunsController {
     return this.suiteRuns.getById(id);
   }
 
-  // Repeat this fan-out: same suite, same environments, membership + versions re-resolved now.
+  // Repeat this fan-out: same suite, same environments, membership + definitions re-resolved now.
   // 409 when the suite or every targeted environment has since been deleted.
   @Post(":id/rerun")
   rerun(@Param("id") id: string, @CurrentUser() user: AuthUser) {

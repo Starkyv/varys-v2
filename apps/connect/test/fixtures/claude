@@ -1,0 +1,21 @@
+#!/usr/bin/env node
+// A stand-in for the `claude` CLI, emitting the `--output-format stream-json` shape the helper
+// parses. Exists so the parser can be tested without spending anyone's subscription.
+const args = process.argv.slice(2);
+const prompt = args[args.length - 1];
+const lines = [
+  { type: "system", subtype: "init", session_id: "sess-abc", tools: [] },
+  {
+    type: "assistant",
+    message: {
+      content: [
+        { type: "text", text: "Starting the run." },
+        { type: "tool_use", name: "mcp__varys__start_agent_run", input: { testId: "T-1" } },
+      ],
+    },
+  },
+  { type: "user", message: { content: [{ type: "tool_result", content: "ok" }] } },
+  { type: "assistant", message: { content: [{ type: "text", text: `Saw prompt: ${prompt.slice(0, 20)}` }] } },
+  { type: "result", subtype: "success", is_error: false, result: "done" },
+];
+for (const l of lines) process.stdout.write(`${JSON.stringify(l)}\n`);

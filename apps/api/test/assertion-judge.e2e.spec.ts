@@ -8,7 +8,7 @@ import { createDb, type DbHandle } from "@varys/db";
 import { type FixtureServer, startFixtureServer } from "@varys/fixture-app";
 import type { JudgeInput, JudgeProvider, JudgeResult } from "@varys/judge-engine";
 import { type Boss, createBoss, startBoss, workRuns } from "@varys/queue";
-import type { RepairJobSummary, RunView, TestConfigView } from "@varys/review-contract";
+import type { RunView, TestConfigView } from "@varys/review-contract";
 import { processRun } from "@varys/runner";
 import { LocalFsAdapter } from "@varys/storage-adapter";
 import request from "supertest";
@@ -98,11 +98,9 @@ describe("An unpinnable assertion is judged, and a judge that cannot answer is n
 
   // ---- helpers ---------------------------------------------------------------------------
 
-  async function createTest(definition: object, policy?: "auto"): Promise<string> {
+  async function createTest(definition: object): Promise<string> {
     const res = await authed(app).post("/tests").send(definition).expect(201);
-    const testId = res.body.id as string;
-    if (policy) await authed(app).patch(`/tests/${testId}`).send({ repairPolicy: policy }).expect(200);
-    return testId;
+    return res.body.id as string;
   }
 
   async function runToEnd(testId: string): Promise<RunView> {
@@ -121,11 +119,6 @@ describe("An unpinnable assertion is judged, and a judge that cannot answer is n
     const found = view.assertions.find((a) => a.id === id);
     if (!found) throw new Error(`run ${view.runId} recorded no assertion "${id}"`);
     return found;
-  }
-
-  async function jobsFor(testId: string): Promise<RepairJobSummary[]> {
-    const body = (await authed(app).get("/repair-jobs").expect(200)).body as RepairJobSummary[];
-    return body.filter((j) => j.testId === testId);
   }
 
   /** The qualitative check the whole slice exists for: real, worth asserting, and unpinnable. */
@@ -192,7 +185,7 @@ describe("An unpinnable assertion is judged, and a judge that cannot answer is n
   it("fails the run on a judged FAIL, and refuses every repair for it", async () => {
     fixture.setVariant("totals");
     script = () => ({ verdict: "fail", reasoning: "the page is showing an error state" });
-    const testId = await createTest(judgedTest("judged assertion fail"), "auto");
+    const testId = await createTest(judgedTest("judged assertion fail"));
 
     const view = await runToEnd(testId);
     // A failing assertion fails the run — whichever machinery reached the verdict. An approximate
@@ -207,36 +200,6 @@ describe("An unpinnable assertion is judged, and a judge that cannot answer is n
     expect(judged.outcome).toBe("judge-failed");
     expect(judged.mode).toBe("judged");
     expect(judged.reasoning).toBe("the page is showing an error state");
-
-    // The consequence: a READ-ONLY triage job, never a repair. A judged fail is (approximate)
-    // evidence about the app, and re-pinning until a model agrees hides the same class of bug
-    // re-pinning until numbers agree does.
-    const jobs = await jobsFor(testId);
-    expect(jobs).toHaveLength(1);
-    expect(jobs[0].kind).toBe("triage");
-  }, 300_000);
-
-  it("refuses a judged failure to a human asking for a repair by hand", async () => {
-    // The by-hand escape hatch deliberately bypasses the circuit breaker, because a human asking IS
-    // the human decision. It does NOT bypass this: the refusal is a property of the failure, not of
-    // who is asking, and it comes back in the engine's own words rather than a generic 400.
-    fixture.setVariant("totals");
-    script = () => ({ verdict: "fail", reasoning: "the page is showing an error state" });
-    const testId = await createTest(judgedTest("judged manual refusal", [chartLooksRight]), undefined);
-
-    const view = await runToEnd(testId);
-    expect(view.status).toBe("failed");
-    // `manual` (the default) means the worker enqueued nothing at all.
-    expect(await jobsFor(testId)).toEqual([]);
-
-    const refused = await authed(app)
-      .post("/repair-jobs")
-      .send({ runId: view.runId })
-      .expect(400);
-    expect(String(refused.body.message)).toContain("not repairable");
-    expect(String(refused.body.message)).toContain(chartLooksRight.check);
-    expect(String(refused.body.message)).toContain("a model read the page");
-    expect(await jobsFor(testId)).toEqual([]);
   }, 300_000);
 
   // ---- the property a real model could never demonstrate ---------------------------------
@@ -246,7 +209,7 @@ describe("An unpinnable assertion is judged, and a judge that cannot answer is n
     script = () => {
       throw new Error("429 rate limited by the model provider");
     };
-    const testId = await createTest(judgedTest("judged assertion outage"), "auto");
+    const testId = await createTest(judgedTest("judged assertion outage"));
 
     const view = await runToEnd(testId);
     // Not green: nothing was checked, and a run that went green here would be asserting something
@@ -260,10 +223,6 @@ describe("An unpinnable assertion is judged, and a judge that cannot answer is n
     expect(judged.mode).toBe("judged");
     expect(judged.detail).toContain("429 rate limited");
     expect(judged.reasoning).toBeNull();
-
-    // And no job of either kind: there is nothing to repair and nothing to diagnose. Filing one
-    // would be a bug report about an application nobody looked at.
-    expect(await jobsFor(testId)).toEqual([]);
   }, 300_000);
 
   it("says the same thing when no judge is configured at all", async () => {

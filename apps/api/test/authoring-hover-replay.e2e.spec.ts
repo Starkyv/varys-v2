@@ -109,7 +109,6 @@ describe("Authoring → hover-reveal flows replay", () => {
       startUrl: fixture.url,
       name: "hover menu flow",
       intent: "open the flyout and click Explorer",
-      mode: "batch",
     });
     const sid: string = opened.sessionId;
 
@@ -163,7 +162,6 @@ describe("Authoring → hover-reveal flows replay", () => {
     const opened = await callTool("open_session", {
       startUrl: fixture.url,
       name: "exploratory hover",
-      mode: "batch",
     });
     const sid: string = opened.sessionId;
     const trigger = (opened.nodes as Array<{ ref: string; name: string }>).find((n) =>

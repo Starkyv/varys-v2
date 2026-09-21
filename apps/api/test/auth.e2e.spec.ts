@@ -90,6 +90,48 @@ describe("Auth guard", () => {
     expect(ok.body).toMatchObject({ jsonrpc: "2.0", id: 1, result: {} });
   });
 
+  it("has exactly ONE issuer: a bearer that is not a user's OAuth token gets no second chance", async () => {
+    // ADR-0008. `/mcp` once accepted a provisioned Repair Agent credential as well, chosen by a
+    // token prefix before either issuer ran. There is no such fork now, so what is pinned here is
+    // the ABSENCE: a token shaped like the old credential is refused exactly as any other unknown
+    // string is, with the same status, the same challenge and the same message. If a second
+    // issuer were ever reintroduced by accident, the prefixed token would stop matching the
+    // unprefixed one and this fails.
+    const unknown = await request(app.getHttpServer())
+      .post("/mcp")
+      .set("Authorization", "Bearer not-a-token-anybody-issued")
+      .send({ jsonrpc: "2.0", id: 1, method: "ping" })
+      .expect(401);
+
+    for (const impostor of ["varys_agent_deadbeefdeadbeefdeadbeefdeadbeef", "vk_live_0123456789abcdef"]) {
+      const res = await request(app.getHttpServer())
+        .post("/mcp")
+        .set("Authorization", `Bearer ${impostor}`)
+        .send({ jsonrpc: "2.0", id: 1, method: "ping" })
+        .expect(401);
+      expect(res.headers["www-authenticate"]).toBe(unknown.headers["www-authenticate"]);
+      expect(res.body.error.message).toBe(unknown.body.error.message);
+    }
+  });
+
+  it("serves ONE tool list, the same for everybody", async () => {
+    // The other half of ADR-0008's "one issuer": with no second kind of principal there is no
+    // per-principal filtering left, so the list a caller gets is a property of the server rather
+    // than of who is asking. Two different users see the same list, byte for byte.
+    const second = await mintUser("Second Caller");
+    const listFor = async (bearer: string): Promise<string[]> => {
+      const res = await request(app.getHttpServer())
+        .post("/mcp")
+        .set("Authorization", `Bearer ${bearer}`)
+        .send({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} })
+        .expect(200);
+      return (res.body.result.tools as Array<{ name: string }>).map((t) => t.name).sort();
+    };
+    const mine = await listFor(identity.bearer);
+    expect(mine.length).toBeGreaterThan(0);
+    expect(await listFor(second.bearer)).toEqual(mine);
+  });
+
   it("serves the OAuth discovery documents MCP clients probe at the origin root", async () => {
     const meta = await request(app.getHttpServer())
       .get("/.well-known/oauth-authorization-server")

@@ -1,5 +1,5 @@
 import { Inject, Injectable } from "@nestjs/common";
-import { environments, runResults, runs, testVersions, tests } from "@varys/db";
+import { environments, replayedTestId, runResults, runs, tests } from "@varys/db";
 import type {
   CheckpointTrend,
   DashboardMatrix,
@@ -11,7 +11,7 @@ import type {
   ReviewState,
   RunOutcome,
 } from "@varys/review-contract";
-import { deriveRunOutcome, isRepairInReview } from "@varys/review-contract";
+import { deriveRunOutcome } from "@varys/review-contract";
 import { and, eq, gte, inArray, isNotNull, isNull } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
 import { RunsService } from "../runs/runs.service";
@@ -63,13 +63,12 @@ export class DashboardService {
       .select({
         checkpointName: runResults.checkpointName,
         diffScore: runResults.diffScore,
-        testId: testVersions.testId,
+        testId: replayedTestId,
         testName: tests.name,
       })
       .from(runResults)
       .innerJoin(runs, eq(runs.id, runResults.runId))
-      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
-      .innerJoin(tests, eq(tests.id, testVersions.testId))
+      .innerJoin(tests, eq(tests.id, replayedTestId))
       .where(and(gte(runs.createdAt, d14), isNotNull(runResults.diffScore)))
       .orderBy(runs.createdAt); // ascending → series are oldest→newest
 
@@ -113,15 +112,11 @@ export class DashboardService {
         error: runs.error,
         environmentId: runs.environmentId,
         createdAt: runs.createdAt,
-        testId: testVersions.testId,
+        testId: replayedTestId,
         testName: tests.name,
-        // An unreviewed repair in the version the run replayed → the cell reads `healed`.
-        versionRepairJobId: testVersions.repairJobId,
-        versionReviewState: testVersions.reviewState,
       })
       .from(runs)
-      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
-      .innerJoin(tests, eq(tests.id, testVersions.testId));
+      .innerJoin(tests, eq(tests.id, replayedTestId));
 
     if (runRows.length === 0) return { environments: [], rows: [] };
 
@@ -174,13 +169,10 @@ export class DashboardService {
       runId: string;
       status: string;
       error: string | null;
-      versionRepairJobId: string | null;
-      versionReviewState: string | null;
     }): MatrixCellStatus => {
       const outcome = deriveRunOutcome(checkpointsByRun.get(run.runId) ?? [], {
         status: run.status,
         error: run.error,
-        repairApplied: isRepairInReview(run.versionRepairJobId, run.versionReviewState),
       });
       // The cell shows a uniform in-progress state; queued and running collapse.
       return outcome === "queued" ? "running" : outcome;
@@ -246,11 +238,8 @@ export class DashboardService {
         status: runs.status,
         error: runs.error,
         createdAt: runs.createdAt,
-        versionRepairJobId: testVersions.repairJobId,
-        versionReviewState: testVersions.reviewState,
       })
       .from(runs)
-      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
       .where(and(gte(runs.createdAt, d14), inArray(runs.status, [...FINISHED])));
     const finishedCheckpoints = new Map<string, { reviewState: ReviewState; resolution: Resolution | null }[]>();
     if (finishedRows.length) {
@@ -272,7 +261,6 @@ export class DashboardService {
       outcome: deriveRunOutcome(finishedCheckpoints.get(r.runId) ?? [], {
         status: r.status,
         error: r.error,
-        repairApplied: isRepairInReview(r.versionRepairJobId, r.versionReviewState),
       }),
       createdAt: r.createdAt,
     }));
@@ -317,15 +305,9 @@ export class DashboardService {
   }
 
   /** Verification pass rate (`passed` ÷ verifications) over [from, to), where a verification is a
-   *  run whose outcome is `passed`, `healed`, `failed`, or `regression`. Baseline-establishment and
+   *  run whose outcome is `passed`, `failed`, or `regression`. Baseline-establishment and
    *  first-run ("pending baseline") runs are excluded — they don't verify anything. 0 when no
-   *  verification finished in the window.
-   *
-   *  A `healed` run counts as a PASSING verification (Slice 19, slice 06): it compared against
-   *  real baselines and everything matched — the only thing amber about it is that the repair
-   *  behind it is unreviewed, which is a queue item, not a failed check. Dropping it instead would
-   *  make the pass rate collapse toward 0% exactly when repairs are pending, which reads as an
-   *  alarm — the one thing `healed` is explicitly not. */
+   *  verification finished in the window. */
   private rate(
     rows: { outcome: RunOutcome; createdAt: Date }[],
     from: Date,
@@ -337,15 +319,10 @@ export class DashboardService {
         r.createdAt < to &&
         // A regression is a verification that failed (the capture differed) — count it as a
         // non-passing verification, same as the pre-split `failed` did.
-        (r.outcome === "passed" ||
-          r.outcome === "healed" ||
-          r.outcome === "failed" ||
-          r.outcome === "regression"),
+        (r.outcome === "passed" || r.outcome === "failed" || r.outcome === "regression"),
     );
     if (verifications.length === 0) return 0;
-    const passed = verifications.filter(
-      (r) => r.outcome === "passed" || r.outcome === "healed",
-    ).length;
+    const passed = verifications.filter((r) => r.outcome === "passed").length;
     return passed / verifications.length;
   }
 }

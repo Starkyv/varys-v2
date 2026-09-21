@@ -1,5 +1,4 @@
 import { Module } from "@nestjs/common";
-import { AgentCredentialsModule } from "./agent-credentials/agent-credentials.module";
 import { ArtifactsModule } from "./artifacts/artifacts.module";
 import { AuthModule } from "./auth/auth.module";
 import { AuthoringModule } from "./authoring/authoring.module";
@@ -8,7 +7,6 @@ import { DbModule } from "./db/db.module";
 import { EnvironmentsModule } from "./environments/environments.module";
 import { FoldersModule } from "./folders/folders.module";
 import { HealthModule } from "./health/health.module";
-import { RepairJobsModule } from "./repair-jobs/repair-jobs.module";
 import { RunsModule } from "./runs/runs.module";
 import { SchedulesModule } from "./schedules/schedules.module";
 import { SettingsModule } from "./settings/settings.module";
@@ -27,7 +25,6 @@ import { TestsModule } from "./tests/tests.module";
     StorageModule,
     TestsModule,
     RunsModule,
-    RepairJobsModule,
     ArtifactsModule,
     EnvironmentsModule,
     FoldersModule,
@@ -36,7 +33,6 @@ import { TestsModule } from "./tests/tests.module";
     DashboardModule,
     AuthoringModule,
     SettingsModule,
-    AgentCredentialsModule,
     SchedulesModule,
   ],
 })

@@ -1,5 +1,5 @@
 import type { FolderSummary, TestSummary } from "@varys/review-contract";
-import { Button, Clock, Folder, Grip, IconButton, Inbox, Input, Lock, MoreHorizontal, Play, Select, Trash } from "@varys/ui";
+import { Button, Clock, Folder, Grip, IconButton, Inbox, Input, Lock, MoreHorizontal, Play, Select, Sparkles, Trash } from "@varys/ui";
 import { useState } from "react";
 import { useConfirm } from "../../../../context/confirm";
 import { useRouter } from "../../../../context/router";
@@ -55,6 +55,15 @@ export function TestRow({
             >
               {test.name}
             </button>
+            {test.kind === "agent" && (
+              <span
+                className={styles.agentBadge}
+                title="Agent-driven — no recorded steps; your own local Claude walks its instructions"
+              >
+                <Sparkles size={11} />
+                agent
+              </span>
+            )}
             {test.needsEnvironment && (
               <span className={styles.envBadge} title="Uses {{baseUrl}} — pick an environment to run">
                 <Lock size={11} />
@@ -113,8 +122,8 @@ export function TestRow({
 
 /**
  * Inline organize editor: rename, (un)file, and edit tags in one save. Pure
- * organization metadata — the server writes only organization rows (no new test
- * version), so this never touches baselines or review state.
+ * organization metadata — the server writes only organization rows, never the
+ * definition, so this never touches baselines or review state.
  */
 function OrganizeEditor({
   test,

@@ -7,7 +7,6 @@ import { Test } from "@nestjs/testing";
 import { createDb, type DbHandle } from "@varys/db";
 import { type FixtureServer, startFixtureServer } from "@varys/fixture-app";
 import { type Boss, createBoss, startBoss, workRuns } from "@varys/queue";
-import type { CreatedAgentCredential } from "@varys/review-contract";
 import { processRun } from "@varys/runner";
 import { LocalFsAdapter } from "@varys/storage-adapter";
 import request from "supertest";
@@ -23,15 +22,10 @@ import { startTestDb, type TestDb } from "./db-harness";
  * the answer should be "here is what I changed, and here is the run that shows it works" rather
  * than "here is what I changed, now go and press Run yourself".
  *
- * Two properties are worth more than the happy path here, and both are about what the tool
- * REFUSES to let a model conclude:
- *
- *  - A first run has no baseline, so it verified nothing. The answer says `pending-baseline` and
- *    tells the model in words that a human must approve it and that this is not a pass — the
- *    single easiest outcome to misreport as success.
- *  - A Repair Agent cannot reach the tool at all. A drainer able to trigger runs could sit in an
- *    unattended fix-and-retry loop until something went green, and "green eventually" is exactly
- *    the evidence the review gate exists to refuse.
+ * The property worth more than the happy path here is what the tool REFUSES to let a model
+ * conclude: a first run has no baseline, so it verified nothing. The answer says
+ * `pending-baseline` and tells the model in words that a human must approve it and that this is
+ * not a pass — the single easiest outcome to misreport as success.
  */
 describe("run_test runs a test and reports a verdict a model cannot overstate", () => {
   let app: INestApplication;
@@ -40,7 +34,6 @@ describe("run_test runs a test and reports a verdict a model cannot overstate", 
   let storageDir: string;
   let consumerBoss: Boss;
   let consumerDb: DbHandle;
-  let agentToken: string;
 
   beforeAll(async () => {
     fixture = await startFixtureServer();
@@ -61,11 +54,6 @@ describe("run_test runs a test and reports a verdict a model cannot overstate", 
     const storage = new LocalFsAdapter(storageDir);
     await workRuns(consumerBoss, (runId) => processRun({ db: consumerDb.db, storage }, runId));
 
-    const created = await authed(app)
-      .post("/settings/agent-credentials")
-      .send({ label: "run-tool", expiresInDays: 7 })
-      .expect(201);
-    agentToken = (created.body as CreatedAgentCredential).token;
   }, 180_000);
 
   afterAll(async () => {
@@ -201,19 +189,4 @@ describe("run_test runs a test and reports a verdict a model cannot overstate", 
     expect(resumed.data.runId).toBe(runId);
   }, 300_000);
 
-  it("is invisible to a Repair Agent — a drainer may not run tests at all", async () => {
-    const list = await request(app.getHttpServer())
-      .post("/mcp")
-      .set("Authorization", `Bearer ${agentToken}`)
-      .send({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} })
-      .expect(200);
-    const names = (list.body.result.tools as Array<{ name: string }>).map((t) => t.name);
-    expect(names).not.toContain("run_test");
-    expect(names).not.toContain("run_status");
-
-    // Not listed AND not callable — a capability boundary, not a hint.
-    const refused = await callAs(agentToken, "run_test", { testId: "whatever" });
-    expect(refused.isError).toBe(true);
-    expect(refused.text).toContain("Unknown tool");
-  }, 120_000);
 });

@@ -1,5 +1,5 @@
 import type { CheckpointView } from "@varys/review-contract";
-import { Layers } from "@varys/ui";
+import { AlertTriangle, Layers } from "@varys/ui";
 import { ZoomableImage } from "../../../../components/ZoomableImage";
 import styles from "./styles.module.scss";
 
@@ -44,6 +44,27 @@ export function DiffStage({
   /** Run-wide ordered images for the lightbox's arrow-key traversal. */
   gallery?: { src: string; label: string }[];
 }) {
+  // Unreached — the run never filled this slot, so there is no capture to stage at all. Checked
+  // before every other branch, which all assume an actual image exists.
+  if (cp.reviewState === "missing") {
+    return (
+      <div className={styles.stage}>
+        <div className={styles.pending}>
+          <div className={styles.pendingCard}>
+            <span className={styles.unreachedIcon}>
+              <AlertTriangle size={24} />
+            </span>
+            <div className={styles.pendingTitle}>Never reached</div>
+            <div className={styles.pendingText}>
+              The run was expected to capture this checkpoint and never did, so nothing was compared
+              here. This failed the run.
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // First capture — there is no prior baseline to diff against.
   if (cp.reviewState === "pending-baseline") {
     return (

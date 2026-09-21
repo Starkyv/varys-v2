@@ -3,11 +3,14 @@
   "private": true,
   "license": "Apache-2.0",
   "packageManager": "pnpm@10.14.0",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down",
     "dev": "turbo run dev --filter=@varys/api --filter=@varys/worker --filter=@varys/web",
+    "connect": "pnpm --filter @varys/connect dev",
     "test": "turbo run test",
     "build": "turbo run build",
     "typecheck": "turbo run typecheck"
@@ -20,7 +23,10 @@
     "vitest": "^3.0.5"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild", "@swc/core"],
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "@swc/core"
+    ],
     "overrides": {
       "typescript": "5.9.3"
     }

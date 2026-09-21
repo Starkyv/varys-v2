@@ -98,7 +98,7 @@ describe("Claude pins an assertion during authoring", () => {
   };
 
   const openInvoice = async (name: string): Promise<string> => {
-    const opened = await callTool("open_session", { startUrl: fixture.url, name, mode: "batch" });
+    const opened = await callTool("open_session", { startUrl: fixture.url, name });
     return opened.sessionId as string;
   };
 
@@ -538,12 +538,11 @@ describe("Claude pins an assertion during authoring", () => {
     expect(failed?.right).toBe("60.5");
   }, 300_000);
 
-  // ---- the capability boundary -----------------------------------------------------------
+  // ---- the tool surface ------------------------------------------------------------------
 
-  it("exposes the three assertion tools to a human author", async () => {
-    // The other half of the boundary — that a Repair Agent sees neither declaring tool — lives in
-    // `agent-credential.e2e.spec.ts`, which already holds the agent harness and the rest of that
-    // toolset's scope rules.
+  it("exposes the three assertion tools", async () => {
+    // One list, the same for every caller (ADR-0008): `/mcp` has a single issuer, so these are
+    // either present for everybody or present for nobody.
     const listed = await rpc("tools/list", {}).expect(200);
     const humanTools = (listed.body.result.tools as Array<{ name: string }>).map((t) => t.name);
     expect(humanTools).toContain("pin_assertion");

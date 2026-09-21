@@ -1,6 +1,5 @@
 import {
   Button,
-  cx,
   Info,
   Modal,
   ModalBody,
@@ -11,6 +10,7 @@ import {
   Switch,
 } from "@varys/ui";
 import { useEffect, useId, useMemo, useState } from "react";
+import { EnvironmentPicker } from "../../components/EnvironmentPicker";
 import { useRouter } from "../../context/router";
 import { useToast } from "../../context/toast";
 import { useDrafts, useEnvironments, useRunTest, useTests } from "../../queries";
@@ -131,28 +131,12 @@ export function RunDialog({ open, initialTestId, onClose }: RunDialogProps) {
             <div className={styles.label}>
               Environment <span className={styles.req}>*</span>
             </div>
-            <div className={styles.envList}>
-              {(environments.data ?? []).map((env) => {
-                const sel = envId === env.id;
-                return (
-                  <button
-                    key={env.id}
-                    type="button"
-                    className={cx(styles.envRow, sel && styles.envRowSel)}
-                    onClick={() => setEnvId(env.id)}
-                  >
-                    <span className={cx(styles.radio, sel && styles.radioSel)}>
-                      <span className={styles.radioDot} />
-                    </span>
-                    <span className={styles.envName}>{env.name}</span>
-                    <span className={styles.envUrl}>{env.baseUrl}</span>
-                  </button>
-                );
-              })}
-              {(environments.data ?? []).length === 0 && (
-                <div className={styles.envEmpty}>No environments yet — add one under Environments.</div>
-              )}
-            </div>
+            <EnvironmentPicker
+              ariaLabel="Environment"
+              environments={environments.data ?? []}
+              value={envId === NO_ENV ? null : envId}
+              onChange={(id) => setEnvId(id)}
+            />
           </div>
         ) : (
           <div className={styles.infoBox}>

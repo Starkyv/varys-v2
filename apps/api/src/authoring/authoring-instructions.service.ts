@@ -5,8 +5,15 @@ import { eq } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
 import { DEFAULT_AUTHORING_INSTRUCTIONS, envOperatorInstructions } from "./authoring-instructions";
 
-/** `app_settings` keys for the two editable layers. */
-const BASE_KEY = "authoring_instructions_base";
+/** `app_settings` keys for the two editable layers.
+ *
+ * BASE_KEY carries a `_v2` suffix because the base layer is a CONTRACT with the tool surface, not
+ * just prose: a pre-cleanup override stored under the old key still tells Claude to pass
+ * `open_session`'s `mode`, which the server now refuses. Bumping the key retires every such
+ * override in one move — the new baked default becomes authoritative — while leaving future
+ * customisations durable. The orphaned row is dropped by the bootstrap DDL. The `additional` layer
+ * keeps its key: it is team guidance, not the authoring contract. */
+const BASE_KEY = "authoring_instructions_base_v2";
 const ADDITIONAL_KEY = "authoring_instructions_additional";
 
 /**

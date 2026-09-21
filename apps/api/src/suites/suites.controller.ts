@@ -23,14 +23,23 @@ export class SuitesController {
 
   @Post()
   create(
-    @Body() body: { name: string; testIds?: string[]; folderIds?: string[] },
+    @Body()
+    body: {
+      name: string;
+      testIds?: string[];
+      folderIds?: string[];
+      /** The suite's AI Instructions — the outermost AI Instructions layer for its
+       *  Agent-Driven members. Blank or absent means the suite carries none. */
+      agentInstructions?: string | null;
+    },
     @CurrentUser() user: AuthUser,
   ) {
     return this.suites.create(body ?? { name: "" }, user.email);
   }
 
-  // Body: { name?, testIds?, folderIds?, schedule? } — testIds/folderIds each FULL-replace their
-  // selection; schedule sets/clears the suite cron (null clears).
+  // Body: { name?, testIds?, folderIds?, agentInstructions?, schedule? } — testIds/folderIds each
+  // FULL-replace their selection; schedule sets/clears the suite cron (null clears);
+  // agentInstructions sets/clears the suite's AI Instructions (blank or null clears).
   @Put(":id")
   update(@Param("id") id: string, @Body() body: UpdateSuiteInput, @CurrentUser() user: AuthUser) {
     return this.suites.update(id, body ?? {}, user.email);

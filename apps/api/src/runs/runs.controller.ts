@@ -30,12 +30,6 @@ export class RunsController {
     return this.runs.listRuns(undefined, testId);
   }
 
-  // Declared before the `:id` param route so it isn't matched as a run id.
-  @Get("needs-review")
-  needsReview() {
-    return this.runs.needsReview();
-  }
-
   @Get(":id")
   get(@Param("id") id: string) {
     return this.runs.getById(id);
@@ -79,7 +73,7 @@ export class RunsController {
     return this.runs.reEvaluate(id, name, body ?? {});
   }
 
-  // Commit: write a new test_version with the masks/threshold and re-judge this
+  // Commit: write the masks/threshold onto the test's definition and re-judge this
   // checkpoint's run_result.
   @Post(":id/checkpoints/:name/persist")
   persist(

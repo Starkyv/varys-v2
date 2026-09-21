@@ -827,14 +827,14 @@ export function isRepairableAssertionFailure(result: AssertionVerdictShape): boo
   return assertionRepairability(result) === "repairable";
 }
 
-/** What a run's assertion failures earn from the repair queue (slice 10). */
+/** How a run's assertion failures are CLASSIFIED (slice 10) — what `runs.failure_kind` records. */
 export type AssertionConsequence =
   /** Nothing failed. */
   | "none"
-  /** Every failure is an unresolved extraction target: a locator problem, so a Repair Job. */
+  /** Every failure is an unresolved extraction target: a locator problem, re-pinnable. */
   | "repair"
-  /** At least one failure is the app's or the definition's: a read-only Triage Job, never a repair. */
-  | "triage";
+  /** At least one failure is the app's or the definition's. Nothing here is re-pinnable. */
+  | "unrepairable";
 
 export interface AssertionFailureVerdict {
   consequence: AssertionConsequence;
@@ -843,9 +843,9 @@ export interface AssertionFailureVerdict {
   /** Failures no repair may ever touch — a false relation, a judged fail, or an unusable value. */
   unrepairable: AssertionResult[];
   /**
-   * Assertions that reached no verdict because the judge was unreachable (slice 11). They earn no
-   * job of either kind — there is nothing to repair and nothing to diagnose — but they are carried
-   * here rather than dropped, because the run status turns on whether any exist.
+   * Assertions that reached no verdict because the judge was unreachable (slice 11). Neither
+   * repairable nor evidence about the app, but carried here rather than dropped, because the run
+   * status turns on whether any exist.
    */
   unavailable: AssertionResult[];
 }
@@ -853,12 +853,11 @@ export interface AssertionFailureVerdict {
 /**
  * The run-level consequence of a run's assertion results (Slice 19, slice 10).
  *
- * **One unrepairable failure suppresses repair for the whole run, deliberately.** A run carrying
- * both a false relation and a missing target is a run whose app is known to be wrong; re-pinning
- * the missing target there would write a version, queue a re-run, and produce a repair whose
- * evidence is a still-red run — while the far more important finding (the numbers disagree) went
- * to the one job that is allowed to say so. Erring towards the read-only job costs a human an
- * override; erring the other way is how a corpus gets rewritten into agreement with a bug.
+ * **One unrepairable failure classifies the whole run, deliberately.** A run carrying both a false
+ * relation and a missing target is a run whose app is known to be wrong; reporting it as a locator
+ * problem would send whoever opens it re-pinning, while the far more important finding — the
+ * numbers disagree — went unsaid. Erring towards `unrepairable` costs a reader one extra look;
+ * erring the other way is how a corpus gets rewritten into agreement with a bug.
  */
 export function assertionFailureVerdict(results: AssertionResult[]): AssertionFailureVerdict {
   const repairable: AssertionResult[] = [];
@@ -871,19 +870,18 @@ export function assertionFailureVerdict(results: AssertionResult[]): AssertionFa
     else if (where !== null) unrepairable.push(r);
   }
   const consequence: AssertionConsequence =
-    unrepairable.length > 0 ? "triage" : repairable.length > 0 ? "repair" : "none";
+    unrepairable.length > 0 ? "unrepairable" : repairable.length > 0 ? "repair" : "none";
   return { consequence, repairable, unrepairable, unavailable };
 }
 
 /**
  * The target of one side of one assertion's pinned form — the fingerprint a repair re-pins.
  *
- * Every consumer of the slice-10 distinction needs this same walk (the runner at enqueue time, the
- * breaker census, the by-hand enqueue endpoint, the cluster fan-out), and each of them holds `side`
+ * Every consumer of the slice-10 distinction needs this same walk, and each of them holds `side`
  * as untrusted text: a `run_assertions` column, or a value off the wire. So the walk and the
- * left/right validation live here, once. Three copies of it is exactly the drift this package's
- * `AssertionOutcome` comment warns about — a side recovered differently in two places derives two
- * cluster keys for one broken element.
+ * left/right validation live here, once. Copies of it are exactly the drift this package's
+ * `AssertionOutcome` comment warns about — a side recovered differently in two places names two
+ * different elements as the broken one.
  *
  * Undefined when there is nothing to re-pin: no such assertion, no pinned form, no side named (a
  * `coercion` failure blames the definition rather than a target), or a side that is a LITERAL,

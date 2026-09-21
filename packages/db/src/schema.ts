@@ -17,7 +17,7 @@ import {
 /** A folder — each test's one browsable home (DESIGN §5). Folders nest via `parentId`
  *  (null = a root folder); names are unique among siblings. Deleting a folder deletes its whole
  *  subtree of folders (ON DELETE CASCADE), but the TESTS in them are only unfiled, never deleted
- *  (tests.folder_id is SET NULL). Organization metadata only: never part of the versioned
+ *  (tests.folder_id is SET NULL). Organization metadata only: never part of the
  *  definition. */
 export const folders = pgTable("folders", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -49,14 +49,41 @@ export const tests = pgTable("tests", {
   promotedBy: text("promoted_by"),
   promotedAt: timestamp("promoted_at", { withTimezone: true }),
   /** Optional free-form note on the test (organization/annotation only — never part of
-   *  the versioned definition). Edited inline on the test-detail page. */
+   *  the definition). Edited inline on the test-detail page. */
   notes: text("notes"),
-  /** Repair Policy (Slice 19): what happens when a run fails on a locator it cannot resolve —
-   *  `manual` (surface it; a human opens a Repair Session — today's behaviour) or `auto`
-   *  (enqueue a Repair Job). Defaults to `manual` for EVERY test, however it was authored, so
-   *  nothing an author recorded starts changing behind their back. Operational metadata, like
-   *  `folder_id` / `status`: setting it never writes a test_version. */
-  repairPolicy: text("repair_policy").notNull().default("manual"),
+  /** Which kind of test this is. `pinned` — the only kind before Agent-Driven Tests — is
+   *  behaviour written down as data: ordered steps, each carrying a Fingerprint, replayed by the
+   *  worker with no model call. `agent` is an **Agent-Driven Test**: no steps and no fingerprints,
+   *  an ordered list of `agent_checkpoints` that a locally-run Claude re-walks every Run. Defaults
+   *  to `pinned`, so every test recorded before this column is exactly what it was. */
+  kind: text("kind").notNull().default("pinned"),
+  /** How long an Agent Run Session on this test may run before Varys closes it, in seconds
+   *  (Agent-Driven Tests). The bound on an agent that will not stop: retrying is deliberately the
+   *  agent's own business, but an agent retrying a state that will NEVER appear has no reason to
+   *  stop, and it is the author's own Claude subscription it is burning. Wall-clock rather than a
+   *  tool-call budget, because twenty cheap actions and twenty expensive ones cost wildly
+   *  different amounts. Defaulted for every existing and new row, so nothing is unbounded, and
+   *  meaningless for a pinned test — which Varys runs itself and bounds by its own timeouts. */
+  agentLeaseSeconds: integer("agent_lease_seconds").notNull().default(900),
+  /**
+   * **The test's definition** — the one answer to "what is this test?" (ADR 0008).
+   *
+   * What {@link currentDefinition} resolves to, and so what every reader of a test's steps gets.
+   * The only copy: there is no history behind it and nothing to roll back to. Nullable only so
+   * the column could be added to a live table; after the bootstrap backfill every pinned test
+   * carries one.
+   */
+  definition: jsonb("definition"),
+  /**
+   * Who last changed the definition, and when — the attribution that survives the history.
+   *
+   * With one definition per test there is no row to read "who wrote this" off, so the pair lives
+   * on the test itself. `updatedAt` doubles as the stale-editor token the config save compares
+   * against, in place of a version number: every write of `definition` stamps it, and a save
+   * carrying an older one is refused with 409.
+   */
+  updatedBy: text("updated_by"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -81,6 +108,15 @@ export const suites = pgTable("suites", {
   name: text("name").notNull(),
   /** Who created the suite (email). Null for rows created before this column existed. */
   createdBy: text("created_by"),
+  /**
+   * The suite's AI Instructions — the OUTERMOST of the three layers composed for an Agent Run
+   * Session (suite, then test, then the checkpoint's own), concatenated and never overridden.
+   *
+   * Lives on the suite rather than being retyped into every test because it is shared context:
+   * which app, which account, which standing exceptions. It applies only to Agent-Driven members
+   * — a pinned test is replayed with no model call and has nothing to read it.
+   */
+  agentInstructions: text("agent_instructions"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -131,70 +167,6 @@ export const suiteRuns = pgTable("suite_runs", {
   notifiedAt: timestamp("notified_at", { withTimezone: true }),
 });
 
-export const testVersions = pgTable("test_versions", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  testId: uuid("test_id")
-    .notNull()
-    .references(() => tests.id),
-  version: integer("version").notNull(),
-  definition: jsonb("definition").notNull(),
-  /** Who authored this version (e.g. "system" for an in-viewer mask/threshold
-   *  persist). Audit pair with createdAt. Null for the original recording. */
-  createdBy: text("created_by"),
-  /**
-   * Whether this version has been reviewed by a human (Slice 19, slice 04).
-   *
-   * `reviewed` for everything a person wrote — which is every version a human editor or the
-   * attended MCP path produces, hence the default. `unreviewed` is written ONLY by an
-   * unattended Repair Agent: an AI edit to someone's corpus is never trusted by default, so it
-   * sits in the repair review queue until accepted. `rejected` records a version a reviewer
-   * threw away; the test was reverted by appending the previous definition as a new version, so
-   * the history keeps the rejected attempt rather than erasing it.
-   */
-  reviewState: text("review_state").notNull().default("reviewed"),
-  /** The Repair Job this version was written under, when an agent wrote it — what links a
-   *  version awaiting review back to the failure it claims to fix. Plain uuid (no FK) because
-   *  the job's table is created after this one in the bootstrap DDL. */
-  repairJobId: uuid("repair_job_id"),
-  /**
-   * The clause of the Brief the repairing agent claimed this version satisfies, and the judge's
-   * one-line verdict on that claim (Slice 19, slice 05).
-   *
-   * Present only on a version an agent wrote and the gate PASSED — a rejected justification never
-   * reaches a stored version, because the repair is abandoned and reverted. Shown beside the
-   * Brief in review, which is the only way a reviewer can tell what the verdict was checked
-   * against.
-   */
-  justification: text("justification"),
-  justificationReasoning: text("justification_reasoning"),
-  /**
-   * Whether an INDEPENDENT judge stood behind that reasoning (Slice 19, slice 14).
-   *
-   * True when a configured judge validated the agent's argument against the Brief; false when no
-   * judge was configured and the repair stands on the agent's own account. Null for versions
-   * written before the distinction existed, and for every version no agent wrote.
-   *
-   * Stored rather than inferred from the reasoning text: the review surface has to tell a
-   * reviewer which of the two they are reading without parsing prose.
-   */
-  justificationValidated: boolean("justification_validated"),
-  /**
-   * The page the repair was made against, captured live at the instant the fix was written
-   * (Slice 19, slice 13) — an artifact key, served through `/artifacts/:token`.
-   *
-   * The only evidence in a review that is neither the agent's account of itself nor the stored
-   * definition: it shows the reviewer the screen the re-pinned control actually lives on, so
-   * "same control, renamed" can be confirmed rather than taken on trust. Null for every version
-   * written outside a repair session, and for repairs written before this was captured.
-   */
-  repairScreenshotKey: text("repair_screenshot_key"),
-  /** Who accepted or rejected this version, and when. Both null while it is `unreviewed`, and
-   *  for every version that never needed reviewing. */
-  reviewedBy: text("reviewed_by"),
-  reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-});
-
 export type RunStatus =
   | "queued"
   | "running"
@@ -205,9 +177,6 @@ export type RunStatus =
 
 export const runs = pgTable("runs", {
   id: uuid("id").defaultRandom().primaryKey(),
-  testVersionId: uuid("test_version_id")
-    .notNull()
-    .references(() => testVersions.id),
   environmentId: uuid("environment_id"),
   /** The fan-out parent when this run is a suite-run child; null = standalone. */
   suiteRunId: uuid("suite_run_id").references(() => suiteRuns.id),
@@ -220,40 +189,88 @@ export const runs = pgTable("runs", {
   /** Why a `failed` run failed (the replay error) — null otherwise. */
   error: text("error"),
   /** What CLASS of failure ended the run, when it is classified (Slice 19):
-   *  `locator` | `pixel` | `judge` | `assertion` | `timeout` | `crash`. `locator` — a fingerprint
-   *  the matcher could not resolve — is the only class auto-repair may touch; every other class
-   *  gets a read-only Triage Job instead (slice 08). Null for runs that are not red and for runs
-   *  that finished before this column existed. Recorded rather than inferred from the error text,
-   *  because "is this repairable?" is a safety decision. */
+   *  `locator` | `pixel` | `judge` | `assertion` | `timeout` | `crash`. Plain reporting: it tells
+   *  whoever opens the red run what kind of thing broke before they decide whether to open a
+   *  Repair Session. Null for runs that are not red and for runs that finished before this column
+   *  existed. Recorded rather than inferred from the error text, so it cannot rot when a message
+   *  is reworded. */
   failureKind: text("failure_kind"),
-  /** A Triage Job's written finding on this run (Slice 19, slice 08) — the explanation of a
-   *  failure Claude was NOT allowed to fix. An annotation and nothing more: the run's status and
-   *  its derived outcome are untouched by it, because a diagnosis must never be mistakable for a
-   *  resolution. Null until one is reported. */
-  triageFinding: text("triage_finding"),
-  /** Who wrote it (a `Repair Agent "…"` label) and when — the audit pair for the finding. */
-  triageBy: text("triage_by"),
-  triageAt: timestamp("triage_at", { withTimezone: true }),
-  /** The Triage Job the finding was reported under, so a finding traces to the claim that made
-   *  it. SET NULL is not needed — a job dies with its test, and so does the run. */
-  triageJobId: uuid("triage_job_id"),
   /** 0-based index of the step that failed (null when it failed before any step). */
   failedStepIndex: integer("failed_step_index"),
   /** Who triggered the run (email), or "ai"/sentinel for non-human triggers. A suite
    *  child carries the suite-launcher's email; a scheduled fire (when wired) carries the
    *  schedule owner. Null for runs created before this column existed. */
   triggeredBy: text("triggered_by"),
-  /** How the run was triggered: `manual` | `suite` | `schedule` | `api`. Pairs with
-   *  triggeredBy so "ran by the cron owner" is distinguishable from a manual run. */
+  /** How the run was triggered: `manual` | `suite` | `schedule` | `api` | `repair` | `varys`.
+   *  Pairs with triggeredBy so "ran by the cron owner" is distinguishable from a manual run.
+   *  `varys` marks an Agent Run Session that answered a Run Request pressed in the web app —
+   *  evidence for a reader only; nothing branches on it. Nullable, and stays so: absence means
+   *  "not known", which is the honest reading for every run predating each of these values. */
   triggerSource: text("trigger_source"),
   /** Optional free-form note on the run (annotation only). Edited inline on the run-detail page. */
   notes: text("notes"),
+  /**
+   * The fully composed AI Instructions this Agent Run Session was handed, copied VERBATIM at
+   * session start (Agent-Driven Tests). Null for every pinned run.
+   *
+   * A copy rather than a reference, and that is the whole point of the column: instructions and
+   * checkpoints are edited in place, so without it a run from six weeks ago becomes unexplainable
+   * the moment any of its layers is reworded. This is the compensating control for that choice —
+   * the only record of what the agent was actually told.
+   */
+  agentInstructions: text("agent_instructions"),
+  /**
+   * The agent's own written account of the session, stored when it finishes the run
+   * (Agent-Driven Tests). Null for every pinned run, and null on an agent run nobody ever
+   * finished — which is exactly what distinguishes "the session ended and said this" from "the
+   * session stopped and never said anything".
+   *
+   * Doubles as the CLOSED flag: a run with a summary accepts no further submissions, so an agent
+   * cannot declare itself done and then keep revising what it reported.
+   */
+  agentSummary: text("agent_summary"),
+  /**
+   * The wall-clock lease this session was GRANTED, in seconds — copied off the test at start
+   * (Agent-Driven Tests). Null for every pinned run, and for an agent run that predates leases.
+   *
+   * A copy for the same reason `agent_instructions` is one: the test's lease is editable in
+   * place, so without it "was this run given ten minutes or ten hours?" becomes unanswerable the
+   * moment someone changes the setting.
+   */
+  agentLeaseSeconds: integer("agent_lease_seconds"),
+  /**
+   * When that lease runs out — an ABSOLUTE deadline, computed once when the session starts.
+   *
+   * This is the enforced value, not `agent_lease_seconds`: stamping the instant means the bound
+   * cannot drift with the run row's other timestamps, and expiry is a comparison against the wall
+   * clock rather than arithmetic over two clocks that may not agree. Past it, the session is
+   * closed and every tool that would write to it is refused. Nothing sweeps it — the run has been
+   * `failed`/`unreached` since its rows were seeded, so expiry needs no reconciliation to be
+   * correctly red.
+   */
+  agentLeaseExpiresAt: timestamp("agent_lease_expires_at", { withTimezone: true }),
+  /**
+   * The test this Run belongs to (ADR 0008) — what {@link replayedTestId} resolves to. Nullable
+   * only so the column could be added to a live table; after the bootstrap backfill every run
+   * carries one.
+   */
+  testId: uuid("test_id").references(() => tests.id),
+  /**
+   * **What this Run replayed** — a write-once copy of the definition as it read at launch.
+   *
+   * A copy for the same reason `agent_instructions` is one: the test moves on, and a timeline, a
+   * failed step index or a repair drive all stop meaning anything if they are read against
+   * today's steps. Read only by this Run's own surfaces, never treated as the test, and never
+   * restored from.
+   */
+  definition: jsonb("definition"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
-/** Per-checkpoint review state. Matches the UI read-model literals. */
-export type ReviewState = "pending-baseline" | "diff" | "passed";
+/** Per-checkpoint review state. Mirrors `@varys/review-contract`'s `ReviewState` — `missing` is a
+ *  Checkpoint Manifest slot pre-seeded before an agent starts and never filled. */
+export type ReviewState = "pending-baseline" | "diff" | "passed" | "missing";
 export type Resolution = "approved" | "rejected";
 
 export const runResults = pgTable(
@@ -279,6 +296,21 @@ export const runResults = pgTable(
     /** The LLM judge's one-line rationale for a `context`-compared checkpoint (shown to the
      *  reviewer beside the two images). Null for pixel-compared checkpoints. */
     judgeReasoning: text("judge_reasoning"),
+    /**
+     * How the ACTUAL capture was produced, when an Agent-Driven Test's agent said so — the tool
+     * it used, the viewport it captured at, and the device scale factor. Null for every pinned
+     * run, where Varys performed the capture itself and the answer is never in doubt.
+     *
+     * **Evidence, not a constraint.** Varys hosts no browser for this kind (ADR 0007) and cannot
+     * verify any of it, so nothing here is enforced and nothing is compared against it. Its whole
+     * job is to let a reviewer staring at a baffling comparison ask the first useful question —
+     * were these two pictures even taken the same way? — instead of guessing. A baseline shot
+     * headless at 1280×800 and an actual shot via computer use on a Retina display are genuinely
+     * different pictures, and this is where that shows.
+     */
+    captureTool: text("capture_tool"),
+    captureViewport: text("capture_viewport"),
+    captureDeviceScale: doublePrecision("capture_device_scale"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   // One result per checkpoint per run — lets the worker upsert so a redelivered run
@@ -287,9 +319,36 @@ export const runResults = pgTable(
 );
 
 /**
+ * An extra screenshot an agent attached to a run — UNNAMED, unlimited, and keying no baseline
+ * (Agent-Driven Tests).
+ *
+ * The deliberate opposite of a `run_results` row: that one is a Checkpoint Manifest slot, and its
+ * name is the closed set the Manifest exists to enforce. This one is "here is what the page looked
+ * like when I could not find the filter" — material a reviewer diagnosing a red run actually
+ * wants, and which nothing about the Manifest requires forbidding. Being nameless is what keeps
+ * the two apart: evidence can never be mistaken for a slot, promoted to a baseline, or counted
+ * toward what the run verified.
+ */
+export const runEvidence = pgTable(
+  "run_evidence",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => runs.id),
+    artifactKey: text("artifact_key").notNull(),
+    /** The agent's caption — why it thought this was worth keeping. Empty when it said nothing. */
+    note: text("note").notNull().default(""),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  // Read per run in attachment order — the sequence is the story, so it is the only access pattern.
+  (t) => ({ runEvidenceRunIdx: index("run_evidence_run_idx").on(t.runId, t.createdAt) }),
+);
+
+/**
  * Per-assertion run result (Slice 19, slice 09) — one row per DECLARED, pinned assertion of the
  * definition this run replayed. Run OUTPUT, like run_results: relational, never part of the
- * versioned definition.
+ * definition itself.
  *
  * `assertionId` is the author-chosen id from the definition, which is what makes an assertion's
  * history a straight query: the id survives an edit to its `check` text, so the row written last
@@ -361,7 +420,7 @@ export const runAssertions = pgTable(
  * label (the `describeStep` vocabulary) + timing + outcome, with `checkpointName`
  * the join point to run_results for screenshot steps. Steps never reached have
  * no row (so "didn't run" stays derivable from the definition's full step list).
- * Run OUTPUT — relational, never part of the versioned definition.
+ * Run OUTPUT — relational, never part of the definition.
  */
 export const runSteps = pgTable(
   "run_steps",
@@ -391,7 +450,7 @@ export const runSteps = pgTable(
  * failure. `failureKind` is decided by the exception's TYPE — a `LocatorUnresolvedError` — and the
  * matcher cannot tell "the button was renamed" from "the button never rendered because
  * /api/orders returned 500". Both arrive as `locator`. These rows are the evidence that
- * distinguishes them, so a human (or a triage drainer) reads the cause rather than inferring one.
+ * distinguishes them, so whoever opens the run reads the cause rather than inferring one.
  *
  * Deliberately NOT a full network log. Only `xhr` / `fetch` / `document` requests are candidates,
  * and of those a run keeps every PROBLEM (a transport failure, a status >= 400, or a request the
@@ -455,6 +514,37 @@ export const baselines = pgTable("baselines", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+/**
+ * One Checkpoint of an **Agent-Driven Test** — a row of the Checkpoint Manifest.
+ *
+ * Unlike a pinned test's checkpoint (a screenshot step inside the definition), this is
+ * relational: editing the wording of an instruction is not an audit event, and these rows are
+ * edited in place.
+ *
+ * `id` is the row's durable identity and `name` is only its label. That split is what lets a
+ * rename carry its approved baselines: `baselines` is keyed by `checkpoint_name`, so renaming
+ * updates those rows rather than orphaning them, and renaming for clarity costs nothing.
+ */
+export const agentCheckpoints = pgTable("agent_checkpoints", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  testId: uuid("test_id")
+    .notNull()
+    .references(() => tests.id, { onDelete: "cascade" }),
+  /** Order within the journey. The rows are CUMULATIVE — row 3's instructions assume rows 1-2
+   *  already happened — so this is the sequence an Agent Run Session walks, not a display hint. */
+  position: integer("position").notNull(),
+  /** The slot name. Keys a baseline per environment, and is the only name an agent may submit
+   *  under. Unique per test — enforced by an index, not by the writing code path. */
+  name: text("name").notNull(),
+  /** How to reach this state from the previous checkpoint (the increment only). */
+  instructions: text("instructions").notNull().default(""),
+  /** What must be true in this screenshot for it to match its baseline. Empty falls back to the
+   *  configured global default judge prompt. */
+  comparePrompt: text("compare_prompt").notNull().default(""),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 /** An environment to run against. Secret values are plaintext for the MVP
  *  (local/single-tenant) but must never be returned by the API. */
 export const environments = pgTable("environments", {
@@ -493,8 +583,8 @@ export const draftPreviews = pgTable(
 
 /**
  * A test's optional cron schedule (Slice 8 — Scheduling). Operational "when-to-run"
- * metadata, NOT part of the versioned definition (like `tests.folder_id`/`status`): a
- * 1:1 row per test, set via the structural test update, never bumping a test_version.
+ * metadata, NOT part of the definition (like `tests.folder_id`/`status`): a
+ * 1:1 row per test, set via the structural test update, leaving the definition untouched.
  * The firing tick (PRD 1, Issue 2) sweeps `next_run_at <= now()`; `enabled` gates firing
  * (pause without losing the cron). The env pin drops to the default baseline on env
  * deletion (SET NULL); the row dies with its test (CASCADE).
@@ -559,156 +649,6 @@ export const appSettings = pgTable("app_settings", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
-/** A Repair Job's kind: `repair` may change the test; `triage` (slice 08) only diagnoses. */
-export type RepairJobKind = "repair" | "triage";
-/** A Repair Job's lifecycle. `queued` is UNCLAIMED — a project with no drainer accumulates
- *  these, which ADR-0003 accepts as long as the queue view makes it visible. */
-export type RepairJobStatus = "queued" | "claimed" | "done" | "failed" | "cancelled";
-
-/**
- * The repair queue (Slice 19) — Varys enqueues, a cloud Claude drains (ADR-0003). One row is one
- * request to fix one broken test, created at the point in a run where an unresolvable locator is
- * ALREADY detected (never by a separate scanner), and only when that test's Repair Policy is
- * `auto` — or when a human enqueues it by hand from a failed run.
- *
- * Since slice 07 a job is one request to fix one **Failure Cluster**, which may span many tests:
- * `test_id`/`run_id` are the ANCHOR (the oldest failure, the one a drainer opens its session on)
- * and {@link repairJobTests} carries the full membership. Thirty-eight tests broken by one renamed
- * button are one job, proposed once and applied across the cluster as a single reviewable change.
- *
- * The partial unique index is therefore over `cluster_key` alone WHERE status = 'queued' —
- * project-wide, not per test, which is what makes "one app change, one job" true. It deliberately
- * does not cover finished jobs, so the same break can be re-enqueued after a repair completed or
- * was cancelled.
- */
-export const repairJobs = pgTable(
-  "repair_jobs",
-  {
-    id: uuid("id").defaultRandom().primaryKey(),
-    /** The test to repair. Dies with its test (CASCADE) — a deleted test has nothing to fix. */
-    testId: uuid("test_id")
-      .notNull()
-      .references(() => tests.id, { onDelete: "cascade" }),
-    /** The run whose failure created the job. SET NULL so purging a run keeps the job's audit
-     *  trail rather than deleting the record of why a test was edited. */
-    runId: uuid("run_id").references(() => runs.id, { onDelete: "set null" }),
-    kind: text("kind").notNull().default("repair"),
-    status: text("status").notNull().default("queued"),
-    /** Stable identity of the broken locator — `deriveClusterKey` of `@varys/repair-policy`. */
-    clusterKey: text("cluster_key").notNull(),
-    /** How many times a drainer has attempted this job — the attempt cap's counter (slice 03). */
-    attempts: integer("attempts").notNull().default(0),
-    /** Who holds the claim (an `agent:…` principal) and since when; both null while queued. */
-    claimedBy: text("claimed_by"),
-    claimedAt: timestamp("claimed_at", { withTimezone: true }),
-    /** When this claim lapses (slice 03). A Claim is a lease: past this instant the job is
-     *  swept back to `queued` with its attempt count incremented, so a drainer that died
-     *  mid-repair strands nothing. Null whenever `claimed_by` is. */
-    claimExpiresAt: timestamp("claim_expires_at", { withTimezone: true }),
-    /** What the drainer said it did when it reported the repair (slice 04) — the account a
-     *  reviewer reads beside the version. Null until a repair is reported. */
-    report: text("report"),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-  },
-  (t) => ({
-    // Project-wide: one QUEUED job per broken locator, however many tests it broke (slice 07).
-    openUq: uniqueIndex("repair_jobs_cluster_queued_uq")
-      .on(t.clusterKey)
-      .where(sql`status = 'queued'`),
-  }),
-);
-
-/**
- * The tests one Repair Job covers — the Failure Cluster's membership (Slice 19, slice 07).
- *
- * A job's `test_id` is only its anchor. This is the list a clustered repair is applied across, a
- * clustered reject reverts, and a Repair Agent credential's reach is scoped to: without it, "the
- * tests covered by a job it has claimed" would be a single test and thirty-seven others would be
- * repaired one divergent proposal at a time.
- *
- * One row per (job, test): a test that keeps failing the same locator while the job is open
- * updates its `run_id` rather than joining twice.
- */
-export const repairJobTests = pgTable(
-  "repair_job_tests",
-  {
-    id: uuid("id").defaultRandom().primaryKey(),
-    jobId: uuid("job_id")
-      .notNull()
-      .references(() => repairJobs.id, { onDelete: "cascade" }),
-    /** A test in the cluster. Dies with its test — a deleted test is not part of any blast radius. */
-    testId: uuid("test_id")
-      .notNull()
-      .references(() => tests.id, { onDelete: "cascade" }),
-    /** The run that surfaced THIS test's failure (each member has its own). SET NULL on purge. */
-    runId: uuid("run_id").references(() => runs.id, { onDelete: "set null" }),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  },
-  (t) => ({ memberUq: uniqueIndex("repair_job_tests_uq").on(t.jobId, t.testId) }),
-);
-
-/**
- * A locator failure the circuit breaker refused to enqueue (Slice 19, slice 07).
- *
- * When more tests are simultaneously broken than the project's threshold allows, NO jobs are
- * created — mass failure means the app broke or was redesigned, and repairing through it would
- * rewrite the corpus into agreement with a bug. The failures are recorded here instead, which is
- * what makes the suppression visible and what makes the human override possible: releasing a
- * tripped breaker enqueues from these rows, so nothing has to be re-run to recover the work.
- *
- * `target` is the failing fingerprint, stored because the cluster key alone cannot be re-derived
- * and a release must be able to enqueue without the original run.
- */
-export const suppressedFailures = pgTable("suppressed_failures", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  testId: uuid("test_id")
-    .notNull()
-    .references(() => tests.id, { onDelete: "cascade" }),
-  runId: uuid("run_id").references(() => runs.id, { onDelete: "set null" }),
-  /** Stable identity of the broken locator — the same `deriveClusterKey` the queue uses. */
-  clusterKey: text("cluster_key").notNull(),
-  /** The recorded fingerprint that missed, so an override can enqueue from this row alone. */
-  target: jsonb("target").notNull(),
-  /** The threshold in force, and the count that breached it, AT SUPPRESSION TIME — so the record
-   *  still explains itself after somebody raises the setting. */
-  threshold: integer("threshold").notNull(),
-  failingTests: integer("failing_tests").notNull(),
-  /** When a human released this for repair (the override). Null while still suppressed. */
-  releasedAt: timestamp("released_at", { withTimezone: true }),
-  releasedBy: text("released_by"),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-});
-
-/**
- * A Repair Agent credential (Slice 19, slice 02 — ADR-0005): the long-lived secret an unattended
- * drainer presents on `/mcp` in place of the browser OAuth leg a human completes.
- *
- * The row stores only the SHA-256 of the token — provisioning is the one and only time the secret
- * exists in readable form, so a leaked database yields nothing presentable. `tokenHint` is the
- * token's last four characters, which is what lets an admin tell two credentials apart in the
- * management surface without the secret being recoverable.
- *
- * `expiresAt` is mandatory (ADR-0005 makes expiry load-bearing, not optional), `revokedAt` is the
- * one-click kill switch, and `lastUsedAt` is the only signal an admin has that a credential is
- * still in use — which is why it is written on every successful presentation.
- */
-export const agentCredentials = pgTable("agent_credentials", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  /** Human label — also the ATTRIBUTION a repaired version carries (`Repair Agent "<label>"`). */
-  label: text("label").notNull(),
-  /** SHA-256 hex of the presented token. Unique, and the only stored form of the secret. */
-  tokenHash: text("token_hash").notNull().unique(),
-  /** Last 4 characters of the token, for recognition in the management surface. */
-  tokenHint: text("token_hint").notNull(),
-  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-  revokedAt: timestamp("revoked_at", { withTimezone: true }),
-  lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
-  /** The admin who provisioned it (email) — provisioning is an audited human act. */
-  createdBy: text("created_by").notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-});
-
 export const schema = {
   folders,
   tests,
@@ -717,9 +657,9 @@ export const schema = {
   suiteTests,
   suiteFolders,
   suiteRuns,
-  testVersions,
   runs,
   runResults,
+  runEvidence,
   runAssertions,
   runSteps,
   runNetwork,
@@ -728,10 +668,7 @@ export const schema = {
   draftPreviews,
   testSchedules,
   appSettings,
-  repairJobs,
-  repairJobTests,
-  suppressedFailures,
-  agentCredentials,
+  agentCheckpoints,
 };
 
 /**
@@ -771,9 +708,42 @@ ALTER TABLE tests ADD COLUMN IF NOT EXISTS created_by text;
 ALTER TABLE tests ADD COLUMN IF NOT EXISTS promoted_by text;
 ALTER TABLE tests ADD COLUMN IF NOT EXISTS promoted_at timestamptz;
 ALTER TABLE tests ADD COLUMN IF NOT EXISTS notes text;
--- Repair Policy (Slice 19). Existing rows default to 'manual' — nothing an author already
--- recorded starts self-editing when this column appears.
-ALTER TABLE tests ADD COLUMN IF NOT EXISTS repair_policy text NOT NULL DEFAULT 'manual';
+-- Test kind (Agent-Driven Tests). 'pinned' = steps + fingerprints the worker replays with no
+-- model call (every test that existed before this column); 'agent' = an Agent-Driven Test, whose
+-- behaviour is the agent_checkpoints rows below. Defaulted, so nothing already recorded changes.
+ALTER TABLE tests ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'pinned';
+-- The wall-clock lease an Agent Run Session on this test is bounded by, in seconds. Defaulted for
+-- every row that already exists and every row written afterwards, so no test is ever unbounded and
+-- nobody has to opt in to being bounded. Fifteen minutes is deliberately modest: it is a stop on an
+-- agent grinding at a state that will never appear, not a budget anyone should be spending in full.
+ALTER TABLE tests ADD COLUMN IF NOT EXISTS agent_lease_seconds integer NOT NULL DEFAULT 900;
+-- One definition per test (ADR 0008). The definition itself, plus who last changed it and when —
+-- the attribution that outlived the version rows, and the token a stale editor is refused
+-- against. Nullable because the column was added to a live table; the backfill below fills it
+-- from each test's highest-numbered version on the one boot that still finds any. It is the only
+-- place a test's definition lives.
+ALTER TABLE tests ADD COLUMN IF NOT EXISTS definition jsonb;
+ALTER TABLE tests ADD COLUMN IF NOT EXISTS updated_by text;
+ALTER TABLE tests ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
+-- The ordered Checkpoints of an Agent-Driven Test. Relational and edited in place, as everything
+-- about a test now is — rewording an instruction is not an audit event. The row id is the durable
+-- identity and the name is only a label, which is what lets a rename carry the
+-- approved baselines keyed by checkpoint_name instead of orphaning them.
+CREATE TABLE IF NOT EXISTS agent_checkpoints (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  test_id uuid NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+  position integer NOT NULL,
+  name text NOT NULL,
+  instructions text NOT NULL DEFAULT '',
+  compare_prompt text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+-- Two checkpoints on one test cannot share a name. In the DATABASE rather than only in the
+-- writing code path, because the Checkpoint Manifest's closed-set property depends on it: a
+-- duplicate name would make "which baseline does this slot key?" ambiguous.
+CREATE UNIQUE INDEX IF NOT EXISTS agent_checkpoints_test_name_uniq ON agent_checkpoints (test_id, name);
+CREATE INDEX IF NOT EXISTS agent_checkpoints_test_position_idx ON agent_checkpoints (test_id, position);
 CREATE TABLE IF NOT EXISTS test_tags (
   test_id uuid NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
   tag text NOT NULL,
@@ -786,6 +756,8 @@ CREATE TABLE IF NOT EXISTS suites (
 );
 -- Attribution (Slice A): who created the suite.
 ALTER TABLE suites ADD COLUMN IF NOT EXISTS created_by text;
+-- Agent-Driven Tests: the outermost AI Instructions layer, shared across a suite's members.
+ALTER TABLE suites ADD COLUMN IF NOT EXISTS agent_instructions text;
 CREATE TABLE IF NOT EXISTS suite_tests (
   suite_id uuid NOT NULL REFERENCES suites(id) ON DELETE CASCADE,
   test_id uuid NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
@@ -805,35 +777,8 @@ CREATE TABLE IF NOT EXISTS suite_runs (
 );
 -- Fan-in Slack notification claim: set once when the last child finishes (exactly-once notify).
 ALTER TABLE suite_runs ADD COLUMN IF NOT EXISTS notified_at timestamptz;
-CREATE TABLE IF NOT EXISTS test_versions (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  test_id uuid NOT NULL REFERENCES tests(id),
-  version integer NOT NULL,
-  definition jsonb NOT NULL,
-  created_by text,
-  created_at timestamptz NOT NULL DEFAULT now()
-);
--- Bring an existing test_versions table (created before created_by) up to date.
-ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS created_by text;
--- Human review of a version (Slice 19, slice 04). Defaults to 'reviewed' so every version that
--- already exists — and every version a person writes — needs no decision; only an unattended
--- Repair Agent writes 'unreviewed', which is what puts it in the repair review queue.
-ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS review_state text NOT NULL DEFAULT 'reviewed';
-ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS repair_job_id uuid;
--- The agent's brief-clause justification and the judge's verdict on it (Slice 19, slice 05).
-ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS justification text;
-ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS justification_reasoning text;
--- Did an independent judge stand behind that reasoning, or only the agent itself (slice 14)?
-ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS justification_validated boolean;
--- The page a repair was made against, captured live when the fix was written (slice 13).
-ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS repair_screenshot_key text;
-ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS reviewed_by text;
-ALTER TABLE test_versions ADD COLUMN IF NOT EXISTS reviewed_at timestamptz;
-CREATE INDEX IF NOT EXISTS test_versions_unreviewed_idx
-  ON test_versions (created_at DESC) WHERE review_state = 'unreviewed';
 CREATE TABLE IF NOT EXISTS runs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  test_version_id uuid NOT NULL REFERENCES test_versions(id),
   environment_id uuid,
   status text NOT NULL DEFAULT 'queued',
   error text,
@@ -850,16 +795,62 @@ ALTER TABLE runs ADD COLUMN IF NOT EXISTS trace_artifact_key text;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS triggered_by text;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS trigger_source text;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS notes text;
+-- The fully composed AI Instructions an Agent Run Session was handed, copied verbatim at start
+-- (Agent-Driven Tests). Null for every pinned run. It is a COPY because the three instruction
+-- layers are edited in place: without it, editing a checkpoint's wording would quietly rewrite
+-- the history of every run that ever walked it.
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS agent_instructions text;
+-- The agent's written account of the session, stored when it finishes the run. Also the CLOSED
+-- flag: a run carrying one accepts no further submissions, so "done" cannot be walked back.
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS agent_summary text;
+-- The wall-clock lease this Agent Run Session was granted and when it runs out. The seconds are a
+-- forensic copy (the test's setting is editable in place); the timestamp is the enforced
+-- deadline, stamped once at start so the bound is absolute. Null for every pinned run.
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS agent_lease_seconds integer;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS agent_lease_expires_at timestamptz;
 -- Which CLASS of failure ended a failed run (Slice 19): 'locator' = an unresolvable
--- fingerprint (the only repairable class), NULL for everything else. Recorded by the runner,
--- never inferred from the error text.
+-- fingerprint (the only repairable class), 'unreached' = an Agent-Driven Test left a Checkpoint
+-- Manifest slot unfilled, NULL for everything else. Recorded by the runner, never inferred from
+-- the error text. Plain text with no CHECK: the known set is enforced in the API, which degrades
+-- an unrecognised value to null rather than shipping a class no surface can render.
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS failure_kind text;
--- A Triage Job's written finding on a red run (slice 08). An annotation only: the run's status and
--- derived outcome are untouched, because a diagnosis must never be mistakable for a resolution.
-ALTER TABLE runs ADD COLUMN IF NOT EXISTS triage_finding text;
-ALTER TABLE runs ADD COLUMN IF NOT EXISTS triage_by text;
-ALTER TABLE runs ADD COLUMN IF NOT EXISTS triage_at timestamptz;
-ALTER TABLE runs ADD COLUMN IF NOT EXISTS triage_job_id uuid;
+-- What this Run replayed, and which test it belongs to (ADR 0008). The definition is a write-once
+-- COPY, so a timeline, a failed step index and a repair drive keep meaning something after the
+-- test is edited; test_id is the direct link to the test. Both nullable because the columns were
+-- added to a live table; the backfill below fills them from the version each run actually pointed
+-- at, on the one boot that still finds any.
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS test_id uuid REFERENCES tests(id);
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS definition jsonb;
+-- The backfill, and the last thing in Varys that reads a version row. It runs only where one
+-- survives: the table is no longer created above, so a fresh volume skips this entirely and a
+-- database carrying history is drained by it exactly once, on the boot that upgrades it. Written
+-- as a DO block because the statements name a relation that usually does not exist, and a plain
+-- UPDATE would fail to PARSE rather than find nothing to do.
+-- Guarded on definition IS NULL for the same reason it always was: booting twice is a no-op,
+-- because after the first pass every row carries its own copy and a later save or run writes its
+-- own. A test's definition is its HIGHEST-NUMBERED version, the rule currentDefinition applied.
+DO $$
+BEGIN
+  IF to_regclass('public.test_versions') IS NOT NULL THEN
+    UPDATE tests t
+       SET definition = v.definition,
+           updated_by = v.created_by,
+           updated_at = v.created_at
+      FROM (
+        SELECT DISTINCT ON (test_id) test_id, definition, created_by, created_at
+          FROM test_versions
+         ORDER BY test_id, version DESC
+      ) v
+     WHERE v.test_id = t.id AND t.definition IS NULL;
+    -- A Run's copy comes from the version that Run pointed at, NOT from its test's current one:
+    -- the whole point of the column is that those two can differ.
+    UPDATE runs r
+       SET definition = v.definition,
+           test_id = v.test_id
+      FROM test_versions v
+     WHERE v.id = r.test_version_id AND r.definition IS NULL;
+  END IF;
+END $$;
 CREATE TABLE IF NOT EXISTS run_results (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   run_id uuid NOT NULL REFERENCES runs(id),
@@ -879,6 +870,23 @@ ALTER TABLE run_results ADD COLUMN IF NOT EXISTS resolved_by text;
 ALTER TABLE run_results ADD COLUMN IF NOT EXISTS resolved_at timestamptz;
 -- Dynamic-content testing: the LLM judge's rationale for a context-compared checkpoint.
 ALTER TABLE run_results ADD COLUMN IF NOT EXISTS judge_reasoning text;
+-- How the ACTUAL capture was produced, when an Agent-Driven Test's agent said so. Evidence, not a
+-- constraint: Varys performs no capture for that kind and verifies none of this, so nothing is
+-- enforced against it. It exists so a reviewer can ask whether two baffling images were even taken
+-- the same way. Null for every pinned run.
+ALTER TABLE run_results ADD COLUMN IF NOT EXISTS capture_tool text;
+ALTER TABLE run_results ADD COLUMN IF NOT EXISTS capture_viewport text;
+ALTER TABLE run_results ADD COLUMN IF NOT EXISTS capture_device_scale double precision;
+-- Extra screenshots an agent attached to a run: unnamed, unlimited, keying no baseline. Nameless
+-- by design — evidence must never be mistakable for a Manifest slot or promotable to a baseline.
+CREATE TABLE IF NOT EXISTS run_evidence (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_id uuid NOT NULL REFERENCES runs(id),
+  artifact_key text NOT NULL,
+  note text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS run_evidence_run_idx ON run_evidence (run_id, created_at);
 CREATE TABLE IF NOT EXISTS run_assertions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   run_id uuid NOT NULL REFERENCES runs(id),
@@ -959,8 +967,8 @@ CREATE TABLE IF NOT EXISTS draft_previews (
   created_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (test_id, checkpoint_name)
 );
--- Per-test cron schedule (Slice 8 — Scheduling). Operational metadata; editing it never
--- writes a test_version. 1:1 with tests (PK = test_id); the env pin drops to the default
+-- Per-test cron schedule (Slice 8 — Scheduling). Operational metadata; editing it leaves the
+-- test's definition untouched. 1:1 with tests (PK = test_id); the env pin drops to the default
 -- baseline on env delete (SET NULL); the row dies with its test (CASCADE).
 CREATE TABLE IF NOT EXISTS test_schedules (
   test_id uuid PRIMARY KEY REFERENCES tests(id) ON DELETE CASCADE,
@@ -1016,85 +1024,6 @@ DELETE FROM run_results a USING run_results b
   WHERE a.run_id = b.run_id AND a.checkpoint_name = b.checkpoint_name
     AND (a.created_at < b.created_at OR (a.created_at = b.created_at AND a.id < b.id));
 CREATE UNIQUE INDEX IF NOT EXISTS run_results_run_checkpoint_uq ON run_results (run_id, checkpoint_name);
--- The repair queue (Slice 19). Varys enqueues on an unresolvable-locator failure under
--- an 'auto' Repair Policy; a cloud Claude drains it (ADR-0003). The partial unique index is what
--- makes "one failure, one job" true — ten nightly runs failing the same locator on the same
--- test leave ONE queued job. It covers only queued rows, so the same break can be re-enqueued
--- once a repair finished or was cancelled.
-CREATE TABLE IF NOT EXISTS repair_jobs (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  test_id uuid NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
-  run_id uuid REFERENCES runs(id) ON DELETE SET NULL,
-  kind text NOT NULL DEFAULT 'repair',
-  status text NOT NULL DEFAULT 'queued',
-  cluster_key text NOT NULL,
-  attempts integer NOT NULL DEFAULT 0,
-  claimed_by text,
-  claimed_at timestamptz,
-  claim_expires_at timestamptz,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS repair_jobs_status_idx ON repair_jobs (status, created_at);
--- Clustering (slice 07) moves the "one failure, one job" index from (test_id, cluster_key) to
--- cluster_key alone: a job now covers a whole Failure Cluster, so the same broken locator in a
--- second test JOINS the open job instead of opening a rival one. The old index has to go or it
--- would still admit one queued job per test.
-DROP INDEX IF EXISTS repair_jobs_queued_uq;
-CREATE UNIQUE INDEX IF NOT EXISTS repair_jobs_cluster_queued_uq
-  ON repair_jobs (cluster_key) WHERE status = 'queued';
--- The Failure Cluster's membership: every test one job covers. repair_jobs.test_id is the anchor.
-CREATE TABLE IF NOT EXISTS repair_job_tests (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  job_id uuid NOT NULL REFERENCES repair_jobs(id) ON DELETE CASCADE,
-  test_id uuid NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
-  run_id uuid REFERENCES runs(id) ON DELETE SET NULL,
-  created_at timestamptz NOT NULL DEFAULT now()
-);
-CREATE UNIQUE INDEX IF NOT EXISTS repair_job_tests_uq ON repair_job_tests (job_id, test_id);
--- Backfill: every pre-clustering job is a cluster of one. Doing it here rather than leaving the
--- readers to fall back to repair_jobs.test_id keeps membership the single source of truth, so no
--- query has to ask "clustered or not?".
-INSERT INTO repair_job_tests (job_id, test_id, run_id)
-  SELECT id, test_id, run_id FROM repair_jobs
-  ON CONFLICT DO NOTHING;
--- Failures the circuit breaker refused to enqueue (slice 07). Recorded rather than dropped: this
--- is what makes a tripped breaker visible, and what the human override enqueues from.
-CREATE TABLE IF NOT EXISTS suppressed_failures (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  test_id uuid NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
-  run_id uuid REFERENCES runs(id) ON DELETE SET NULL,
-  cluster_key text NOT NULL,
-  target jsonb NOT NULL,
-  threshold integer NOT NULL,
-  failing_tests integer NOT NULL,
-  released_at timestamptz,
-  released_by text,
-  created_at timestamptz NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS suppressed_failures_open_idx
-  ON suppressed_failures (created_at) WHERE released_at IS NULL;
--- A Claim is a lease (slice 03): a claimed job carries the instant its claim lapses, after which
--- it is swept back to 'queued' with attempts incremented. Added by ALTER so an existing queue
--- gains the column without the CREATE TABLE above (IF NOT EXISTS) silently skipping it.
-ALTER TABLE repair_jobs ADD COLUMN IF NOT EXISTS claim_expires_at timestamptz;
--- The drainer's account of what it repaired (slice 04), shown beside the unreviewed version.
-ALTER TABLE repair_jobs ADD COLUMN IF NOT EXISTS report text;
--- Repair Agent credentials (Slice 19, slice 02 / ADR-0005): the second issuer on /mcp, for an
--- unattended drainer that cannot complete the browser OAuth leg. Only the token's SHA-256 is
--- stored, so the secret is unrecoverable after provisioning; expiry is NOT NULL because ADR-0005
--- treats short expiry, visible last_used_at and one-click revocation as the safeguard.
-CREATE TABLE IF NOT EXISTS agent_credentials (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  label text NOT NULL,
-  token_hash text NOT NULL UNIQUE,
-  token_hint text NOT NULL,
-  expires_at timestamptz NOT NULL,
-  revoked_at timestamptz,
-  last_used_at timestamptz,
-  created_by text NOT NULL,
-  created_at timestamptz NOT NULL DEFAULT now()
-);
 -- Generic key/value store for runtime-editable app settings (no redeploy). First user:
 -- the AI authoring instructions, edited from the Author page.
 CREATE TABLE IF NOT EXISTS app_settings (
@@ -1102,6 +1031,12 @@ CREATE TABLE IF NOT EXISTS app_settings (
   value text NOT NULL,
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+-- The base authoring prompt moved to authoring_instructions_base_v2 when open_session lost its
+-- mode argument. An override stored under the old key would still be teaching Claude to pass an
+-- argument the server now refuses, so the orphan is dropped rather than carried: a customised
+-- deployment falls back to the new baked-in default, which is the only text that matches the
+-- tools. The "additional" layer is untouched — it is team guidance, not the authoring contract.
+DELETE FROM app_settings WHERE key = 'authoring_instructions_base';
 -- Auth & multi-user (Slice 10 — better-auth-owned tables). These back Varys's OWN
 -- user authentication (who can use Varys), distinct from the per-environment
 -- app-under-test login vault. better-auth manages these tables itself (via its kysely
@@ -1202,4 +1137,34 @@ CREATE INDEX IF NOT EXISTS "oauthAccessToken_clientId_idx" ON "oauthAccessToken"
 CREATE INDEX IF NOT EXISTS "oauthAccessToken_userId_idx" ON "oauthAccessToken" ("userId");
 CREATE INDEX IF NOT EXISTS "oauthConsent_clientId_idx" ON "oauthConsent" ("clientId");
 CREATE INDEX IF NOT EXISTS "oauthConsent_userId_idx" ON "oauthConsent" ("userId");
+-- The repair queue is gone (ADR-0008): repair is attended, so nothing enqueues, claims, leases,
+-- clusters, triages or suppresses. Dropped rather than left dormant — a table nobody writes is a
+-- table the next reader has to reason about. Idempotent, so this runs against a fresh volume and
+-- against a database that carried the queue alike. repair_job_tests first: it references
+-- repair_jobs. The columns that pointed INTO the queue go with it, for the same reason.
+DROP TABLE IF EXISTS repair_job_tests;
+DROP TABLE IF EXISTS repair_jobs;
+DROP TABLE IF EXISTS suppressed_failures;
+ALTER TABLE tests DROP COLUMN IF EXISTS repair_policy;
+ALTER TABLE runs DROP COLUMN IF EXISTS triage_finding;
+ALTER TABLE runs DROP COLUMN IF EXISTS triage_by;
+ALTER TABLE runs DROP COLUMN IF EXISTS triage_at;
+ALTER TABLE runs DROP COLUMN IF EXISTS triage_job_id;
+-- The circuit-breaker threshold was a project setting; with no breaker it configures nothing.
+DELETE FROM app_settings WHERE key = 'repair_breaker_threshold';
+-- And the second issuer on /mcp goes with the drainer that needed it (ADR-0008): there is one
+-- issuer again, a signed-in human over OAuth, so there is no provisioned token to inventory,
+-- rotate or revoke. Dropped rather than kept dormant — a live table of long-lived secrets that
+-- nothing accepts any more is worse than no table at all.
+DROP TABLE IF EXISTS agent_credentials;
+-- And the history goes (ADR-0008): a test has one definition, a Run has its own copy of what it
+-- replayed, and there is nothing to roll back to. Dropped AFTER the backfill above, which is the
+-- whole order that makes this deployable against a real corpus rather than a fresh volume — the
+-- definitions are read out of the version rows first, and only then are the rows removed. The
+-- run's pointer goes first because it is the FK holding the table down.
+--
+-- This is the irreversible one. Everything else above is machinery nobody used; this is the last
+-- copy of what a test used to look like. Deliberate: see the ADR.
+ALTER TABLE runs DROP COLUMN IF EXISTS test_version_id;
+DROP TABLE IF EXISTS test_versions;
 `;

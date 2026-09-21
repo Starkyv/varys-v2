@@ -22,12 +22,12 @@ import {
   Pencil,
   Skeleton,
   Sliders,
-  Sparkles,
   X,
 } from "@varys/ui";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
-import { API_BASE } from "../../api";
+import { API_BASE, API_ORIGIN } from "../../api";
 import { ZoomableImage } from "../../components/ZoomableImage";
+import { AgentDrivenAuthoring } from "./components/AgentDriven";
 import { useRouter } from "../../context/router";
 import { useToast } from "../../context/toast";
 import {
@@ -38,13 +38,9 @@ import {
 } from "../../queries";
 import styles from "./styles.module.scss";
 
-/** Where the MCP server lives — it IS the API, served same-origin as this app (the Vite proxy
- *  in dev, the ingress in prod), so derive it from where this page is actually served instead of
- *  hardcoding a host. A split-origin deploy sets VITE_API_BASE (→ API_BASE) to the API origin; in
- *  local dev the SPA (:5174) and API (:4000) differ, so target the API port directly. */
-const MCP_BASE = API_BASE || (import.meta.env.DEV ? "http://localhost:4000" : window.location.origin);
-/** The shell command that points a user's own Claude Code at Varys's MCP server. */
-const CONNECT_CMD = `claude mcp add --transport http varys ${MCP_BASE}/mcp`;
+/** The shell command that points a user's own Claude Code at Varys's MCP server. The MCP server
+ *  IS the API, so it is named by the same origin a Bridge Helper would be pointed at. */
+const CONNECT_CMD = `claude mcp add --transport http varys ${API_ORIGIN}/mcp`;
 
 /** One captured step of a live session: the action Claude took + the screenshot taken right
  *  after it. A `checkpoint` name marks the steps that become the test's visual assertions. */
@@ -155,11 +151,11 @@ function ConnectionPill({ status }: { status?: McpStatus }) {
   );
 }
 
-/** One example line inside a mode card (a violet ›-chevron + text). */
+/** One example line of what to say to Claude (a violet ›-chevron + text). */
 function ExampleLine({ children }: { children: ReactNode }) {
   return (
-    <div className={styles.modeLine}>
-      <span className={styles.modeChevron}>›</span>
+    <div className={styles.briefLine}>
+      <span className={styles.briefChevron}>›</span>
       <span>{children}</span>
     </div>
   );
@@ -194,9 +190,9 @@ function ConnectState() {
           <div className={styles.connectTitle}>No active authoring session</div>
         </div>
         <p className={styles.connectDesc}>
-          Connect your Claude Code to Varys, then describe the flow in plain language — and name the
-          mode you want, since Claude won’t guess it. Claude drives a real browser on the server —
-          every step and checkpoint streams in here.
+          Connect your Claude Code to Varys, then describe the whole flow in plain language — or
+          point it at a plan file. Claude drives a real browser on the server, walks the brief end to
+          end and saves the draft itself; every step and checkpoint streams in here.
         </p>
       </div>
 
@@ -225,79 +221,32 @@ function ConnectState() {
         </div>
       </div>
 
-      {/* step 2 — what to test, two ways */}
+      {/* step 2 — hand over the brief */}
       <div className={styles.step}>
         <div className={styles.stepLabel}>
           <span className={styles.stepNum}>2</span>
           <span className={styles.stepLabelText}>Tell it what to test</span>
-          <span className={styles.stepLabelSub}>— two ways</span>
+          <span className={styles.stepLabelSub}>— the whole thing, up front</span>
         </div>
-        <div className={styles.twoUp}>
-          {/* step-by-step */}
-          <div className={styles.modeCard}>
-            <div className={styles.modeHead}>
-              <span className={styles.modeIcon}>
-                <MousePointer size={19} />
-              </span>
-              <div className={styles.modeTitleWrap}>
-                <div className={styles.modeTitle}>Step-by-step</div>
-                <div className={styles.modeTags}>
-                  <span className={styles.modeTag}>interactive</span>
-                  <span className={styles.modeTagSub}>default</span>
-                </div>
-              </div>
-            </div>
-            <div className={styles.modeDesc}>
-              One instruction at a time. Claude does a single action, then stops and reports what
-              changed. The session stays open until you explicitly tell it to finish — it never wraps
-              up on its own.
-            </div>
-            <div className={styles.modeExample}>
-              <ExampleLine>
-                Open the dashboard in <strong>interactive</strong> mode, log in as a standard user
-              </ExampleLine>
-              <ExampleLine>
-                Click <strong>Reports</strong>
-              </ExampleLine>
-              <ExampleLine>Screenshot the revenue chart as a checkpoint</ExampleLine>
-              <ExampleLine>
-                When you’re done: <strong>finish the session</strong>
-              </ExampleLine>
-            </div>
-            <div className={styles.modeShortcut}>
-              <span className={styles.modeShortcutLabel}>Shortcut</span>
-              <code className={styles.modeShortcutCode}>{"/varys-interactive <url>"}</code>
-            </div>
+        <div className={styles.briefCard}>
+          <div className={styles.briefDesc}>
+            Give Claude the entire brief in one go — typed out, or a plan file to read. It opens the
+            session, walks every step without stopping to check in, captures the checkpoints the
+            brief asks for, and finishes the draft on its own. There is nothing to choose before it
+            starts and nothing to say to make it stop.
           </div>
-
-          {/* batch */}
-          <div className={styles.modeCard}>
-            <div className={styles.modeHead}>
-              <span className={styles.modeIcon}>
-                <Sparkles size={19} />
-              </span>
-              <div className={styles.modeTitleWrap}>
-                <div className={styles.modeTitle}>Batch</div>
-                <div className={styles.modeTags}>
-                  <span className={styles.modeTag}>batch</span>
-                  <span className={styles.modeTagSub}>runs end-to-end</span>
-                </div>
-              </div>
-            </div>
-            <div className={styles.modeDesc}>
-              Point Claude at a plan file. It runs every step start to finish without pausing,
-              captures the checkpoints the plan asks for, and finishes the draft on its own.
-            </div>
-            <div className={styles.modeExample}>
-              <ExampleLine>
-                Author a Varys test from <strong>./plans/reports.md</strong> in <strong>batch</strong>{" "}
-                mode
-              </ExampleLine>
-            </div>
-            <div className={styles.modeShortcut}>
-              <span className={styles.modeShortcutLabel}>Shortcut</span>
-              <code className={styles.modeShortcutCode}>{"/varys-batch <plan-file>"}</code>
-            </div>
+          <div className={styles.briefExample}>
+            <ExampleLine>
+              Author a Varys test: open the dashboard, log in as a standard user, click{" "}
+              <strong>Reports</strong>, and screenshot the revenue chart as a checkpoint
+            </ExampleLine>
+            <ExampleLine>
+              …or: Author a Varys test from <strong>./plans/reports.md</strong>
+            </ExampleLine>
+          </div>
+          <div className={styles.briefShortcut}>
+            <span className={styles.briefShortcutLabel}>Shortcut</span>
+            <code className={styles.briefShortcutCode}>{"/varys-author <url-or-plan-file>"}</code>
           </div>
         </div>
       </div>
@@ -336,7 +285,8 @@ function CopyGlyph() {
  * Editor for the AI authoring instructions (the MCP `initialize` prompt), in two layers served to
  * Claude as base + additional. Edits are stored server-side and served on the next connect — no
  * redeploy. "Additional" (team guidance) is the prominent, frequently-edited field; "Base" (the
- * foundational prompt — modes, checkpoint discipline) sits in a collapsed advanced section since
+ * foundational prompt — the authoring discipline, checkpoint discipline) sits in a collapsed
+ * advanced section since
  * it changes rarely. When the additional layer is env-locked it's shown read-only.
  */
 function InstructionsEditor({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -437,7 +387,8 @@ function InstructionsEditor({ open, onClose }: { open: boolean; onClose: () => v
             {baseOpen && (
               <div className={styles.instrField}>
                 <p className={styles.instrHelp}>
-                  The core contract (the two modes, the checkpoint discipline). Changing this affects
+                  The core contract (the authoring discipline, the checkpoint discipline). Changing
+                  this affects
                   how every test is authored — edit with care.{" "}
                   {!data.baseUsingDefault && (
                     <button
@@ -473,6 +424,107 @@ function InstructionsEditor({ open, onClose }: { open: boolean; onClose: () => v
   );
 }
 
+/** Which kind of test this Author session is meant to produce. Remembered across reloads so a
+ *  refresh mid-conversation does not silently put the page back on the other path. */
+const KIND_STORAGE_KEY = "varys.author.kind";
+
+type AuthoringKind = "pinned" | "agent";
+
+function readStoredKind(): AuthoringKind {
+  try {
+    return window.localStorage.getItem(KIND_STORAGE_KEY) === "agent" ? "agent" : "pinned";
+  } catch {
+    return "pinned";
+  }
+}
+
+/**
+ * The kind choice, made BEFORE the conversation starts — and locked once one is under way,
+ * because Claude picks its tools on the first tool call and there is no coherent midpoint.
+ *
+ * Knowing a conversation IS under way works differently per kind, and has to. A pinned one opens
+ * an Authoring Session Varys can see, so the picker simply disappears behind the live view. An
+ * Agent-Driven one opens nothing — no session, no browser, no state Varys holds — so the only
+ * evidence available is the Draft moving, which the panel below watches for.
+ *
+ * It has to come first because the two paths share no mechanism: a pinned test is recorded by a
+ * browser Varys drives, an Agent-Driven one is explored by Claude on the author's own machine and
+ * written down as prose. Claude picks its tools on the first call, so this is a decision with no
+ * sensible midpoint.
+ *
+ * It is a **steer, not an enforcement**, and the copy says so rather than implying a guarantee
+ * Varys does not make: `/mcp` filters tools by who is asking, not by what this page is set to, and
+ * authoring has no session object to hang a mode on. What this changes is the guidance below and
+ * what you are told to say to Claude. Getting it wrong produces a Draft you delete, not a
+ * corrupted test.
+ *
+ * The cost difference is stated because it is the author's money and it is not recoverable later:
+ * a pinned test replays on Varys's own worker for free, while every single run of an Agent-Driven
+ * Test spends their Claude subscription quota.
+ */
+function KindChoice({
+  kind,
+  onChange,
+  locked,
+}: {
+  kind: AuthoringKind;
+  onChange: (k: AuthoringKind) => void;
+  /** A conversation is already under way, so the question is settled for the rest of it. */
+  locked: boolean;
+}) {
+  const options: { id: AuthoringKind; title: string; tag: string; desc: string; cost: string }[] = [
+    {
+      id: "pinned",
+      title: "Pinned test",
+      tag: "recorded",
+      desc: "Claude drives a browser on Varys's server and records the steps. Replayed exactly, every run. Needs a DOM stable enough to pin to.",
+      cost: "Runs free on Varys's worker.",
+    },
+    {
+      id: "agent",
+      title: "Agent-Driven Test",
+      tag: "re-walked",
+      desc: "Claude explores your app with its own local tooling and writes AI Instructions and Checkpoints. For flows that will not sit still — charts that redraw, figures that move.",
+      cost: "Every run spends your Claude subscription quota.",
+    },
+  ];
+
+  return (
+    <section className={styles.kindPicker}>
+      <div className={styles.kindHead}>
+        <span className={styles.kindLabel}>What should Claude author?</span>
+        <span className={styles.kindHint}>
+          {locked
+            ? "Claude is already authoring — this is settled for the rest of the conversation."
+            : "Pick before you start. Claude chooses its tools on the first call, so there is no switching part-way."}
+        </span>
+      </div>
+      <div className={styles.kindOptions}>
+        {options.map((o) => (
+          <button
+            type="button"
+            key={o.id}
+            className={cx(styles.kindCard, kind === o.id && styles.kindCardOn)}
+            aria-pressed={kind === o.id}
+            disabled={locked}
+            onClick={() => onChange(o.id)}
+          >
+            <span className={styles.kindCardHead}>
+              <span className={styles.kindCardTitle}>{o.title}</span>
+              <span className={styles.kindCardTag}>{o.tag}</span>
+              {kind === o.id && <Check size={15} className={styles.kindCardTick} />}
+            </span>
+            <span className={styles.kindCardDesc}>{o.desc}</span>
+            <span className={cx(styles.kindCardCost, o.id === "agent" && styles.kindCardCostWarn)}>
+              {o.cost}
+            </span>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 /**
  * Author with AI (Slice 15) — drive authoring from your own Claude Code (your subscription,
  * first-party) and watch it here step by step. Each action Claude takes against Varys's MCP
@@ -487,6 +539,20 @@ export function Author() {
   const [pickedSeq, setPickedSeq] = useState<number | null>(null);
   const [draft, setDraft] = useState<AuthoringDraftEvent | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
+  const [kind, setKind] = useState<AuthoringKind>(readStoredKind);
+  // Set once this page sees an Agent-Driven Draft actually moving — see `KindChoice`. Never
+  // cleared: within one visit, a conversation that started does not un-start.
+  const [agentWriting, setAgentWriting] = useState(false);
+  const onAgentWriting = useCallback(() => setAgentWriting(true), []);
+
+  const chooseKind = useCallback((k: AuthoringKind) => {
+    setKind(k);
+    try {
+      window.localStorage.setItem(KIND_STORAGE_KEY, k);
+    } catch {
+      /* a browser refusing storage is not worth failing the page over */
+    }
+  }, []);
 
   const all = sessions.data ?? [];
   // Just the live one: the most recent active session (no multi-session history).
@@ -519,7 +585,15 @@ export function Author() {
       />
     );
   } else if (!session) {
-    content = <ConnectState />;
+    // No Varys-hosted session. Which of the two paths this page is for is the author's choice,
+    // and the agent-driven one never opens a session at all — Varys hosts no browser for it, so
+    // there is nothing to wait for and nothing to preview.
+    content =
+      kind === "agent" ? (
+        <AgentDrivenAuthoring connectCmd={CONNECT_CMD} onWriting={onAgentWriting} />
+      ) : (
+        <ConnectState />
+      );
   } else {
     content = (
       <div className={styles.grid}>
@@ -670,9 +744,6 @@ export function Author() {
           <div className={styles.sessionHead}>
             <div className={styles.sessionTitleRow}>
               <span className={styles.sessionName}>{session.name}</span>
-              <Badge tone={session.mode === "batch" ? "primary" : "neutral"} appearance="soft" size="sm">
-                {session.mode === "batch" ? "Batch" : "Step-by-step"}
-              </Badge>
               <span className={styles.livePill}>
                 <span className={styles.livePillDot} />
                 Live
@@ -695,6 +766,11 @@ export function Author() {
         </Button>
         <ConnectionPill status={mcp.data} />
       </div>
+
+      {/* The kind choice sits above everything, and disappears once a Varys-hosted session is
+          live: at that point the question is settled by a conversation already under way. The
+          agent-driven path never opens one, so it is locked in place rather than hidden. */}
+      {!session && <KindChoice kind={kind} onChange={chooseKind} locked={agentWriting} />}
 
       {draft && (
         <div className={styles.banner}>

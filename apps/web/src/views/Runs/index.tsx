@@ -15,7 +15,7 @@ import { LiveIndicator } from "../../components/LiveIndicator";
 import { useConfirm } from "../../context/confirm";
 import { useRouter } from "../../context/router";
 import { useToast } from "../../context/toast";
-import { relativeTime } from "../../lib/format";
+import { relativeTime, runSource, timeLeft } from "../../lib/format";
 import { StatusBadge } from "../../lib/status";
 import { useDeleteRun, useRuns } from "../../queries";
 import styles from "./styles.module.scss";
@@ -34,10 +34,6 @@ const STATUS_LEGEND: InfoTipBlock[] = [
       [<StatusBadge key="p" status="passed" />, "Baseline matched — a real verification."],
       [<StatusBadge key="b" status="baseline" />, "Set or updated the golden baseline."],
       [<StatusBadge key="pb" status="pending-baseline" />, "First run, no baseline yet — awaiting approval."],
-      [
-        <StatusBadge key="h" status="healed" />,
-        "It verified — but on a repair nobody has accepted yet. Not a failure and not a pass: the repaired version is in the repair queue.",
-      ],
       [<StatusBadge key="reg" status="regression" />, "A baseline existed and the new capture differs — a visual change."],
       [<StatusBadge key="f" status="failed" />, "The test couldn’t run — an element wasn’t found, or the replay crashed."],
     ],
@@ -52,14 +48,6 @@ const SOURCE_OPTIONS: SegmentedOption<RunSource>[] = [
   { value: "schedule", label: "Scheduled" },
   // { value: "suite", label: "Suite" },
 ];
-const SOURCE_LABEL: Record<string, string> = {
-  manual: "Manual",
-  schedule: "Scheduled",
-  suite: "Suite",
-  api: "API",
-  // Varys' own re-run of a repaired test — neither a person's nor a cron's.
-  repair: "Repair",
-};
 const sourceOf = (triggerSource: string | null): string => triggerSource ?? "manual";
 
 export function Runs() {
@@ -120,11 +108,12 @@ export function Runs() {
   }
 
   const filtered = source === "all" ? data : data.filter((r) => sourceOf(r.triggerSource) === source);
+  const filterLabel = source === "all" ? null : runSource(source);
 
   return (
     <div className={styles.card}>
       <header className={styles.header}>
-        <h3 className={styles.title}>{source === "all" ? "All runs" : `${SOURCE_LABEL[source]} runs`}</h3>
+        <h3 className={styles.title}>{filterLabel ? `${filterLabel} runs` : "All runs"}</h3>
         <span className={styles.count}>{filtered.length} runs</span>
         <SegmentedControl
           ariaLabel="Filter runs by trigger source"
@@ -137,7 +126,7 @@ export function Runs() {
       </header>
       {filtered.length === 0 ? (
         <div className={styles.filterEmpty}>
-          No {SOURCE_LABEL[source]?.toLowerCase()} runs yet
+          No {filterLabel?.toLowerCase()} runs yet
           {source === "schedule" && " — set a cron schedule on a test and it'll appear here when it fires."}
         </div>
       ) : (
@@ -167,6 +156,12 @@ export function Runs() {
           <tbody>
             {filtered.map((r) => {
               const inFlight = r.status === "queued" || r.status === "running";
+              // An Agent Run Session Varys is not driving, still inside its lease. The row reads
+              // `Running` because of it (see deriveRunOutcome), and the remaining time is what
+              // makes that claim checkable rather than something to take on faith — a session
+              // with four minutes left is worth waiting for; one with four seconds is not.
+              const leftOnLease =
+                r.session?.state === "open" ? timeLeft(r.session.leaseExpiresAt) : "";
               return (
                 <tr
                   key={r.runId}
@@ -182,9 +177,10 @@ export function Runs() {
                     {r.error && <div className={styles.error}>{r.error}</div>}
                   </td>
                   <td className={styles.env}>{r.environment}</td>
-                  <td className={styles.env}>{SOURCE_LABEL[sourceOf(r.triggerSource)] ?? "Manual"}</td>
+                  <td className={styles.env}>{runSource(r.triggerSource)}</td>
                   <td>
                     <StatusBadge status={r.outcome} />
+                    {leftOnLease && <div className={styles.lease}>{leftOnLease}</div>}
                   </td>
                   <td className={styles.when}>{relativeTime(r.runTimestamp)}</td>
                   <td className={styles.tdAction}>

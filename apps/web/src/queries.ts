@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
-  CreateAgentCredentialRequest,
+  AgentCheckpointInput,
+  CreateAgentTestRequest,
   ImageComparisonSettings,
-  SetRepairPolicyRequest,
   JudgeSettingsPatch,
   LocatorVerifyRequest,
   PromoteDraftBody,
@@ -12,13 +12,18 @@ import type {
   TuningInput,
 } from "@varys/review-contract";
 import {
+  addAgentCheckpoint,
+  createAgentTest,
+  createBridge,
+  deleteAgentCheckpoint,
+  fetchAgentCheckpoints,
+  fetchAgentInstructions,
+  fetchAgentRunRequest,
+  fetchBridgeHelperPresence,
+  requestAgentRun,
+  reorderAgentCheckpoints,
+  updateAgentCheckpoint,
   approveAllInRun,
-  createAgentCredential,
-  fetchAgentCredentials,
-  revokeAgentCredential,
-  cancelRepairJob,
-  decideRepairReview,
-  fetchRepairReviews,
   type CreateEnvironmentBody,
   createEnvironment,
   createFolder,
@@ -30,7 +35,6 @@ import {
   deleteSuite,
   deleteTest,
   discardDraft,
-  enqueueRepairJob,
   fetchAuthoringInstructions,
   fetchAuthoringSessions,
   fetchImageComparisonSettings,
@@ -48,10 +52,6 @@ import {
   fetchTestConfig,
   fetchEnvironments,
   fetchFolders,
-  fetchNeedsReview,
-  fetchRepairBreaker,
-  fetchRepairBreakerSettings,
-  fetchRepairJobs,
   fetchRuns,
   fetchRunView,
   fetchSuite,
@@ -69,7 +69,6 @@ import {
   renameFolder,
   runTest,
   saveTestConfig,
-  setRepairPolicy,
   rerunSuiteRun,
   triggerSuiteRun,
   updateSuite,
@@ -79,8 +78,6 @@ import {
   updateRunNotes,
   updateTest,
   verifyLocator,
-  releaseRepairBreaker,
-  saveRepairBreakerSettings,
 } from "./api";
 
 /** TanStack Query owns the run read-model; the key is reused for invalidation
@@ -102,12 +99,6 @@ export function useDashboard() {
     queryFn: fetchDashboard,
     refetchInterval: 5000,
   });
-}
-
-/** Key for the needs-review list (Issue 4); invalidated after a decision so a
- *  resolved checkpoint leaves the list. */
-export function needsReviewQueryKey() {
-  return ["needs-review"] as const;
 }
 
 /** Key for the Runs history; invalidated when a run is triggered so it appears. */
@@ -147,15 +138,13 @@ export function useUpdateRunNotes(runId: string) {
   });
 }
 
-/** Delete a single run (irreversible). Refreshes the history, the needs-review queue
- *  (a deleted run's checkpoints leave it), and the dashboard. */
+/** Delete a single run (irreversible). Refreshes the history and the dashboard. */
 export function useDeleteRun() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (runId: string) => deleteRun(runId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: runsQueryKey() });
-      qc.invalidateQueries({ queryKey: needsReviewQueryKey() });
       qc.invalidateQueries({ queryKey: dashboardQueryKey() });
     },
   });
@@ -163,15 +152,6 @@ export function useDeleteRun() {
 
 export function testsQueryKey() {
   return ["tests"] as const;
-}
-
-export function useNeedsReview() {
-  return useQuery({
-    queryKey: needsReviewQueryKey(),
-    queryFn: fetchNeedsReview,
-    // Poll so a run that finishes (worker is async) shows up without a manual refresh.
-    refetchInterval: 3000,
-  });
 }
 
 export function useTests(opts?: { enabled?: boolean }) {
@@ -309,47 +289,23 @@ export function useSendSlackTest() {
   return useMutation({ mutationFn: () => sendSlackTest() });
 }
 
-export function agentCredentialsQueryKey() {
-  return ["settings", "agent-credentials"] as const;
-}
-
-/** The provisioned Repair Agent credentials (ADR-0005) — label, expiry, last use, status. */
-export function useAgentCredentials() {
-  return useQuery({
-    queryKey: agentCredentialsQueryKey(),
-    queryFn: fetchAgentCredentials,
-  });
-}
-
-/** Provision one. The token comes back exactly once — the caller must show it immediately. */
-export function useCreateAgentCredential() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (body: CreateAgentCredentialRequest) => createAgentCredential(body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: agentCredentialsQueryKey() }),
-  });
-}
-
-/** Revoke one — effective on the credential's very next `/mcp` request. */
-export function useRevokeAgentCredential() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => revokeAgentCredential(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: agentCredentialsQueryKey() }),
-  });
-}
-
 export function draftQueryKey(id: string) {
   return ["draft", id] as const;
 }
 
 /** One draft's detail (per-checkpoint authoring previews) — fetched when its promote
- *  dialog opens. */
-export function useDraft(id: string, opts?: { enabled?: boolean }) {
+ *  dialog opens.
+ *
+ *  `pollMs` is for watching an Agent-Driven Draft being WRITTEN. That kind has no session and no
+ *  event stream — Varys hosts no browser for it, so there is nothing to stream — and the Draft
+ *  itself is the accumulator. Re-reading it on an interval is how its Checkpoints appear as
+ *  Claude adds them. Off by default: every other caller is looking at a finished draft. */
+export function useDraft(id: string, opts?: { enabled?: boolean; pollMs?: number }) {
   return useQuery({
     queryKey: draftQueryKey(id),
     queryFn: () => fetchDraft(id),
     enabled: opts?.enabled ?? true,
+    refetchInterval: opts?.pollMs ?? false,
   });
 }
 
@@ -405,9 +361,9 @@ export function useTestConfig(id: string, opts?: { enabled?: boolean }) {
   });
 }
 
-/** Save a config patch (new test version). On success, refresh this test's config (so
- *  the editor rebases on the new version) and the tests list (its needs-environment
- *  flag is derived from the latest definition). */
+/** Save a config patch. On success, refresh this test's config (so the editor rebases on the
+ *  definition as saved) and the tests list (its needs-environment flag is derived from that
+ *  definition). */
 export function useSaveTestConfig(id: string) {
   const qc = useQueryClient();
   return useMutation({
@@ -467,8 +423,12 @@ export function useSuite(id: string) {
 export function useCreateSuite() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { name: string; testIds?: string[]; folderIds?: string[] }) =>
-      createSuite(body),
+    mutationFn: (body: {
+      name: string;
+      testIds?: string[];
+      folderIds?: string[];
+      agentInstructions?: string | null;
+    }) => createSuite(body),
     onSuccess: () => qc.invalidateQueries({ queryKey: suitesQueryKey() }),
   });
 }
@@ -483,6 +443,7 @@ export function useUpdateSuite() {
         name?: string;
         testIds?: string[];
         folderIds?: string[];
+        agentInstructions?: string | null;
         schedule?: TestScheduleInput | null;
       };
     }) => updateSuite(vars.id, vars.body),
@@ -541,7 +502,6 @@ export function useTriggerSuiteRun() {
       triggerSuiteRun(vars.suiteId, vars.environmentIds, vars.trace),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: suiteRunsQueryKey() });
-      qc.invalidateQueries({ queryKey: needsReviewQueryKey() });
     },
   });
 }
@@ -554,7 +514,6 @@ export function useRerunSuiteRun() {
     mutationFn: (suiteRunId: string) => rerunSuiteRun(suiteRunId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: suiteRunsQueryKey() });
-      qc.invalidateQueries({ queryKey: needsReviewQueryKey() });
     },
   });
 }
@@ -569,8 +528,184 @@ export function useDeleteSuiteRun() {
       qc.invalidateQueries({ queryKey: suiteRunsQueryKey() });
       qc.invalidateQueries({ queryKey: suiteRunQueryKey(suiteRunId) });
       qc.invalidateQueries({ queryKey: runsQueryKey() });
-      qc.invalidateQueries({ queryKey: needsReviewQueryKey() });
     },
+  });
+}
+
+/* ---- Agent-Driven Tests ------------------------------------------------------------- */
+
+/** The ordered Checkpoint Manifest's cache key. */
+export function agentCheckpointsQueryKey(testId: string) {
+  return ["agent-checkpoints", testId] as const;
+}
+
+/** The composed AI Instructions' cache key — per test and per environment, because the
+ *  environment is named in the composed text. */
+export function agentInstructionsQueryKey(testId: string, environmentId: string | null) {
+  return ["agent-instructions", testId, environmentId ?? "default"] as const;
+}
+
+/**
+ * The three layers of AI Instructions, composed as the next session would receive them.
+ *
+ * Fetched on demand rather than with the editor: composing is what the author asks for when they
+ * want to check, and it is the whole document, not a field.
+ */
+export function useAgentInstructions(
+  testId: string,
+  environmentId: string | null,
+  opts?: { enabled?: boolean },
+) {
+  return useQuery({
+    queryKey: agentInstructionsQueryKey(testId, environmentId),
+    queryFn: () => fetchAgentInstructions(testId, environmentId ?? undefined),
+    enabled: opts?.enabled ?? true,
+  });
+}
+
+/** Whether a Bridge Helper is listening for this user's commands. */
+export function bridgeHelperQueryKey() {
+  return ["bridge-helper"] as const;
+}
+
+/**
+ * Whether this user has a Bridge Helper paired right now — what the Run control on an
+ * Agent-Driven Test is live or disabled by.
+ *
+ * Polled rather than streamed: the helper is a process on somebody's laptop that comes and goes,
+ * and a Run button that stays dead until a reload is the failure this exists to avoid. Fetched
+ * only where it is asked for, since most of the app has no use for it.
+ */
+export function useBridgeHelper(opts?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: bridgeHelperQueryKey(),
+    queryFn: () => fetchBridgeHelperPresence(),
+    enabled: opts?.enabled ?? true,
+    refetchInterval: 5000,
+  });
+}
+
+/**
+ * Start a bridge and get a one-time pairing code to read out to a Bridge Helper.
+ *
+ * A mutation rather than a query, because it MINTS something: each call creates a new chat and a
+ * new code, and the old code stops working. Fetching it on render would quietly invalidate the
+ * code the user is halfway through typing.
+ *
+ * The helper-presence query is invalidated on success so the "still waiting" state is answered by
+ * the server from the first poll rather than by a stale cache entry that predates the pairing.
+ */
+export function useCreateBridge() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => createBridge(),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: bridgeHelperQueryKey() });
+    },
+  });
+}
+
+/** What became of a run request for one test. */
+export function agentRunRequestQueryKey(testId: string) {
+  return ["agent-run-request", testId] as const;
+}
+
+/**
+ * The life of a run request on this test — outstanding, acknowledged, fulfilled or lapsed.
+ *
+ * Polled, and deliberately polled by every tab rather than remembered by the one that pressed:
+ * the request lives on the relay, so a second tab sees it outstanding and offers no second press.
+ * Fast while something is in flight, slow otherwise — the point of the fast poll is to catch the
+ * Run appearing, and there is nothing to catch once it has.
+ */
+export function useAgentRunRequest(testId: string, opts?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: agentRunRequestQueryKey(testId),
+    queryFn: () => fetchAgentRunRequest(testId),
+    enabled: (opts?.enabled ?? true) && testId.length > 0,
+    refetchInterval: (query) => {
+      const phase = query.state.data?.phase;
+      return phase === "outstanding" || phase === "acknowledged" ? 1500 : 8000;
+    },
+  });
+}
+
+/**
+ * Ask your own Claude to run an Agent-Driven Test.
+ *
+ * No run list is invalidated on success, and that is not an omission: pressing Run creates no Run,
+ * no reservation and no row. The run appears in the list when Claude calls `start_agent_run`,
+ * which the runs list is already polling for.
+ *
+ * The request's own state IS seeded from the response, so the wait is legible from the instant of
+ * the press rather than from whenever the next poll happens to land.
+ */
+export function useRequestAgentRun() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { testId: string; environmentId?: string }) =>
+      requestAgentRun(vars.testId, vars.environmentId),
+    onSuccess: (result, vars) => {
+      qc.setQueryData(agentRunRequestQueryKey(vars.testId), result.request);
+    },
+  });
+}
+
+/** The ordered Checkpoint Manifest of an Agent-Driven Test. */
+export function useAgentCheckpoints(testId: string, opts?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: agentCheckpointsQueryKey(testId),
+    queryFn: () => fetchAgentCheckpoints(testId),
+    enabled: opts?.enabled ?? true,
+  });
+}
+
+export function useCreateAgentTest() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CreateAgentTestRequest) => createAgentTest(body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: testsQueryKey() }),
+  });
+}
+
+export function useAddAgentCheckpoint(testId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: AgentCheckpointInput) => addAgentCheckpoint(testId, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: agentCheckpointsQueryKey(testId) }),
+  });
+}
+
+/** Edit one Checkpoint. A rename carries its baselines, so the test's config (which reads
+ *  baseline images per checkpoint name) is refreshed alongside the list. */
+export function useUpdateAgentCheckpoint(testId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { checkpointId: string; body: AgentCheckpointInput }) =>
+      updateAgentCheckpoint(testId, vars.checkpointId, vars.body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: agentCheckpointsQueryKey(testId) });
+      qc.invalidateQueries({ queryKey: testConfigQueryKey(testId) });
+    },
+  });
+}
+
+export function useDeleteAgentCheckpoint(testId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (checkpointId: string) => deleteAgentCheckpoint(testId, checkpointId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: agentCheckpointsQueryKey(testId) });
+      qc.invalidateQueries({ queryKey: testConfigQueryKey(testId) });
+    },
+  });
+}
+
+export function useReorderAgentCheckpoints(testId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (ids: string[]) => reorderAgentCheckpoints(testId, ids),
+    onSuccess: () => qc.invalidateQueries({ queryKey: agentCheckpointsQueryKey(testId) }),
   });
 }
 
@@ -602,7 +737,6 @@ export function useDeleteTest() {
       qc.invalidateQueries({ queryKey: foldersQueryKey() });
       qc.invalidateQueries({ queryKey: tagsQueryKey() });
       qc.invalidateQueries({ queryKey: runsQueryKey() });
-      qc.invalidateQueries({ queryKey: needsReviewQueryKey() });
       qc.invalidateQueries({ queryKey: dashboardQueryKey() });
     },
   });
@@ -692,28 +826,26 @@ export function useDeleteEnvironment() {
 }
 
 /** Trigger a run of a saved test (optionally against an environment), then refresh
- *  the needs-review queue. */
+ *  the Runs history so the new run appears. */
 export function useRunTest() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (vars: { testId: string; environmentId?: string; trace?: boolean }) =>
       runTest(vars.testId, vars.environmentId, vars.trace),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: needsReviewQueryKey() });
       qc.invalidateQueries({ queryKey: runsQueryKey() });
     },
   });
 }
 
-/** Bulk-approve every needs-review checkpoint in a run. Invalidates the run and
- *  the needs-review list so the resolved checkpoints reflect their new state. */
+/** Bulk-approve every checkpoint in a run that awaits a decision. Invalidates the run
+ *  so the resolved checkpoints reflect their new state. */
 export function useApproveAll(runId: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () => approveAllInRun(runId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: runQueryKey(runId) });
-      qc.invalidateQueries({ queryKey: needsReviewQueryKey() });
     },
   });
 }
@@ -726,22 +858,20 @@ export function useReEvaluate(runId: string, checkpointName: string) {
   });
 }
 
-/** Persist masks/threshold for a checkpoint. On success the run + needs-review
- *  list are invalidated so a now-passing checkpoint leaves the queue. */
+/** Persist masks/threshold for a checkpoint. On success the run is invalidated so a
+ *  now-passing checkpoint shows its new state. */
 export function usePersistMasks(runId: string, checkpointName: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: TuningInput) => persistCheckpointMasks(runId, checkpointName, input),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: runQueryKey(runId) });
-      qc.invalidateQueries({ queryKey: needsReviewQueryKey() });
     },
   });
 }
 
-/** Approve/reject a checkpoint. On success the run (and the needs-review list)
- *  are invalidated so the checkpoint reflects its new state and can't be acted
- *  on twice from the same view. */
+/** Approve/reject a checkpoint. On success the run is invalidated so the checkpoint
+ *  reflects its new state and can't be acted on twice from the same view. */
 export function useDecision(runId: string) {
   const qc = useQueryClient();
   return useMutation({
@@ -749,131 +879,6 @@ export function useDecision(runId: string) {
       postDecision(runId, vars.name, vars.action),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: runQueryKey(runId) });
-      qc.invalidateQueries({ queryKey: needsReviewQueryKey() });
-    },
-  });
-}
-
-/** Key for the repair queue; invalidated whenever a job is enqueued or cancelled. */
-export function repairJobsQueryKey(all: boolean) {
-  return ["repair-jobs", all ? "all" : "open"] as const;
-}
-
-/** The repair queue. Polled, because the interesting change is one a DRAINER makes elsewhere:
- *  a job going from unclaimed to claimed is exactly what this view exists to show. */
-export function useRepairJobs(opts?: { all?: boolean }) {
-  const all = opts?.all ?? false;
-  return useQuery({
-    queryKey: repairJobsQueryKey(all),
-    queryFn: () => fetchRepairJobs({ all }),
-    refetchInterval: 5000,
-  });
-}
-
-/**
- * Repaired versions awaiting review. Polled alongside the queue, because the change that matters
- * here is also one a DRAINER makes elsewhere: a job going `done` means a version just landed for
- * someone to decide on.
- */
-export function useRepairReviews() {
-  return useQuery({
-    queryKey: ["repair-reviews"],
-    queryFn: fetchRepairReviews,
-    refetchInterval: 5000,
-  });
-}
-
-/** Accept or reject a repaired version. Invalidates the tests/test-config caches too: an accept
- *  confirms the active definition and a reject rewrites it, and both show on test detail. */
-export function useDecideRepairReview() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (vars: { versionId: string; action: "accept" | "reject" }) =>
-      decideRepairReview(vars.versionId, vars.action),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["repair-reviews"] });
-      qc.invalidateQueries({ queryKey: ["repair-jobs"] });
-      qc.invalidateQueries({ queryKey: ["test-config"] });
-    },
-  });
-}
-
-/** Enqueue a repair by hand from a failed run (a test whose policy is `manual`). */
-export function useEnqueueRepairJob() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (runId: string) => enqueueRepairJob(runId),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["repair-jobs"] });
-    },
-  });
-}
-
-/** Cancel a queued repair job. */
-/**
- * The circuit breaker. Polled with the queue, because "no new jobs" is exactly the symptom this
- * answers — a queue that has gone quiet is either drained or suppressed, and those look identical
- * until you can see the breaker.
- */
-export function useRepairBreaker() {
-  return useQuery({
-    queryKey: ["repair-breaker"],
-    queryFn: fetchRepairBreaker,
-    refetchInterval: 5000,
-  });
-}
-
-/** Release the suppressed failures into the queue (the human override). */
-export function useReleaseRepairBreaker() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: () => releaseRepairBreaker(),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["repair-breaker"] });
-      qc.invalidateQueries({ queryKey: ["repair-jobs"] });
-    },
-  });
-}
-
-/** The circuit-breaker threshold, on the Configurations page. */
-export function useRepairBreakerSettings() {
-  return useQuery({
-    queryKey: ["repair-breaker-settings"],
-    queryFn: fetchRepairBreakerSettings,
-  });
-}
-
-export function useSaveRepairBreakerSettings() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (threshold: number) => saveRepairBreakerSettings(threshold),
-    onSuccess: (data) => {
-      qc.setQueryData(["repair-breaker-settings"], data);
-      // The queue's breaker card reads the same threshold — a raise must show there immediately.
-      qc.invalidateQueries({ queryKey: ["repair-breaker"] });
-    },
-  });
-}
-
-export function useCancelRepairJob() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => cancelRepairJob(id),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["repair-jobs"] });
-    },
-  });
-}
-
-/** Set a Repair Policy in bulk (a folder or a tag). Refreshes the tests list and every open
- *  test-config view, since the policy shows on test detail too. */
-export function useSetRepairPolicy() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (body: SetRepairPolicyRequest) => setRepairPolicy(body),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: testsQueryKey() });
-      qc.invalidateQueries({ queryKey: ["test-config"] });
     },
   });
 }

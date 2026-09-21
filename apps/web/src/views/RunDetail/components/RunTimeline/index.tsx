@@ -1,5 +1,6 @@
 import type { CheckpointView, RunView, StepRun } from "@varys/review-contract";
 import {
+  AlertTriangle,
   ArrowDownRight,
   Check,
   ChevronDown,
@@ -131,8 +132,15 @@ export function defaultSelectedIndex(run: RunView, rows: TimelineRow[]): number 
  * ------------------------------------------------------------------ */
 
 /** The state badge a checkpoint row carries (resolution overrides review state). Test-runner
- *  model: a diff or a not-yet-set baseline reads red, since both fail the run until set. */
+ *  model: a diff or a not-yet-set baseline reads red, since both fail the run until set.
+ *
+ *  `missing` is checked FIRST — ahead of `resolution`, not merely ahead of the trailing "Passed"
+ *  fallthrough. Both halves matter: a slot the run never filled must never render as a green tick
+ *  by matching none of the later branches, and it must not render as "Baseline set" either if a
+ *  resolution somehow reached it. This is the same order `deriveRunOutcome` and `DecisionBar` use,
+ *  and the three must agree or the badge will contradict the run's outcome. */
 export function checkpointBadge(cp: CheckpointView): { label: string; tone: BadgeTone; Icon: IconType } {
+  if (cp.reviewState === "missing") return { label: "Unreached", tone: "danger", Icon: AlertTriangle };
   if (cp.resolution === "approved") return { label: "Baseline set", tone: "success", Icon: Check };
   if (cp.resolution === "rejected") return { label: "Rejected", tone: "danger", Icon: X };
   if (cp.reviewState === "pending-baseline") return { label: "Pending baseline", tone: "warning", Icon: Layers };

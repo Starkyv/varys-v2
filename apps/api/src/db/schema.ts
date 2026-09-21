@@ -1,15 +1,18 @@
 // Re-export the shared schema so existing intra-app imports keep working.
 export {
-  agentCredentials,
+  agentCheckpoints,
   appSettings,
   baselines,
+  currentDefinition,
+  currentDefinitionOf,
   DDL,
   draftPreviews,
   environments,
   folders,
-  repairJobs,
-  repairJobTests,
+  replayedDefinition,
+  replayedTestId,
   runAssertions,
+  runEvidence,
   runNetwork,
   runResults,
   runs,
@@ -17,11 +20,9 @@ export {
   schema,
   suiteRuns,
   suites,
-  suppressedFailures,
   suiteTests,
   tests,
   testSchedules,
   testTags,
-  testVersions,
 } from "@varys/db";
-export type { Db, DbHandle, RepairJobKind, RepairJobStatus, RunStatus } from "@varys/db";
+export type { Db, DbHandle, RunStatus } from "@varys/db";

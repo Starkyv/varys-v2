@@ -97,7 +97,10 @@ export function PromoteDialog({
                     <div className={styles.previewMissing}>no preview</div>
                   )}
                   <figcaption title={c.name}>
-                    {c.name} <span className={styles.previewMode}>· {c.captureMode}</span>
+                    {c.name}
+                    {/* An Agent-Driven capture has no mode — Varys neither took the picture nor
+                        chose how to frame it, so there is nothing honest to print here. */}
+                    {c.captureMode && <span className={styles.previewMode}>· {c.captureMode}</span>}
                   </figcaption>
                 </figure>
               ))}

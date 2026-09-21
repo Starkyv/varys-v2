@@ -6,12 +6,13 @@ import {
   baselines,
   type Db,
   environments,
+  replayedDefinition,
+  replayedTestId,
   runAssertions,
   runNetwork,
   runResults,
   runs,
   runSteps,
-  testVersions,
 } from "@varys/db";
 import {
   type AssertionResult,
@@ -51,7 +52,6 @@ import {
   type Locator,
   type Page,
 } from "playwright";
-import { classifyThrownFailure } from "@varys/repair-policy";
 import { captureFullElement, captureFullPage, captureRegion } from "./capture";
 import { collectNetwork, type NetworkCollector } from "./network";
 import { trackInFlightRequests, waitForStreamIdle } from "./stream-idle";
@@ -79,28 +79,17 @@ export {
 // Authoring Session can verify a pin against the page it was authored against using the SAME
 // reader replay uses. A second extractor would verify something subtly different from what runs.
 export { extractSide, evaluateAssertions } from "./assertions";
-import {
-  enqueueRepairIfAuto,
-  enqueueTriageIfAuto,
-  JudgeUnavailableError,
-  LocatorUnresolvedError,
-} from "./repair-jobs";
+import { classifyThrownFailure, JudgeUnavailableError, LocatorUnresolvedError } from "./failures";
 
-// The repair-queue seam: the typed locator failure the runner throws, and the policy-gated
-// enqueue it triggers. Re-exported so the API and its tests can use both without reaching
-// into the runner's internals.
+// The typed replay failures, and the classifier that turns one into `runs.failure_kind`.
+// Re-exported so the API and its tests read a run's failure class in the same vocabulary the
+// worker writes it with.
 export {
-  BREAKER_THRESHOLD_KEY,
-  BREAKER_WINDOW_MS,
-  breakerThreshold,
-  enqueueRepairIfAuto,
-  enqueueTriageIfAuto,
-  type EnqueueOutcome,
-  joinCluster,
+  classifyThrownFailure,
   JudgeUnavailableError,
   LocatorUnresolvedError,
-  recentLocatorFailures,
-} from "./repair-jobs";
+  type ThrownFailureKind,
+} from "./failures";
 
 // Network capture (the API-status record on every run). Re-exported so the API and its tests can
 // read the same vocabulary the worker writes with.
@@ -563,13 +552,12 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
 
   const [row] = await db
     .select({
-      testId: testVersions.testId,
-      definition: testVersions.definition,
+      testId: replayedTestId,
+      definition: replayedDefinition,
       environmentId: runs.environmentId,
       trace: runs.trace,
     })
     .from(runs)
-    .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
     .where(eq(runs.id, runId))
     .limit(1);
   // Deleted in the tiny window since the check above — nothing left to replay, stop cleanly.
@@ -955,10 +943,10 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
     const assertionFailure = anyAssertionFailed(assertionResults)
       ? (summarizeAssertionFailures(assertionResults) ?? "an assertion failed")
       : null;
-    // …and WHICH of the two decides what the failure earns from the queue (slice 10). An assertion
-    // whose target no longer resolves is a locator failure and is repairable; one whose relation is
-    // false is evidence about the app and never is. The verdict is the pure engine's, so the rule
-    // lives in one unit-tested place rather than in this branch.
+    // …and WHICH of the two the run REPORTS (slice 10). An assertion whose target no longer
+    // resolves is a locator failure; one whose relation is false is evidence about the app. The
+    // verdict is the pure engine's, so the rule lives in one unit-tested place rather than in this
+    // branch.
     const assertionVerdict = assertionFailureVerdict(assertionResults);
     // …and the verdict's third bucket is the one that is NEITHER (slice 11): the judge was
     // unreachable, so nothing was checked and the run claims nothing about those checks — not a
@@ -968,7 +956,7 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
     const assertionUnchecked = assertionVerdict.unavailable.length > 0;
     // The fingerprint a repair would re-pin, or undefined. Present only when the verdict says
     // repair AND a target was actually recoverable: an assertion the definition no longer pins has
-    // nothing to re-pin, and a failure whose cluster key cannot be derived is not a job.
+    // nothing to re-pin. It is what separates a `locator` failure kind from an `assertion` one.
     const assertionRepairTargetFp =
       assertionVerdict.consequence === "repair"
         ? assertionVerdict.repairable
@@ -985,22 +973,23 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
         ? "needs_review"
         : "passed";
     // A red run that never THREW: a baseline existed and the capture differs. Nothing a re-pinned
-    // locator could address, so it is classified and handed to a read-only Triage Job (slice 08)
-    // rather than left unexplained. `pending-baseline` is deliberately not red — a first capture
-    // awaiting approval is not a failure — so only a `diff` counts.
+    // locator could address, so it is classified as what it is rather than left unexplained.
+    // `pending-baseline` is deliberately not red — a first capture awaiting approval is not a
+    // failure — so only a `diff` counts.
     const failedCheckpoint = failingCheckpoints[0] ?? null;
     await db
       .update(runs)
       .set({
         status,
         // `assertion` first, for the same precedence reason as the status above. Recorded rather
-        // than inferred: it is what decides whether a repair may touch this failure at all.
+        // than inferred, so whoever opens the red run is told what class of thing broke before
+        // they decide whether to open a Repair Session.
         //
         // An assertion whose extraction target no longer resolves is written as `locator`, not
         // `assertion` (slice 10) — because that is what it IS, and `failure_kind` is the one column
-        // the repair path, the manual-enqueue endpoint and the breaker census all read. Calling it
-        // `assertion` here would mean three places re-deriving the distinction from the assertion
-        // rows, which is exactly how two of them end up disagreeing.
+        // every reader of the failure consults. Calling it `assertion` here would mean each of them
+        // re-deriving the distinction from the assertion rows, which is how two of them end up
+        // disagreeing.
         failureKind: assertionFailure
           ? assertionRepairTargetFp
             ? "locator"
@@ -1012,37 +1001,6 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
         updatedAt: new Date(),
       })
       .where(eq(runs.id, runId));
-    if (assertionFailure) {
-      // The point of the slice: which job an assertion failure earns is decided by whether a value
-      // could be READ, never by how the values compared.
-      //
-      //  - the target no longer resolves → a REPAIR job, exactly like a broken step locator. The
-      //    same enqueue path, so the same policy gate, the same clustering and the same circuit
-      //    breaker apply with no second implementation of any of them.
-      //  - the relation is false (or a value was unusable) → a read-only TRIAGE job, and the run
-      //    stays red. Never a repair, under any policy: re-pinning until the numbers agree is a
-      //    machine for hiding the exact bugs assertions exist to catch.
-      //
-      // Best-effort, exactly as the others are: losing the job must never cost us the run.
-      try {
-        if (assertionRepairTargetFp) {
-          await enqueueRepairIfAuto(db, { testId, runId, target: assertionRepairTargetFp });
-        } else {
-          await enqueueTriageIfAuto(db, { testId, runId, kind: "assertion" });
-        }
-      } catch (jobErr) {
-        // eslint-disable-next-line no-console
-        console.error(`[runner] could not enqueue a job for run ${runId}:`, jobErr);
-      }
-    } else if (failedCheckpoint) {
-      // Best-effort, exactly as the repair enqueue is: losing the job must never cost us the run.
-      try {
-        await enqueueTriageIfAuto(db, { testId, runId, kind: failedCheckpoint.kind });
-      } catch (triageErr) {
-        // eslint-disable-next-line no-console
-        console.error(`[runner] could not enqueue a triage job for run ${runId}:`, triageErr);
-      }
-    }
   } catch (err) {
     // Cancelled (or its test deleted) mid-run: not a failure. Best-effort mark it `cancelled`
     // if the row still exists (a delete already removed it → the update no-ops), and stop —
@@ -1077,21 +1035,21 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
     // re-running the whole replay and (pre-idempotency) duplicating run_steps/run_results.
     // Only an inability to record the verdict (e.g. the DB is unreachable) propagates, so
     // the job can legitimately retry.
-    // Only an unresolvable locator is repairable (Slice 19). Recorded on the run rather than
-    // re-derived from the message later, so "may a repair touch this?" is answered once, here,
-    // by the code that knows what threw.
+    // An unresolvable locator is its own failure class. Recorded on the run rather than
+    // re-derived from the message later, so "what kind of break was this?" is answered once,
+    // here, by the code that knows what threw.
     const locatorFailure = err instanceof LocatorUnresolvedError ? err : null;
     // Everything that is NOT a locator failure is still classified (slice 08) — a crash and a
-    // timeout are different things to a human reading the queue, and each earns an explanation
-    // even though neither may be repaired. `locator` stays decided by TYPE, never inferred.
-    const triageKind = locatorFailure ? null : classifyThrownFailure(err);
+    // timeout are different things to whoever reads the red run, and each is worth saying.
+    // `locator` stays decided by TYPE, never inferred.
+    const thrownKind = locatorFailure ? null : classifyThrownFailure(err);
     try {
       await db
         .update(runs)
         .set({
           status: "failed",
           error: message,
-          failureKind: locatorFailure ? "locator" : triageKind,
+          failureKind: locatorFailure ? "locator" : thrownKind,
           failedStepIndex,
           updatedAt: new Date(),
         })
@@ -1100,26 +1058,6 @@ export async function processRun(deps: ReplayDeps, runId: string): Promise<void>
       // eslint-disable-next-line no-console
       console.error(`[runner] could not finalize run ${runId} as failed:`, finalizeErr);
       throw finalizeErr;
-    }
-    // Enqueue the repair AFTER the run is durably failed — the queue is a consequence of the
-    // verdict, never a precondition for recording it. Best-effort: a test whose policy is
-    // `auto` but whose job could not be written stays red and repairable by hand, which is the
-    // pre-queue behaviour. Losing the job must never cost us the failure record.
-    if (locatorFailure) {
-      try {
-        await enqueueRepairIfAuto(db, { testId, runId, target: locatorFailure.target });
-      } catch (enqueueErr) {
-        // eslint-disable-next-line no-console
-        console.error(`[runner] could not enqueue a repair job for run ${runId}:`, enqueueErr);
-      }
-    } else if (triageKind) {
-      // A crash or a timeout: nothing to repair, but every red run gains an explanation (slice 08).
-      try {
-        await enqueueTriageIfAuto(db, { testId, runId, kind: triageKind });
-      } catch (triageErr) {
-        // eslint-disable-next-line no-console
-        console.error(`[runner] could not enqueue a triage job for run ${runId}:`, triageErr);
-      }
     }
   } finally {
     // Persist the per-step timeline (every run except a cancelled one, whose run row is gone).

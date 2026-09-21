@@ -7,13 +7,16 @@ import {
 } from "@nestjs/common";
 import {
   baselines,
+  currentDefinitionOf,
   environments,
+  replayedDefinition,
+  replayedTestId,
   runAssertions,
+  runEvidence,
   runNetwork,
   runResults,
   runs,
   runSteps,
-  testVersions,
   tests,
 } from "@varys/db";
 import { diffPng } from "@varys/diff-engine";
@@ -26,20 +29,28 @@ import type {
   CompareMode,
   CheckpointView,
   FingerprintSummary,
-  NeedsReviewItem,
   PersistResult,
   ReEvaluation,
   Rect,
   Resolution,
   ReviewState,
+  RunEvidenceView,
   RunNetworkEvent,
   RunSummary,
   RunView,
   StepLabel,
   StepRun,
+  TestKind,
   TuningInput,
 } from "@varys/review-contract";
-import { deriveRunOutcome, isRepairInReview, type RunFailureKind } from "@varys/review-contract";
+import {
+  deriveAgentSessionState,
+  deriveRunOutcome,
+  deriveUnreachedRootCause,
+  rollupRunStatus,
+  type AgentSessionView,
+  type RunFailureKind,
+} from "@varys/review-contract";
 import { describeStep, type TestDefinition } from "@varys/step-schema";
 import type { StorageAdapter } from "@varys/storage-adapter";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
@@ -52,7 +63,14 @@ import { STORAGE } from "../storage/storage.module";
 
 const ENVIRONMENT = "default";
 
-function viewportKey(vp: TestDefinition["viewport"]): string {
+/**
+ * The `baselines.viewport_key` a definition's viewport produces.
+ *
+ * Exported because an Agent Run Session has to look baselines up under exactly the key this
+ * service's `approve` writes them under. Two spellings of the same rule is how a golden becomes
+ * unfindable by the only path that wants it.
+ */
+export function viewportKeyOf(vp: TestDefinition["viewport"]): string {
   return `${vp.width}x${vp.height}@${vp.deviceScaleFactor}`;
 }
 
@@ -95,23 +113,36 @@ export class RunsService {
       trace?: boolean;
       /** Who triggered this run (email / sentinel) and how it was triggered. */
       triggeredBy?: string;
-      /** `repair` is slice 06's re-run: queued by Varys itself the moment a repair passed the
-       *  justification gate, so it is neither a human's "manual" nor a cron's "schedule". */
-      triggerSource?: "manual" | "suite" | "schedule" | "api" | "repair";
+      triggerSource?: "manual" | "suite" | "schedule" | "api";
     } = {},
   ): Promise<CreatedRun> {
-    const [version] = await this.db
-      .select({ id: testVersions.id })
-      .from(testVersions)
-      .where(eq(testVersions.testId, testId))
-      .orderBy(desc(testVersions.version))
+    // An Agent-Driven Test is never executed by the worker: it has no steps, and its definition
+    // is a zero-step placeholder that exists only so the shape is structurally valid. Replaying
+    // it would produce a run that captured nothing and compared nothing — which `deriveRunOutcome`
+    // has no checkpoints to redden, so it would read as a PASS. Refused here rather than at each
+    // entry point, because this is the single door the ad-hoc route and the suite fan-out share.
+    const [kindRow] = await this.db
+      .select({ kind: tests.kind })
+      .from(tests)
+      .where(eq(tests.id, testId))
       .limit(1);
-    if (!version) throw new NotFoundException(`Test ${testId} not found`);
+    if (kindRow?.kind === "agent") {
+      throw new BadRequestException(
+        "An Agent-Driven Test is run by your own local Claude, not by Varys — there are no steps for the worker to replay.",
+      );
+    }
+
+    // What this run is about to replay comes off the test.
+    const definition = await currentDefinitionOf(this.db, testId);
+    if (!definition) throw new NotFoundException(`Test ${testId} not found`);
 
     const [run] = await this.db
       .insert(runs)
       .values({
-        testVersionId: version.id,
+        // The Run's own write-once copy of what it is about to replay, and its direct link to the
+        // test (ADR 0008). The copy is what keeps this run legible after the test is edited.
+        testId,
+        definition,
         environmentId: opts.environmentId ?? null,
         suiteRunId: opts.suiteRunId ?? null,
         trace: opts.trace ?? false,
@@ -169,10 +200,9 @@ export class RunsService {
       })
       .from(runAssertions)
       .innerJoin(runs, eq(runs.id, runAssertions.runId))
-      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
       .where(
         and(
-          eq(testVersions.testId, testId),
+          eq(replayedTestId, testId),
           inArray(
             runAssertions.assertionId,
             rows.map((r) => r.assertionId),
@@ -223,30 +253,28 @@ export class RunsService {
         triggerSource: runs.triggerSource,
         notes: runs.notes,
         failureKind: runs.failureKind,
-        triageFinding: runs.triageFinding,
-        triageBy: runs.triageBy,
-        triageAt: runs.triageAt,
-        testId: testVersions.testId,
+        agentSummary: runs.agentSummary,
+        agentInstructions: runs.agentInstructions,
+        agentLeaseSeconds: runs.agentLeaseSeconds,
+        agentLeaseExpiresAt: runs.agentLeaseExpiresAt,
+        testId: replayedTestId,
         testName: tests.name,
-        repairPolicy: tests.repairPolicy,
-        definition: testVersions.definition,
-        // The version this run REPLAYED — an unreviewed repair in it is what makes an otherwise
-        // green run `healed` (slice 06). Read from the run's own version, never the latest, or a
-        // later repair would retroactively recolour runs that never saw it.
-        versionRepairJobId: testVersions.repairJobId,
-        versionReviewState: testVersions.reviewState,
+        kind: tests.kind,
+        definition: replayedDefinition,
       })
       .from(runs)
-      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
-      .innerJoin(tests, eq(tests.id, testVersions.testId))
+      .innerJoin(tests, eq(tests.id, replayedTestId))
       .where(eq(runs.id, runId))
       .limit(1);
     if (!row) throw new NotFoundException(`Run ${runId} not found`);
 
-    // Capture mode lives on the screenshot step of the version that ran; map it by
+    const kind: TestKind = row.kind === "agent" ? "agent" : "pinned";
+    const isAgentRun = kind === "agent";
+
+    // Capture mode lives on the screenshot step of the definition THIS RUN replayed; map it by
     // checkpoint name (absent ⇒ element, for definitions recorded before capture modes).
     const captureModes = new Map<string, CaptureMode>();
-    // Compare mode likewise lives on the screenshot step of the version that ran (absent ⇒
+    // Compare mode likewise lives on the screenshot step of the definition that ran (absent ⇒
     // pixel, for definitions recorded before context compare).
     const compareModes = new Map<string, CompareMode>();
     for (const s of (row.definition as TestDefinition).steps) {
@@ -256,8 +284,8 @@ export class RunsService {
       }
     }
 
-    // Masks are the *current* ones a reviewer would edit — from the latest version,
-    // which after a persist holds the just-saved masks (the run's own version may be older).
+    // Masks are the *current* ones a reviewer would edit — off the TEST's definition, which
+    // after a persist holds the just-saved masks (the run's own copy may predate them).
     const masksByName = new Map<string, Rect[]>();
     const latestDef = await this.latestDefinition(row.testId);
     for (const s of latestDef.steps) {
@@ -284,6 +312,9 @@ export class RunsService {
         actualArtifactKey: runResults.actualArtifactKey,
         baselineArtifactKey: runResults.baselineArtifactKey,
         diffArtifactKey: runResults.diffArtifactKey,
+        captureTool: runResults.captureTool,
+        captureViewport: runResults.captureViewport,
+        captureDeviceScale: runResults.captureDeviceScale,
         createdAt: runResults.createdAt,
       })
       .from(runResults)
@@ -307,7 +338,7 @@ export class RunsService {
 
     // Baseline audit trail per checkpoint: who approved the current golden for this
     // (test, checkpoint, env, viewport) and when. Surfaces the real approver (Slice 10).
-    const vpKey = viewportKey((row.definition as TestDefinition).viewport);
+    const vpKey = viewportKeyOf((row.definition as TestDefinition).viewport);
     const baselineRows = await this.db
       .select({
         checkpointName: baselines.checkpointName,
@@ -404,12 +435,39 @@ export class RunsService {
       row.definition as TestDefinition,
     );
 
+    // Extra screenshots an agent attached during the session. Read for every run rather than
+    // gated on the kind: the table is empty for a pinned one, and a gate here would be a second
+    // place the two kinds have to agree about what an agent run is.
+    const evidenceRows = await this.db
+      .select({
+        id: runEvidence.id,
+        artifactKey: runEvidence.artifactKey,
+        note: runEvidence.note,
+        createdAt: runEvidence.createdAt,
+      })
+      .from(runEvidence)
+      .where(eq(runEvidence.runId, runId))
+      .orderBy(runEvidence.createdAt);
+    const evidence: RunEvidenceView[] = evidenceRows.map((e) => ({
+      id: e.id,
+      url: this.storage.getUrl(e.artifactKey),
+      note: e.note,
+      createdAt: e.createdAt.toISOString(),
+    }));
+
     const checkpoints: CheckpointView[] = dedupedResults.map(
       (r): CheckpointView => ({
         name: r.name,
         reviewState: r.reviewState as ReviewState,
         captureMode: captureModes.get(r.name) ?? "element",
-        compareMode: compareModes.get(r.name) ?? "pixel",
+        // An Agent-Driven Test's checkpoints are ALWAYS compared contextually — never pixel
+        // diffed, in any configuration (PRD, Out of Scope 9). The map above is built from the
+        // replayed definition's screenshot steps and this kind has none, so falling through to `pixel`
+        // default would dress a judged verdict up as a diff score, offer mask and threshold
+        // editors for a comparison that has neither, and read "Within threshold" off a `threshold`
+        // column that only exists because it is NOT NULL. Stated from the kind rather than
+        // inferred from the definition, because there is no definition to infer it from.
+        compareMode: isAgentRun ? "context" : (compareModes.get(r.name) ?? "pixel"),
         resolution: r.resolution as Resolution | null,
         resolvedBy: r.resolvedBy,
         resolvedAt: r.resolvedAt ? r.resolvedAt.toISOString() : null,
@@ -423,8 +481,22 @@ export class RunsService {
         diffUrl: url(r.diffArtifactKey),
         baselineApprovedBy: baselineByName.get(r.name)?.approvedBy ?? null,
         baselineApprovedAt: baselineByName.get(r.name)?.approvedAt?.toISOString() ?? null,
+        // Null rather than a row of nulls when the session volunteered nothing, so the view has
+        // one thing to test instead of three.
+        capture:
+          r.captureTool == null && r.captureViewport == null && r.captureDeviceScale == null
+            ? null
+            : {
+                tool: r.captureTool,
+                viewport: r.captureViewport,
+                deviceScale: r.captureDeviceScale,
+              },
       }),
     );
+
+    // Derived before the outcome, because the outcome depends on it: a session still inside its
+    // lease is not a run that has finished failing, however many slots are still empty.
+    const session = this.agentSessionOf(row);
 
     return {
       runId,
@@ -433,7 +505,7 @@ export class RunsService {
       outcome: deriveRunOutcome(checkpoints, {
         status: row.status,
         error: row.error,
-        repairApplied: isRepairInReview(row.versionRepairJobId, row.versionReviewState),
+        agentSession: session?.state ?? null,
       }),
       testId: row.testId,
       suiteRunId: row.suiteRunId,
@@ -454,34 +526,68 @@ export class RunsService {
       network,
       notes: row.notes ?? null,
       // Which class of failure this was (Slice 19), recorded by the runner rather than inferred.
-      // `locator` is still the only repairable one — the repair affordance keys on exactly that
-      // string, so widening the vocabulary (slice 08) cannot accidentally offer a repair for a
-      // crash. An unrecognised stored value degrades to null rather than through to the client.
+      // The run-detail repair affordance keys on exactly `locator`, so widening the vocabulary
+      // (slice 08) cannot accidentally offer a repair for a crash. An unrecognised stored value
+      // degrades to null rather than through to the client.
       failureKind: isRunFailureKind(row.failureKind) ? row.failureKind : null,
-      // The triage finding, shown beside the failure. An annotation: `outcome` above is derived
-      // without it, so a diagnosis can never read as a resolution.
-      triageFinding: row.triageFinding ?? null,
-      triageBy: row.triageBy ?? null,
-      triageAt: row.triageAt ? row.triageAt.toISOString() : null,
-      repairPolicy: row.repairPolicy === "auto" ? "auto" : "manual",
       checkpoints,
       // Each assertion separately, with its own history — never folded into the checkpoints, and
       // never collapsed to a single pass/fail: `extraction-failed` and `relation-false` say
       // different things about who is wrong.
       assertions,
+      kind,
+      // Both null for a pinned run — it has no agent, and there is nothing to say so about.
+      agentSummary: row.agentSummary ?? null,
+      agentInstructions: row.agentInstructions ?? null,
+      evidence,
+      // Read off `checkpoints`, which is ordered by `created_at` — stamped in Manifest order when
+      // the rows were seeded, so this is the journey's own sequence and not an arbitrary one.
+      // Computed here rather than in the client for the same reason `outcome` is: a summary of a
+      // failure that two surfaces could word differently is a summary nobody can quote.
+      unreached: deriveUnreachedRootCause(checkpoints),
+      // The Agent Run Session's bound and where it stands against it. Evaluated against the clock
+      // AT READ TIME, and nothing writes the answer down — an expired session needs no sweeper to
+      // be over, because the run has been `failed`/`unreached` since its rows were seeded. What
+      // this adds is the ability to SAY so: before the lease, a run with unfilled slots and no
+      // summary could equally have been an agent still walking it, and the view had to word itself
+      // around not knowing.
+      session,
     };
   }
 
-  /** The latest version's definition for a test (the source of "current" masks/threshold). */
+  /**
+   * The **Agent Run Session** behind a run row, or null for a pinned run (and for an agent run
+   * started before leases existed).
+   *
+   * Evaluated against the clock AT READ TIME — nothing writes the answer down, because an expired
+   * session needs no sweeper to be over: the run has been `failed`/`unreached` since its rows were
+   * seeded, and this only adds the ability to SAY which.
+   *
+   * Shared by the detail view and the list on purpose. That state decides whether a run is allowed
+   * to read `running`, so two surfaces deriving it separately would eventually disagree about the
+   * same run on the same screen.
+   */
+  private agentSessionOf(row: {
+    agentLeaseSeconds: number | null;
+    agentLeaseExpiresAt: Date | null;
+    agentSummary: string | null;
+  }): AgentSessionView | null {
+    if (!row.agentLeaseExpiresAt || row.agentLeaseSeconds == null) return null;
+    return {
+      leaseSeconds: row.agentLeaseSeconds,
+      leaseExpiresAt: row.agentLeaseExpiresAt.toISOString(),
+      state: deriveAgentSessionState(
+        { summaryWritten: row.agentSummary != null, leaseExpiresAt: row.agentLeaseExpiresAt },
+        Date.now(),
+      ),
+    };
+  }
+
+  /** The test's current definition (the source of "current" masks/threshold). */
   private async latestDefinition(testId: string): Promise<TestDefinition> {
-    const [row] = await this.db
-      .select({ definition: testVersions.definition })
-      .from(testVersions)
-      .where(eq(testVersions.testId, testId))
-      .orderBy(desc(testVersions.version))
-      .limit(1);
-    if (!row) throw new NotFoundException(`No versions for test ${testId}`);
-    return row.definition as TestDefinition;
+    const definition = await currentDefinitionOf(this.db, testId);
+    if (!definition) throw new NotFoundException(`Test ${testId} has no definition`);
+    return definition as TestDefinition;
   }
 
   /**
@@ -523,16 +629,19 @@ export class RunsService {
         createdAt: runs.createdAt,
         triggeredBy: runs.triggeredBy,
         triggerSource: runs.triggerSource,
-        testId: testVersions.testId,
+        // The Agent Run Session's bound. Read by the LIST as well as the detail view, because a
+        // session walking the journey right now and one that ended red an hour ago are otherwise
+        // the same row of `missing` slots, and the list has no other signal to tell them apart.
+        agentLeaseSeconds: runs.agentLeaseSeconds,
+        agentLeaseExpiresAt: runs.agentLeaseExpiresAt,
+        agentSummary: runs.agentSummary,
+        testId: replayedTestId,
         testName: tests.name,
-        versionRepairJobId: testVersions.repairJobId,
-        versionReviewState: testVersions.reviewState,
       })
       .from(runs)
-      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
-      .innerJoin(tests, eq(tests.id, testVersions.testId))
+      .innerJoin(tests, eq(tests.id, replayedTestId))
       .where(
-        testId ? and(isNull(runs.suiteRunId), eq(testVersions.testId, testId)) : isNull(runs.suiteRunId),
+        testId ? and(isNull(runs.suiteRunId), eq(replayedTestId, testId)) : isNull(runs.suiteRunId),
       )
       .orderBy(desc(runs.createdAt))
       .limit(limit);
@@ -570,8 +679,9 @@ export class RunsService {
       }
     }
 
-    return rows.map(
-      (r): RunSummary => ({
+    return rows.map((r): RunSummary => {
+      const session = this.agentSessionOf(r);
+      return {
         runId: r.runId,
         testId: r.testId,
         testName: r.testName,
@@ -580,14 +690,15 @@ export class RunsService {
         outcome: deriveRunOutcome(checkpointsByRun.get(r.runId) ?? [], {
           status: r.status,
           error: r.error,
-          repairApplied: isRepairInReview(r.versionRepairJobId, r.versionReviewState),
+          agentSession: session?.state ?? null,
         }),
         runTimestamp: r.createdAt.toISOString(),
         error: r.error,
         triggeredBy: r.triggeredBy,
         triggerSource: r.triggerSource,
-      }),
-    );
+        session,
+      };
+    });
   }
 
   /** Set (or clear) a run's free-form note. Empty/whitespace clears it (→ null). 404 if
@@ -635,6 +746,13 @@ export class RunsService {
     const keys = new Set<string>();
     if (run.trace) keys.add(run.trace);
     for (const r of results) for (const k of [r.actual, r.diff]) if (k) keys.add(k);
+    // Agent-attached evidence belongs to this run and nothing else — it keys no baseline by
+    // construction, so it is always the run's to purge.
+    const evidence = await this.db
+      .select({ key: runEvidence.artifactKey })
+      .from(runEvidence)
+      .where(eq(runEvidence.runId, runId));
+    for (const e of evidence) if (e.key) keys.add(e.key);
 
     // An approved checkpoint's `actual` becomes the live golden (approve reuses the key),
     // so never purge a blob the baselines table still references.
@@ -650,6 +768,7 @@ export class RunsService {
     // transaction.
     await this.db.transaction(async (tx) => {
       await tx.delete(runResults).where(eq(runResults.runId, runId));
+      await tx.delete(runEvidence).where(eq(runEvidence.runId, runId));
       await tx.delete(runAssertions).where(eq(runAssertions.runId, runId));
       await tx.delete(runSteps).where(eq(runSteps.runId, runId));
       await tx.delete(runNetwork).where(eq(runNetwork.runId, runId));
@@ -663,55 +782,6 @@ export class RunsService {
     return { ok: true };
   }
 
-  /** The flat "needs review" list: checkpoints awaiting a decision
-   *  (pending-baseline | diff, not yet resolved), newest run first. */
-  async needsReview(): Promise<NeedsReviewItem[]> {
-    const rows = await this.db
-      .select({
-        runId: runs.id,
-        testName: tests.name,
-        environmentId: runs.environmentId,
-        runTimestamp: runs.createdAt,
-        checkpointName: runResults.checkpointName,
-        reviewState: runResults.reviewState,
-      })
-      .from(runResults)
-      .innerJoin(runs, eq(runs.id, runResults.runId))
-      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
-      .innerJoin(tests, eq(tests.id, testVersions.testId))
-      .where(
-        and(
-          inArray(runResults.reviewState, ["pending-baseline", "diff"]),
-          isNull(runResults.resolution),
-        ),
-      )
-      .orderBy(desc(runs.createdAt));
-
-    // Resolve environment names in one batch ("default" when a run has no env).
-    const envIds = [
-      ...new Set(rows.map((r) => r.environmentId).filter((x): x is string => x != null)),
-    ];
-    const envNames = new Map<string, string>();
-    if (envIds.length) {
-      const envs = await this.db
-        .select({ id: environments.id, name: environments.name })
-        .from(environments)
-        .where(inArray(environments.id, envIds));
-      for (const e of envs) envNames.set(e.id, e.name);
-    }
-
-    return rows.map(
-      (r): NeedsReviewItem => ({
-        runId: r.runId,
-        testName: r.testName,
-        environment: r.environmentId ? (envNames.get(r.environmentId) ?? ENVIRONMENT) : ENVIRONMENT,
-        runTimestamp: r.runTimestamp.toISOString(),
-        checkpointName: r.checkpointName,
-        reviewState: r.reviewState as Exclude<ReviewState, "passed">,
-      }),
-    );
-  }
-
   /**
    * Re-derive a run's review status from its checkpoints after a decision
    * (approve / reject) or a mask-threshold re-judge. The worker stamps `runs.status`
@@ -723,7 +793,9 @@ export class RunsService {
    * reviewing the partial checkpoints a run captured before it failed must not flip it
    * to passed — and queued/running are owned by the worker. Per-checkpoint effective
    * status mirrors the UI: approved→passed, rejected→regression, else the stored
-   * reviewState; rollup is any-pending→needs_review, else any-rejected→failed, else passed.
+   * reviewState. The rollup itself is {@link rollupRunStatus} — shared with the agent-run path,
+   * which reaches the same column from the other direction (filling a Checkpoint Manifest slot
+   * rather than resolving a finished run), and must not be allowed to disagree with this one.
    */
   private async recomputeRunStatus(runId: string): Promise<void> {
     const [run] = await this.db
@@ -738,14 +810,12 @@ export class RunsService {
       .from(runResults)
       .where(eq(runResults.runId, runId));
 
-    let anyPending = false;
-    let anyRejected = false;
-    for (const r of results) {
-      if (r.resolution === "rejected") anyRejected = true;
-      else if (r.resolution === "approved") continue; // resolved → passed
-      else if (r.reviewState === "pending-baseline" || r.reviewState === "diff") anyPending = true;
-    }
-    const next = anyPending ? "needs_review" : anyRejected ? "failed" : "passed";
+    const next = rollupRunStatus(
+      results.map((r) => ({
+        reviewState: r.reviewState as ReviewState,
+        resolution: r.resolution as Resolution | null,
+      })),
+    );
     if (next === run.status) return;
     await this.db.update(runs).set({ status: next, updatedAt: new Date() }).where(eq(runs.id, runId));
   }
@@ -774,16 +844,15 @@ export class RunsService {
 
     const [ctx] = await this.db
       .select({
-        testId: testVersions.testId,
-        definition: testVersions.definition,
+        testId: replayedTestId,
+        definition: replayedDefinition,
         environmentId: runs.environmentId,
       })
       .from(runs)
-      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
       .where(eq(runs.id, runId))
       .limit(1);
     if (!ctx) throw new NotFoundException(`Run ${runId} not found`);
-    const vpKey = viewportKey((ctx.definition as TestDefinition).viewport);
+    const vpKey = viewportKeyOf((ctx.definition as TestDefinition).viewport);
     // Seed/replace under the run's OWN environment, not a hardcoded "default" — else
     // the next run against that environment never finds the baseline. (Slice 2 fix.)
     // reEvaluate/persistMasks touch no baselines, so they're unaffected by env.
@@ -896,6 +965,13 @@ export class RunsService {
     if (result.reviewState === "passed") {
       throw new BadRequestException("can't reject a passing checkpoint");
     }
+    // An unfilled Checkpoint Manifest slot captured nothing, so there is no regression to
+    // confirm. Refused rather than tolerated: a resolution on such a row is meaningless to
+    // `deriveRunOutcome` (which reads `missing` before `resolution`) but WOULD change how the
+    // row renders, so allowing it lets the badge disagree with the run's outcome.
+    if (result.reviewState === "missing") {
+      throw new BadRequestException("can't reject a checkpoint the run never captured");
+    }
     await this.db
       .update(runResults)
       .set({ resolution: "rejected", resolvedBy, resolvedAt: new Date() })
@@ -919,13 +995,25 @@ export class RunsService {
         baselineArtifactKey: runResults.baselineArtifactKey,
         actualArtifactKey: runResults.actualArtifactKey,
         threshold: runResults.threshold,
+        testKind: tests.kind,
       })
       .from(runResults)
+      .innerJoin(runs, eq(runs.id, runResults.runId))
+      .innerJoin(tests, eq(tests.id, replayedTestId))
       .where(and(eq(runResults.runId, runId), eq(runResults.checkpointName, checkpointName)))
       .limit(1);
     if (!r) {
       throw new NotFoundException(`Checkpoint ${checkpointName} not found for run ${runId}`);
     }
+    // The last pixel door standing open for this kind. The other one mutates; this one does not —
+    // which is exactly why it was the easy one to overlook, and exactly why it matters: it hands
+    // back a diff score and a diff image for a checkpoint that was judged rather than measured,
+    // and a reviewer shown "0.4% different" reads it as the verdict. The guarantee is that NO
+    // pixel path is reachable for this kind, not that none of them writes.
+    this.assertPixelComparable(
+      r.testKind,
+      "there is no pixel score to re-evaluate, and no mask or threshold that would change the verdict",
+    );
     const { baseline, actual } = await this.loadDiffInputs(
       r.baselineArtifactKey,
       r.actualArtifactKey,
@@ -948,11 +1036,11 @@ export class RunsService {
   }
 
   /**
-   * Persist masks/threshold: write a NEW test_version (latest+1) with the named
-   * screenshot step's masks/threshold updated (audited), then re-judge ONLY this
-   * checkpoint's run_result against the stored artifacts. A now-within-threshold
-   * checkpoint flips to `passed` and leaves the needs-review list. Future runs use
-   * the new version; no other historical run is touched.
+   * Persist masks/threshold: write the named screenshot step's masks/threshold onto the
+   * test's definition (audited), then re-judge ONLY this checkpoint's run_result against the
+   * stored artifacts. A now-within-threshold checkpoint flips to `passed` and no longer awaits
+   * a decision. Future runs replay the edited definition; no other historical run is touched —
+   * each carries its own copy of what it ran.
    */
   async persistMasks(
     runId: string,
@@ -962,7 +1050,8 @@ export class RunsService {
   ): Promise<PersistResult> {
     const [ctx] = await this.db
       .select({
-        testId: testVersions.testId,
+        testId: replayedTestId,
+        testKind: tests.kind,
         runResultId: runResults.id,
         baselineArtifactKey: runResults.baselineArtifactKey,
         actualArtifactKey: runResults.actualArtifactKey,
@@ -970,21 +1059,24 @@ export class RunsService {
       })
       .from(runResults)
       .innerJoin(runs, eq(runs.id, runResults.runId))
-      .innerJoin(testVersions, eq(testVersions.id, runs.testVersionId))
+      .innerJoin(tests, eq(tests.id, replayedTestId))
       .where(and(eq(runResults.runId, runId), eq(runResults.checkpointName, checkpointName)))
       .limit(1);
     if (!ctx) {
       throw new NotFoundException(`Checkpoint ${checkpointName} not found for run ${runId}`);
     }
+    // An Agent-Driven Test's definition is the zero-step placeholder written at creation and
+    // never edited: there are no masks and no pixel threshold to tune. Guarded here rather than
+    // left to a reachability argument, because agent-driven runs now exist and the argument was
+    // only ever "nothing can reach a checkpoint of one yet".
+    this.assertPixelComparable(
+      ctx.testKind,
+      "there are no masks or thresholds to save — edit its comparison prompt on the test instead",
+    );
 
-    // 1. New audited test_version with the updated masks/threshold on this step.
-    const def = await this.latestDefinition(ctx.testId);
-    const [latest] = await this.db
-      .select({ version: testVersions.version })
-      .from(testVersions)
-      .where(eq(testVersions.testId, ctx.testId))
-      .orderBy(desc(testVersions.version))
-      .limit(1);
+    // 1. The masks/threshold onto the test's definition, at this step.
+    const def = (await currentDefinitionOf(this.db, ctx.testId)) as TestDefinition | null;
+    if (!def) throw new NotFoundException(`Test ${ctx.testId} has no definition`);
     const masks = (input.masks ?? []) as Rect[];
     const nextDefinition: TestDefinition = {
       ...def,
@@ -994,22 +1086,21 @@ export class RunsService {
           : s,
       ),
     };
-    const nextVersion = (latest?.version ?? 1) + 1;
-    await this.db.insert(testVersions).values({
-      testId: ctx.testId,
-      version: nextVersion,
-      definition: nextDefinition,
-      createdBy,
-    });
+    // The in-viewer mask/threshold persist is a definition write like any other: it lands on the
+    // test, in place, and records who did it.
+    await this.db
+      .update(tests)
+      .set({ definition: nextDefinition, updatedBy: createdBy, updatedAt: new Date() })
+      .where(eq(tests.id, ctx.testId));
 
     const threshold = input.threshold ?? ctx.threshold;
 
     // 2. Re-judge ONLY when there's a baseline to diff against. A pending-baseline checkpoint
-    //    has nothing to compare yet — the saved masks live on the new test version and apply
+    //    has nothing to compare yet — the saved masks live on the test's definition and apply
     //    once its first capture is approved as baseline and on future runs (the review reads
-    //    masks from the latest test version, so they show up immediately).
+    //    masks from that definition, so they show up immediately).
     if (!ctx.baselineArtifactKey || !ctx.actualArtifactKey) {
-      return { reviewState: "pending-baseline", diffScore: 0, threshold, version: nextVersion };
+      return { reviewState: "pending-baseline", diffScore: 0, threshold };
     }
     const { baseline, actual } = await this.loadDiffInputs(
       ctx.baselineArtifactKey,
@@ -1037,8 +1128,24 @@ export class RunsService {
       reviewState: verdict === "match" ? "passed" : "diff",
       diffScore: score,
       threshold,
-      version: nextVersion,
     };
+  }
+
+  /**
+   * Refuse a pixel operation on an Agent-Driven Test's checkpoint.
+   *
+   * Two doors reach the pixel engine from a run review — the preview re-diff and the committing
+   * mask save — and both have to be locked, because the guarantee this kind makes is about
+   * REACHABILITY, not about which of them happens to write. The lock is spelled once so the two
+   * cannot drift into disagreeing about whether this kind has a threshold; `consequence` is the
+   * only part that differs, because "there is nothing to re-evaluate" and "there is nothing to
+   * save" are different sentences to the person who just clicked.
+   */
+  private assertPixelComparable(testKind: string | null, consequence: string): void {
+    if (testKind !== "agent") return;
+    throw new BadRequestException(
+      `This checkpoint belongs to an Agent-Driven Test. Its capture was compared contextually — by the session that took it, holding both images — so ${consequence}. The agent's reasoning on the run is the record of how it was judged.`,
+    );
   }
 
   /** Load a checkpoint's stored baseline+actual bytes for an in-place re-diff. */
@@ -1066,6 +1173,7 @@ function isRunFailureKind(value: string | null): value is Exclude<RunFailureKind
     value === "judge" ||
     value === "assertion" ||
     value === "timeout" ||
-    value === "crash"
+    value === "crash" ||
+    value === "unreached"
   );
 }

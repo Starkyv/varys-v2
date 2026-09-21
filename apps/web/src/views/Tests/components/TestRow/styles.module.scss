@@ -88,6 +88,22 @@
   font-weight: var(--font-weight-medium);
 }
 
+/* Sibling of .envBadge, deliberately in the info tone: "needs an env" is a precondition, while
+   "agent" is a different KIND of test, and the two should not read as the same class of fact. */
+.agentBadge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 var(--space-8);
+  border-radius: var(--radius-full);
+  background: var(--color-info-soft);
+  color: var(--color-info-fg);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+}
+
 .meta {
   display: flex;
   align-items: center;

@@ -47,7 +47,7 @@ Tracer-bullet slices for [`prd/locator-editor-live-verify.md`](../prd/locator-ed
 | 3b | [Verify — editor UI](locator-3b-verify-ui.md)                   | AFK  | ready-for-agent | 3a |
 
 **Start with 1** — it's self-contained (no schema or matcher change) and immediately
-demoable: edit a click's accessible name, save, see the new version carry it.
+demoable: edit a click's accessible name, save, see the test's definition carry it.
 
 ## Slice 17 — Run outcome — test-runner status model
 
@@ -79,57 +79,40 @@ model**: **Pending baseline** (first run, awaiting approval) → **Baseline** (s
 diff reads **Failed** on the run page. 2–5 are independent fan-out from 1 (grab in any order). **6 is
 deferred** (the sole schema touch; not needed for the core ask).
 
-## Slice 19 — Self-healing tests: assertions + the repair queue
+## Slice 19 — Self-healing tests: the assertion engine
 
-Tracer-bullet slices for [`prd/self-healing-repair-queue.md`](../prd/self-healing-repair-queue.md).
-ADRs: [0003](../docs/adr/0003-repair-on-user-cloud-claude-claim-drain.md) (cloud Claude claims from
-a Varys-owned queue), [0004](../docs/adr/0004-brief-authored-tests-converge-no-agentic-kind.md) (no
-agentic test kind), [0005](../docs/adr/0005-scoped-repair-agent-credential.md) (scoped Repair Agent
-credential; amends [0002](../docs/adr/0002-mcp-oauth-per-user.md)).
+Tracer-bullet slices for assertions — the checks a screenshot cannot make. ADRs:
+[0004](../docs/adr/0004-brief-authored-tests-converge-no-agentic-kind.md) (no agentic test kind),
+[0008](../docs/adr/0008-attended-repair-only-no-queue-no-versions.md) (repair is attended).
 
 Depends on **slice 18** (repair session full edit) for `edit_test`.
 
-**Three independent entry points** — 00, 01/02, and 09. The assertions branch (09–12) is fully
-independent of the queue and can run in parallel with all of it.
-
 ```
-00 (wrong-fix spike, HITL) ───────────────────────── gates GA of 05
-
-01 (policy + enqueue) ──┬──▶ 03 (claim + lease) ──┬──▶ 04 (repair → unreviewed) ──┬──▶ 05 (justification, HITL) ──▶ 06 (healed)
-02 (agent credential) ──┘                          │                               └──▶ 13 (review UI)
-                        └──▶ 07 (cluster + breaker) └──▶ 08 (triage)
-
-09 (assertion engine) ──┬──▶ 10 (extraction-failed repairable)   [also needs 01]
+09 (assertion engine) ──┬──▶ 10 (extraction-failed repairable)
                         ├──▶ 11 (judge fallback)
                         └──▶ 12 (Claude pins assertions, HITL)
+
+14 (attended repair loop: run_test proves the fix)
 ```
 
 | #  | Slice                                                              | Type | Label           | Blocked by |
 |----|--------------------------------------------------------------------|------|-----------------|------------|
-| 00 | [Wrong-fix rate spike on real failed runs](heal-00-wrong-fix-rate-spike.md) | HITL | needs-decision | — |
-| 01 | [Repair Policy + job enqueued + queue visible](heal-01-repair-policy-enqueue-visible.md) | AFK | in-review | — |
-| 02 | [Repair Agent credential (second issuer)](heal-02-repair-agent-credential.md) | AFK | in-review | — |
-| 03 | [Claim a job under a lease](heal-03-claim-under-lease.md) | AFK | in-review | 01, 02 |
-| 04 | [Repair round trip → unreviewed version](heal-04-repair-round-trip-unreviewed.md) | AFK | in-review | 03 |
-| 05 | [Brief-justification gate](heal-05-brief-justification-gate.md) | HITL | in-review (rubric wording + 00 gate GA) | 04 |
-| 06 | [`healed` outcome + re-run + digest](heal-06-healed-outcome-rerun.md) | AFK | in-review | 05 |
-| 07 | [Failure clustering + circuit breaker](heal-07-clustering-circuit-breaker.md) | AFK | in-review | 01 |
-| 08 | [Triage jobs (read-only diagnosis)](heal-08-triage-jobs.md) | AFK | in-review | 03 |
 | 09 | [`@varys/assertion-engine` + replay evaluation](heal-09-assertion-engine-replay.md) | AFK | in-review | — |
-| 10 | [Extraction-failed repairable, relation-false never](heal-10-extraction-failed-repairable.md) | AFK | in-review | 01, 09 |
+| 10 | [Extraction-failed repairable, relation-false never](heal-10-extraction-failed-repairable.md) | AFK | in-review | 09 |
 | 11 | [Judge fallback for unpinnable assertions](heal-11-judge-fallback-unpinnable.md) | AFK | in-review | 09 |
 | 12 | [Claude pins assertions during authoring](heal-12-claude-pins-assertions.md) | HITL | in-review (wording + real-pin review outstanding) | 09 |
-| 13 | [Repair review UI (signal diff + justification)](heal-13-repair-review-ui.md) | AFK | in-review (hand-verification outstanding) | 04 |
-| 14 | [Attended repair loop: `run_test`, judge no longer required](heal-14-attended-repair-loop.md) | AFK | in-review (weakens 05 — read the flags) | 04, 05 |
+| 14 | [Attended repair loop: `run_test`, judge no longer required](heal-14-attended-repair-loop.md) | AFK | in-review | — |
 
-**Start with 01 and 02 in parallel** (no blockers, and 03 needs both), or take **09** if you would
-rather ship the new capability before the new architecture.
-
-> **Why `healed` is slice 06 and not slice 01.** Repair deliberately lands an *unreviewed version
-> while the run stays `failed`* (04), and only gains the amber outcome after the justification gate
-> exists (05). Sequenced this way, the unsafe state — a repair turning a run green with no guard —
-> never exists, not even mid-implementation.
-
-> **Measure 00 alongside 01.** Claude's wrong-fix rate decides whether `healed` is a useful amber or
-> noise nobody reviews, and whether the stateless-bundle alternative in ADR-0005 would have
-> sufficed. It costs a session with tools that already ship, not new code.
+> **The repair queue that used to live here is gone.** Slices 00–08 and 13 planned an unattended
+> drainer: a Repair Policy that enqueued a job, a second `/mcp` issuer, a claim under a lease, an
+> unreviewed version pending a human accept, a justification judge, failure clustering, a circuit
+> breaker, triage jobs, and a review UI for the lot.
+> [ADR 0008](../docs/adr/0008-attended-repair-only-no-queue-no-versions.md) removed all of it:
+> repair is attended, so the person who reads the red Run is the guard every one of those parts
+> stood in for. Those ten slice files were deleted rather than left standing as plans for machinery
+> that will not be built — the ADR is the record of why, and ADRs 0003 and 0005 are left in place
+> as the record of what was decided before it.
+>
+> The five above survive because assertions and the attended loop were never part of the queue.
+> They still open on `prd/self-healing-repair-queue.md`, which went with the queue; read them
+> against ADR 0008 instead.

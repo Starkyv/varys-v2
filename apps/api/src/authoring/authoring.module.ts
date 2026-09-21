@@ -1,10 +1,11 @@
 import { Module } from "@nestjs/common";
-import { AgentCredentialsModule } from "../agent-credentials/agent-credentials.module";
-import { RepairJobsModule } from "../repair-jobs/repair-jobs.module";
 import { RunsModule } from "../runs/runs.module";
+import { SettingsModule } from "../settings/settings.module";
 import { TestsModule } from "../tests/tests.module";
 import { AuthoringInstructionsController } from "./authoring-instructions.controller";
 import { AuthoringInstructionsService } from "./authoring-instructions.service";
+import { AgentAuthoringService } from "./agent-authoring.service";
+import { AgentRunService } from "./agent-run.service";
 import { AuthoringSessionService } from "./authoring-session.service";
 import { BridgeController } from "./bridge.controller";
 import { BridgeService } from "./bridge.service";
@@ -16,12 +17,15 @@ import { RunToolService } from "./run-tool.service";
 
 @Module({
   // TestsModule exports TestsService — the authoring session persists its result as a
-  // Draft through it (so all tests/test_versions writes stay in one place).
-  // AgentCredentialsModule is the SECOND ISSUER on /mcp (ADR-0005); RepairJobsModule answers
-  // "does this agent hold a claim on that test?", which is what scopes an agent credential.
+  // Draft through it (so every write of a test's definition stays in one place) — and
+  // AgentInstructionsService, which composes the three AI Instructions layers for an Agent Run
+  // Session through the SAME path the author's preview endpoint reads, so a preview and the run
+  // it previews cannot be two different documents.
   // RunsModule exports RunsService — `run_test` queues a run through the SAME path the web app's
-  // Run button uses (version pin + enqueue), rather than a second way to start a run.
-  imports: [TestsModule, AgentCredentialsModule, RepairJobsModule, RunsModule],
+  // Run button uses (definition snapshot + enqueue), rather than a second way to start a run.
+  // SettingsModule supplies the global default judge prompt an Agent-Driven Test's blank
+  // compare_prompt falls back to, and the team-wide comparison default its seeded rows carry.
+  imports: [TestsModule, RunsModule, SettingsModule],
   // McpController is the Claude-Code transport (OAuth-bearer authenticated, Slice 16); LivePreviewController is the
   // authenticated in-product live-preview surface (Slice 15); BridgeController is the
   // in-product relay that links a user's Bridge Helper to their chat (Slice 15);
@@ -34,6 +38,8 @@ import { RunToolService } from "./run-tool.service";
     McpStatusService,
     AuthoringInstructionsService,
     RunToolService,
+    AgentRunService,
+    AgentAuthoringService,
   ],
 })
 export class AuthoringModule {}

@@ -15,6 +15,7 @@ import type {
 import parser from "cron-parser";
 import { asc, eq } from "drizzle-orm";
 import { DB, type Db } from "../db/db.module";
+import { AgentTestsService } from "../tests/agent-tests.service";
 import { TestsService } from "../tests/tests.service";
 import { folderChildren, subtreeOf, suiteSelection } from "./suite-membership";
 
@@ -26,6 +27,15 @@ export interface UpdateSuiteInput {
   testIds?: string[];
   folderIds?: string[];
   schedule?: TestScheduleInput | null;
+  /**
+   * The suite's AI Instructions — the outermost of the three layers composed for an Agent Run
+   * Session. Absent leaves it alone; blank or null clears it.
+   *
+   * Cleared to NULL rather than to `""` so "this suite carries no shared context" has exactly one
+   * spelling: the composition path filters on it, and two spellings of empty is how a layer ends
+   * up contributing a named, empty section nobody wrote.
+   */
+  agentInstructions?: string | null;
 }
 
 /** Next cron fire in `timezone`, or null when disabled. Throws 400 on a bad cron/tz (save-time
@@ -49,7 +59,12 @@ function pgCode(err: unknown): string | undefined {
 }
 
 /** The effective, deduped test ids a suite selects: every test whose folder is in a selected
- *  folder's subtree, unioned with the individually-selected tests. */
+ *  folder's subtree, unioned with the individually-selected tests.
+ *
+ *  Agent-Driven Tests are skipped when they arrive via a FOLDER. Adding one explicitly is
+ *  refused at write time, but a folder is a standing selection — filing an agent test into an
+ *  already-suited folder would otherwise add a member the suite can never run. Dropping it here
+ *  keeps "what this suite runs" honest, and the refusal keeps the explicit case loud. */
 function resolveEffective(
   allTests: TestSummary[],
   folderIds: string[],
@@ -60,6 +75,7 @@ function resolveEffective(
   if (folderIds.length > 0) {
     const subtree = subtreeOf(folderIds, children);
     for (const t of allTests) {
+      if (t.kind === "agent") continue; // nothing can run one unattended
       if (t.folderId && subtree.has(t.folderId)) ids.add(t.id);
     }
   }
@@ -71,6 +87,7 @@ export class SuitesService {
   constructor(
     @Inject(DB) private readonly db: Db,
     @Inject(TestsService) private readonly tests: TestsService,
+    @Inject(AgentTestsService) private readonly agent: AgentTestsService,
   ) {}
 
   /** All suites (alphabetical) with their effective test count + how many folders each includes. */
@@ -111,7 +128,12 @@ export class SuitesService {
   /** A suite with its effective member tests (full summaries) plus the raw folder/test selection. */
   async getById(id: string): Promise<SuiteView> {
     const [suite] = await this.db
-      .select({ id: suites.id, name: suites.name, createdBy: suites.createdBy })
+      .select({
+        id: suites.id,
+        name: suites.name,
+        createdBy: suites.createdBy,
+        agentInstructions: suites.agentInstructions,
+      })
       .from(suites)
       .where(eq(suites.id, id))
       .limit(1);
@@ -162,18 +184,20 @@ export class SuitesService {
   }
 
   async create(
-    input: { name: string; testIds?: string[]; folderIds?: string[] },
+    input: { name: string; testIds?: string[]; folderIds?: string[]; agentInstructions?: string | null },
     createdBy?: string,
   ): Promise<{ id: string }> {
     const name = input.name?.trim();
     if (!name) throw new BadRequestException("suite name cannot be empty");
+    const agentInstructions = input.agentInstructions?.trim() || null;
     const testIds = [...new Set(input.testIds ?? [])];
     const folderIds = [...new Set(input.folderIds ?? [])];
+    await this.agent.assertNoAgentTests(testIds, "suite");
     try {
       return await this.db.transaction(async (tx) => {
         const [row] = await tx
           .insert(suites)
-          .values({ name, createdBy: createdBy ?? null })
+          .values({ name, createdBy: createdBy ?? null, agentInstructions })
           .returning({ id: suites.id });
         if (testIds.length > 0) {
           await tx.insert(suiteTests).values(testIds.map((testId) => ({ suiteId: row.id, testId })));
@@ -199,13 +223,22 @@ export class SuitesService {
     if (name === "") throw new BadRequestException("suite name cannot be empty");
     const testIds = input.testIds !== undefined ? [...new Set(input.testIds)] : undefined;
     const folderIds = input.folderIds !== undefined ? [...new Set(input.folderIds)] : undefined;
+    // Absent leaves it alone; blank or null clears it to NULL. Normalised here rather than at
+    // the column so "carries no shared context" has one spelling everywhere it is read.
+    const agentInstructions =
+      input.agentInstructions === undefined
+        ? undefined
+        : (input.agentInstructions?.trim() || null);
     if (
       name === undefined &&
       testIds === undefined &&
       folderIds === undefined &&
+      agentInstructions === undefined &&
       input.schedule === undefined
     )
       return { ok: true };
+
+    if (testIds !== undefined) await this.agent.assertNoAgentTests(testIds, "suite");
 
     // Validate + compute the schedule BEFORE any write (a bad cron/env fails cleanly). `undefined`
     // = leave as-is; `null` = clear; object = upsert.
@@ -243,10 +276,13 @@ export class SuitesService {
 
     try {
       await this.db.transaction(async (tx) => {
-        if (name !== undefined) {
+        if (name !== undefined || agentInstructions !== undefined) {
           const updated = await tx
             .update(suites)
-            .set({ name })
+            .set({
+              ...(name !== undefined ? { name } : {}),
+              ...(agentInstructions !== undefined ? { agentInstructions } : {}),
+            })
             .where(eq(suites.id, id))
             .returning({ id: suites.id });
           if (updated.length === 0) throw new NotFoundException(`Suite ${id} not found`);

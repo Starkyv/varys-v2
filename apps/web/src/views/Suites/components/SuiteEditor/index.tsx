@@ -1,5 +1,5 @@
 import type { FolderSummary, TestSchedule, TestSummary } from "@varys/review-contract";
-import { Button, Check, cx, Folder, Input, Lock, Skeleton, Squares } from "@varys/ui";
+import { AlertTriangle, Button, Check, cx, Folder, Input, Lock, Skeleton, Sparkles, Squares } from "@varys/ui";
 import { useMemo, useState } from "react";
 import { ScheduleEditor } from "../../../../components/ScheduleEditor";
 import { useConfirm } from "../../../../context/confirm";
@@ -25,6 +25,7 @@ export function SuiteEditor({ suiteId, onClose }: { suiteId: string | null; onCl
       initialTestIds={[]}
       initialFolderIds={[]}
       initialSchedule={null}
+      initialInstructions=""
       onClose={onClose}
     />
   );
@@ -50,6 +51,7 @@ function EditExisting({ suiteId, onClose }: { suiteId: string; onClose: () => vo
       initialTestIds={suite.data.testIds}
       initialFolderIds={suite.data.folderIds}
       initialSchedule={suite.data.schedule}
+      initialInstructions={suite.data.agentInstructions ?? ""}
       onClose={onClose}
     />
   );
@@ -80,6 +82,7 @@ function EditorForm({
   initialTestIds,
   initialFolderIds,
   initialSchedule,
+  initialInstructions,
   onClose,
 }: {
   suiteId: string | null;
@@ -87,6 +90,7 @@ function EditorForm({
   initialTestIds: string[];
   initialFolderIds: string[];
   initialSchedule: TestSchedule | null;
+  initialInstructions: string;
   onClose: () => void;
 }) {
   const tests = useTests();
@@ -102,6 +106,7 @@ function EditorForm({
   const [selectedFolders, setSelectedFolders] = useState<Set<string>>(
     () => new Set(initialFolderIds),
   );
+  const [instructions, setInstructions] = useState(initialInstructions);
 
   const saving = create.isPending || update.isPending;
   const allTests = tests.data ?? [];
@@ -117,6 +122,15 @@ function EditorForm({
     }
     return ids;
   }, [selectedFolders, selectedTests, allTests, allFolders]);
+
+  // Who the AI instructions would actually reach. Counted off the EXPLICIT selection, because
+  // that is what the composition path reads: a folder is a standing selection and deliberately
+  // drops Agent-Driven Tests, so counting a folder-derived one here would promise a layer that
+  // never arrives.
+  const agentMembers = useMemo(
+    () => allTests.filter((t) => t.kind === "agent" && selectedTests.has(t.id)),
+    [allTests, selectedTests],
+  );
 
   function toggleTest(id: string) {
     setSelectedTests((cur) => {
@@ -137,6 +151,7 @@ function EditorForm({
     const trimmed = name.trim() || "Untitled suite";
     const testIds = [...selectedTests];
     const folderIds = [...selectedFolders];
+    const agentInstructions = instructions.trim() || null;
     const onError = (e: unknown) => toast(e instanceof Error ? e.message : "Save failed");
     const n = effectiveIds.size;
     const done = (verb: string) => {
@@ -145,12 +160,12 @@ function EditorForm({
     };
     if (suiteId) {
       update.mutate(
-        { id: suiteId, body: { name: trimmed, testIds, folderIds } },
+        { id: suiteId, body: { name: trimmed, testIds, folderIds, agentInstructions } },
         { onSuccess: () => done("saved"), onError },
       );
     } else {
       create.mutate(
-        { name: trimmed, testIds, folderIds },
+        { name: trimmed, testIds, folderIds, agentInstructions },
         { onSuccess: () => done(`“${trimmed}” created`), onError },
       );
     }
@@ -248,17 +263,34 @@ function EditorForm({
           // Already covered by a selected folder — shown as included; toggling still adds it
           // explicitly, so it stays if that folder is later removed.
           const viaFolder = !sel && effectiveIds.has(t.id);
+          // An Agent-Driven Test runs on the author's own local Claude, so nothing here can run
+          // one unattended and the server refuses it at Save. Shown but not selectable, rather
+          // than hidden: "why is that test not in the list?" is a worse question than a row that
+          // says why. Disabling it is also what keeps the AI-instructions warning below honest —
+          // otherwise picking one would claim a member the save is about to reject.
+          const ineligible = t.kind === "agent";
           return (
             <button
               key={t.id}
               type="button"
-              className={cx(styles.row, (sel || viaFolder) && styles.rowSel)}
+              disabled={ineligible}
+              title={
+                ineligible
+                  ? "Agent-Driven tests run on your own local Claude, so a suite cannot run one."
+                  : undefined
+              }
+              className={cx(
+                styles.row,
+                (sel || viaFolder) && styles.rowSel,
+                ineligible && styles.rowOff,
+              )}
               onClick={() => toggleTest(t.id)}
             >
               <span className={cx(styles.check, (sel || viaFolder) && styles.checkOn)}>
                 {(sel || viaFolder) && <Check size={11} />}
               </span>
               <span className={styles.testName}>{t.name}</span>
+              {ineligible && <span className={styles.folderCount}>agent-driven</span>}
               {viaFolder && <span className={styles.folderCount}>via folder</span>}
               {t.tags.length > 0 && (
                 <span className={styles.tags}>
@@ -280,6 +312,51 @@ function EditorForm({
           );
         })}
         {allTests.length === 0 && <div className={styles.empty}>No tests to add yet.</div>}
+      </div>
+
+      {/* The outermost of the three AI Instructions layers. Saved with the membership Save above,
+          because it IS a property of the suite rather than an independent object like a schedule. */}
+      <div className={styles.aiSection}>
+        <div className={styles.aiHead}>
+          <Sparkles size={14} />
+          <span className={styles.aiTitle}>AI instructions</span>
+          <span className={styles.aiScope}>environmental context, not overrides</span>
+        </div>
+        <p className={styles.aiHint}>
+          Shared context for the Agent-Driven tests in this suite — which app, which account, what
+          to ignore. It is added <em>above</em> each test’s own instructions and never replaces
+          them: describe the surroundings here, not how a particular journey should go.
+        </p>
+        <textarea
+          className={styles.aiTextarea}
+          rows={5}
+          value={instructions}
+          placeholder={
+            "App is staging.acme.io. Log in as qa@acme.io / hunter2-staging.\nDismiss the cookie banner if it appears. Ignore the “What’s new” modal."
+          }
+          onChange={(e) => setInstructions(e.target.value)}
+          aria-label="Suite AI instructions"
+        />
+        {agentMembers.length === 0 ? (
+          // Said whether or not anything has been typed yet, because the point is to stop the
+          // instructions being written at all rather than to report afterwards that they did
+          // nothing. Today this is every suite: an Agent-Driven Test cannot join one, because
+          // nothing can run it unattended.
+          <p className={cx(styles.aiNote, styles.aiWarn)}>
+            <AlertTriangle size={13} />
+            <span>
+              These instructions apply to nothing. Every member of this suite is a pinned test —
+              replayed from recorded steps with no model call — so there is nothing here to read
+              them. Only Agent-Driven tests are given AI instructions, and one cannot join a suite
+              yet.
+            </span>
+          </p>
+        ) : (
+          <p className={styles.aiNote}>
+            Applies to {agentMembers.length} Agent-Driven test
+            {agentMembers.length === 1 ? "" : "s"} in this suite. The pinned members are unaffected.
+          </p>
+        )}
       </div>
 
       {/* Scheduling is a separate concern with its own Save — a schedule can only attach to a

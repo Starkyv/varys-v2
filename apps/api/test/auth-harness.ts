@@ -16,6 +16,10 @@ import { getAuth } from "../src/auth/auth";
  * for the cross-user isolation tests.
  */
 
+/** The password every minted E2E identity is created with — needed again to sign the same person
+ *  in a SECOND time, which is how "two browser sessions, one owner" is tested rather than claimed. */
+const E2E_PASSWORD = "e2e-password-1234";
+
 /** One E2E identity: a cookie for the web API and a bearer token for `/mcp`. */
 export interface TestIdentity {
   userId: string;
@@ -54,7 +58,7 @@ export async function prepareAuth(): Promise<void> {
 export async function mintUser(name = "E2E"): Promise<TestIdentity> {
   const email = `e2e+${Date.now()}.${Math.floor(Math.random() * 1e6)}@varys.test`;
   const res = await getAuth().api.signUpEmail({
-    body: { email, password: "e2e-password-1234", name },
+    body: { email, password: E2E_PASSWORD, name },
     asResponse: true,
   });
   const setCookie = res.headers.get("set-cookie") ?? "";
@@ -66,6 +70,24 @@ export async function mintUser(name = "E2E"): Promise<TestIdentity> {
 
   const bearer = await mintMcpToken(userId);
   return { userId, email, cookie: match[0], bearer };
+}
+
+/**
+ * Sign an EXISTING identity in again — a second, independent session cookie for the same person.
+ *
+ * Not the same as `mintUser`, and the difference is the point: two cookies for one user is what a
+ * second browser tab looks like to the server, and it is the only way to show that a rule holds
+ * per OWNER rather than per session.
+ */
+export async function mintSession(email: string): Promise<string> {
+  const res = await getAuth().api.signInEmail({
+    body: { email, password: E2E_PASSWORD },
+    asResponse: true,
+  });
+  const setCookie = res.headers.get("set-cookie") ?? "";
+  const match = setCookie.match(/better-auth\.session_token=[^;]+/);
+  if (!match) throw new Error(`E2E auth: no second session minted (status ${res.status})`);
+  return match[0];
 }
 
 /** Register an MCP client for this user (as Claude Code's DCR would) and issue it a token. */
@@ -158,8 +180,8 @@ export function mcpAuthed(app: INestApplication, identity?: TestIdentity) {
   return { get: make("get"), post: make("post") };
 }
 
-/** `authed` for a specific identity (the second user in isolation tests). */
-export function cookieAuthed(app: INestApplication, identity: TestIdentity) {
+/** `authed` for a specific session cookie — a second user, or a second session of the same one. */
+export function cookieAuthed(app: INestApplication, identity: { cookie: string }) {
   const server = app.getHttpServer();
   const make = (verb: Verb) => (url: string) => request(server)[verb](url).set("Cookie", identity.cookie);
   return { get: make("get"), post: make("post") };
