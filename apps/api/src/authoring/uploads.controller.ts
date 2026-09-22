@@ -1,5 +1,5 @@
 import type { IncomingHttpHeaders } from "node:http";
-import { BadRequestException, Controller, Headers, Param, Post, Req, Res } from "@nestjs/common";
+import { BadRequestException, Controller, Headers, Inject, Param, Post, Req, Res } from "@nestjs/common";
 import { fromNodeHeaders } from "better-auth/node";
 import { getAuth } from "../auth/auth";
 import { Public } from "../auth/public.decorator";
@@ -70,9 +70,21 @@ async function readBody(req: HttpReq): Promise<Buffer> {
 
 @Controller("mcp")
 export class UploadsController {
+  /**
+   * `@Inject` on every parameter, as every other controller here does — and it is load-bearing,
+   * not house style.
+   *
+   * The deployed image runs the TypeScript sources directly under `tsx` (see `Dockerfile.app`),
+   * and esbuild does not implement `emitDecoratorMetadata`. With no `design:paramtypes` to read,
+   * Nest concludes this constructor takes NO dependencies and instantiates it with none — leaving
+   * both properties `undefined` and raising nothing at boot. The failure surfaces later, as a 500
+   * on the first request that touches one, which is how this route shipped broken and stayed that
+   * way: the E2E suite transforms with swc (`unplugin-swc`), which DOES emit the metadata, so the
+   * tests inject correctly and prove nothing about production.
+   */
   constructor(
-    private readonly mcpAuth: McpAuthService,
-    private readonly uploads: UploadsService,
+    @Inject(McpAuthService) private readonly mcpAuth: McpAuthService,
+    @Inject(UploadsService) private readonly uploads: UploadsService,
   ) {}
 
   @Public()
