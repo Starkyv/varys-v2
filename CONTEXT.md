@@ -220,3 +220,15 @@ wrong region is cheap and a wrong click is not.
 A Run with a healed step still reads **passed**: the marker on the step is the whole report. There
 is no run-level `healed`, and no amber for "green, but on a locator that didn't really match".
 _Avoid_: self-healed, auto-fixed, warning, healed run
+
+**Capture**:
+The image an agent submits as the evidence for one **Checkpoint** — the picture of a state it
+actually reached. It is evidence, never a golden: a Capture is stored as the reference behind a
+Manifest slot or as a proposal awaiting approval, and only a human turns one into a baseline.
+
+Distinct from the screenshot an agent takes to *perceive* the page (an authoring session's
+`observe(screenshot: true)`, or whatever tooling an agent-driven walk uses to look at what is in
+front of it), which records nothing in the test and is evidence of nothing. The same picture can
+serve both, but they are different claims — one says "this is what the page looks like to me right
+now", the other says "this is what a human should review, and may approve".
+_Avoid_: screenshot, shot, image, snapshot

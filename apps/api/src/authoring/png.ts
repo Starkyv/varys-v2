@@ -3,7 +3,14 @@ import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BadRequestException } from "@nestjs/common";
+import { BadRequestException, Logger } from "@nestjs/common";
+
+/** Which route a capture actually arrived by. Logged, never stored: the question it answers —
+ *  "is anything still pushing bytes through the model?" — is an operator's, and it stops being
+ *  interesting the moment the answer is no. */
+export type ImageRoute = "path" | "ref";
+
+const log = new Logger("Capture");
 
 /** The PNG signature: 89 50 4E 47 0D 0A 1A 0A. */
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -24,16 +31,23 @@ const PNG_IEND = Buffer.from([
 const MAX_IMAGE_BYTES = 32 * 1024 * 1024;
 
 /**
- * How a screenshot reaches a `/mcp` tool. Exactly one of `image` and `imagePath` is supplied —
- * they are two routes to the same bytes, and the difference between them matters:
+ * How a screenshot reaches a `/mcp` tool — by FILE, always, down exactly one of two routes.
  *
- * `image` sends the bytes THROUGH the model's own output, where a megabyte of base64 is a
- * megabyte of tokens that can be truncated, re-wrapped or clipped. `imagePath` does not: Varys
- * opens the file itself and the bytes never enter the conversation. Prefer the path wherever the
- * two machines are the same one.
+ * The routes differ only in who opens the file: `imagePath` means Varys does (the caller is on
+ * this machine), `imageRef` means the caller's own shell already sent it (everyone else). What
+ * they have in common is the property that matters — the bytes never enter the conversation.
+ *
+ * `image`, base64 inside the tool call, was the third route and is now REFUSED. A model can
+ * perceive an image but it can never carry one: what it sees arrives as vision tokens, which no
+ * operation turns back into PNG bytes, so filling this field meant reading the base64 in as text
+ * (~100k tokens) and writing every character of it back out (~100k more), serially, before the
+ * call could even be made. That round trip was the whole cost of a checkpoint, and it ended at a
+ * cliff — the output cap truncates the string, and a truncated base64 decodes without complaint
+ * into a perfectly-formed half-image. The field is kept on this interface ONLY so a caller still
+ * sending it gets told what to do instead; see {@link readBytes}.
  */
 export interface ImageArg {
-  /** Base64-encoded PNG bytes. A `data:` URL prefix is tolerated and stripped. */
+  /** REFUSED. Base64-encoded PNG bytes — accepted here once, kept only to be refused by name. */
   image?: string;
   /** Absolute path to a `.png` on the machine running Varys. Loopback callers only. */
   imagePath?: string;
@@ -50,6 +64,15 @@ export interface CallerContext {
    *  the client is a process on this very machine and `imagePath` means something. */
   local: boolean;
   /**
+   * The absolute upload URL minted for THIS caller, when there is one.
+   *
+   * Carried so a refusal can name the exact command that would have worked, rather than describe
+   * one. An agent that is told "upload it instead" has to work out where and with what; an agent
+   * handed a URL it can paste has one thing left to do. It is passed in for the same reason
+   * `takeUpload` is — this module stays ignorant of sessions and identities.
+   */
+  uploadUrl?: string | undefined;
+  /**
    * Redeem an `imageRef` for the bytes the caller already uploaded, or null if it is not theirs to
    * redeem. Single use.
    *
@@ -63,36 +86,36 @@ export interface CallerContext {
 /**
  * Bytes in, a *whole* PNG out — or a refusal naming what went wrong.
  *
- * The format check is not fussiness. These bytes become an artifact a human reviews and may
- * promote to a baseline, and every way this call goes wrong in practice produces something that
- * stores perfectly and renders as nothing, or as half a picture:
+ * The format checks are not fussiness. These bytes become an artifact a human reviews and may
+ * promote to a baseline, and the ways this goes wrong in practice all produce something that
+ * stores perfectly and renders as nothing, or as half a picture — the worst possible outcome,
+ * because it is reviewable and wrong rather than absent and obvious. So the signature, the IEND
+ * terminator and (when offered) the hash all stand between the argument and storage.
  *
- *  - a `data:` prefix left on, or a file PATH sent where bytes were meant — caught by the
- *    signature;
- *  - **base64 that was truncated or corrupted in transit** — caught by nothing at all until this
- *    function grew an IEND check, because `Buffer.from(s, "base64")` does not throw on a mangled
- *    string. Node stops decoding at the first character outside the alphabet and returns the
- *    prefix it managed, so a blob cut in half decodes cleanly to half an image whose signature is
- *    perfectly intact. That is a stored, reviewable, *wrong* artifact — the worst possible
- *    outcome, and the reason three separate checks now stand between the argument and storage:
- *    the alphabet, the terminator, and (when offered) the hash.
+ * The IEND check earned its place against base64, which is now refused outright: `Buffer.from(s,
+ * "base64")` does not throw on a mangled string, so a blob cut short by an output cap decoded
+ * cleanly into half an image whose signature was perfectly intact. It is kept because the failure
+ * it catches is not exclusive to that route — a file read while it is still being written arrives
+ * exactly as truncated, and looks exactly as valid.
  *
  * `tool` names the caller so the message tells the model which of its calls to fix.
  */
 export function decodePng(source: ImageArg, tool: string, ctx: CallerContext): Buffer {
-  const bytes = readBytes(source, tool, ctx);
+  const { bytes, route } = readBytes(source, tool, ctx);
 
   if (bytes.length === 0) {
-    throw new BadRequestException(`${tool}: \`image\` decoded to no bytes — is it really base64?`);
+    throw new BadRequestException(
+      `${tool}: the capture is EMPTY — zero bytes arrived. Check the file you sent is the screenshot and that it finished being written before you sent it.`,
+    );
   }
   if (!bytes.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {
     throw new BadRequestException(
-      `${tool}: \`image\` is not a PNG. Send the screenshot's raw bytes, base64-encoded — not a file path, not a URL, and not JPEG. Baselines are PNG, and a reviewer has to be able to put the two side by side.`,
+      `${tool}: that is not a PNG — the file does not start with the PNG signature. Baselines are PNG, and a reviewer has to be able to put the two side by side, so JPEG and WebP are refused rather than converted. Re-capture as PNG.`,
     );
   }
   if (!bytes.subarray(-PNG_IEND.length).equals(PNG_IEND)) {
     throw new BadRequestException(
-      `${tool}: the image is TRUNCATED — it starts with a valid PNG header but has no IEND terminator, so ${bytes.length} byte(s) arrived and the end of the file did not. Nothing was stored. This almost always means the base64 was cut short on its way here, which base64 decoding cannot detect: the header is at the front and survives, so a half-sent image looks entirely valid until this check. Do not re-send the same string. Send the file out of band instead, so the bytes never pass through your output at all: \`imageRef\` — upload it with \`POST /mcp/uploads\` and name the handle — or \`imagePath\` if you are on the same machine as Varys. Failing both, re-encode the WHOLE file and send \`sha256\` with it so a repeat of this is caught rather than stored.`,
+      `${tool}: the image is TRUNCATED — it starts with a valid PNG header but has no IEND terminator, so ${bytes.length} byte(s) arrived and the end of the file did not. Nothing was stored. A half-image is indistinguishable from a whole one after the fact, which is why this is checked rather than trusted. Now that captures travel as files this usually means the file was read while it was still being written: wait for the capture to finish, check its size on disk, and send it again.`,
     );
   }
 
@@ -106,40 +129,71 @@ export function decodePng(source: ImageArg, tool: string, ctx: CallerContext): B
     const actual = createHash("sha256").update(bytes).digest("hex");
     if (actual !== expected) {
       throw new BadRequestException(
-        `${tool}: the image does not match the \`sha256\` you sent with it, so it was corrupted in transit and nothing was stored. You said ${expected}; ${bytes.length} byte(s) arrived hashing to ${actual}. Send it out of band instead — \`imageRef\` from \`POST /mcp/uploads\`, or \`imagePath\` on this machine — so the bytes do not travel through your output.`,
+        `${tool}: the image does not match the \`sha256\` you sent with it, so what arrived is not the file you hashed and nothing was stored. You said ${expected}; ${bytes.length} byte(s) arrived hashing to ${actual}. Check you hashed the same file you sent, then send it again.`,
       );
     }
   }
+  // The one record of HOW the bytes arrived. Nothing downstream keeps it, and nothing should:
+  // a reviewer reads the picture, and the route only matters while someone is asking whether a
+  // client with a stale tool list is still trying to push captures through the model.
+  log.log(`${tool}: capture accepted via ${route} (${bytes.length} bytes)`);
   return bytes;
 }
 
-/** Resolve the argument to bytes down exactly ONE of its three routes, chosen explicitly: guessing
- *  whether a string is a path or base64 is not possible in general — `/` is in the base64 alphabet
- *  — and a wrong guess here is a file read the caller did not ask for. */
-function readBytes(source: ImageArg, tool: string, ctx: CallerContext): Buffer {
+/** Resolve the argument to bytes down exactly ONE of its routes, named explicitly by the caller:
+ *  a route Varys inferred would be a file read nobody asked for the first time it guessed wrong. */
+function readBytes(
+  source: ImageArg,
+  tool: string,
+  ctx: CallerContext,
+): { bytes: Buffer; route: ImageRoute } {
   const image = (source.image ?? "").trim();
   const imagePath = (source.imagePath ?? "").trim();
   const imageRef = (source.imageRef ?? "").trim();
 
-  const given = [
-    image && "`image`",
-    imagePath && "`imagePath`",
-    imageRef && "`imageRef`",
-  ].filter((x): x is string => Boolean(x));
+  // REFUSED BEFORE ANYTHING ELSE, including before the "exactly one route" check — a caller
+  // sending base64 has already paid for it in output tokens, and the only useful thing left to
+  // tell it is how not to next time.
+  //
+  // This is enforced HERE and not merely dropped from the tool schema, because a schema is advice
+  // to a client that may not have re-read it: MCP clients cache the tool list, so an agent
+  // mid-session keeps offering `image` long after the field is gone. The schema stops the model
+  // choosing this route; this stops the route existing.
+  if (image) {
+    throw new BadRequestException(
+      `${tool}: \`image\` (base64) is no longer accepted, and nothing was stored. ${uploadInstruction(ctx)}\n\nIf the capture exists only as an image in your context, it cannot be sent at all — what you were shown is not bytes you can reproduce. Re-capture it to a FILE (your screenshot tool takes a path) and send the file.`,
+    );
+  }
+
+  const given = [imagePath && "`imagePath`", imageRef && "`imageRef`"].filter((x): x is string =>
+    Boolean(x),
+  );
 
   if (given.length > 1) {
     throw new BadRequestException(
-      `${tool}: send exactly ONE of \`image\`, \`imagePath\` and \`imageRef\` — you sent ${given.join(" and ")}, and with two sources there is no saying which one the stored artifact came from.`,
+      `${tool}: send exactly ONE of \`imagePath\` and \`imageRef\` — you sent ${given.join(" and ")}, and with two sources there is no saying which one the stored artifact came from.`,
     );
   }
   if (given.length === 0) {
-    throw new BadRequestException(
-      `${tool} needs the screenshot itself, by one of three routes: \`imageRef\` — upload the file with \`POST /mcp/uploads\` and name the handle it returns; \`imagePath\` — the absolute path to a .png, if you are on the same machine as Varys; or \`image\` — base64-encoded PNG bytes. Prefer either of the first two: they are the ones where the bytes never pass through your own output, and so cannot be truncated on the way here.`,
-    );
+    throw new BadRequestException(`${tool} needs the screenshot itself. ${uploadInstruction(ctx)}`);
   }
-  if (imagePath) return readLocalPng(imagePath, tool, ctx);
-  if (imageRef) return readUploaded(imageRef, tool, ctx);
-  return decodeBase64(image, tool);
+  if (imagePath) return { bytes: readLocalPng(imagePath, tool, ctx), route: "path" };
+  return { bytes: readUploaded(imageRef, tool, ctx), route: "ref" };
+}
+
+/**
+ * The one sentence every refusal ends with: what to do instead, for THIS caller.
+ *
+ * Written once because it is the same instruction every time, and written with the minted URL in
+ * it because an instruction an agent can paste is acted on and one it has to assemble is guessed
+ * at. A loopback caller gets the path route instead — it needs no upload at all.
+ */
+function uploadInstruction(ctx: CallerContext): string {
+  if (ctx.local) {
+    return "Write the capture to a .png and send `imagePath` — the absolute path to it on this machine. Varys opens the file itself.";
+  }
+  const url = ctx.uploadUrl ?? "<the `upload.url` from your last tool response>";
+  return `Write the capture to a .png, send the FILE, and name what comes back: \`curl -s -X POST ${url} -H "Content-Type: image/png" --data-binary @shot.png\` answers \`{"imageRef":"upl_…"}\` — put that in \`imageRef\`. No auth header: the URL is the permission, and a fresh one rides every tool response.`;
 }
 
 /**
@@ -159,7 +213,7 @@ function readUploaded(ref: string, tool: string, ctx: CallerContext): Buffer {
   const bytes = ctx.takeUpload?.(ref) ?? null;
   if (!bytes) {
     throw new BadRequestException(
-      `${tool}: \`imageRef\` ${JSON.stringify(ref)} is not an upload you can claim — it is unknown, already used, or expired. A handle is good once and for a few minutes. Upload the file again with \`POST /mcp/uploads\` and use the handle it returns.`,
+      `${tool}: \`imageRef\` ${JSON.stringify(ref)} is not an upload you can claim — it is unknown, already used, or expired. A handle is good once and for a few minutes. ${uploadInstruction(ctx)}`,
     );
   }
   return bytes;
@@ -179,7 +233,7 @@ function readUploaded(ref: string, tool: string, ctx: CallerContext): Buffer {
 function readLocalPng(raw: string, tool: string, ctx: CallerContext): Buffer {
   if (!ctx.local) {
     throw new BadRequestException(
-      `${tool}: \`imagePath\` is only accepted from a client on the same machine as Varys, and this connection is not one — the path would be read on the server's filesystem rather than yours. Use \`imageRef\` instead: upload the file with \`POST /mcp/uploads\` and name the handle it returns. That keeps the bytes out of your output exactly as a path would.`,
+      `${tool}: \`imagePath\` is only accepted from a client on the same machine as Varys, and this connection is not one — the path would be read on the server's filesystem rather than yours. ${uploadInstruction(ctx)}`,
     );
   }
 
@@ -218,31 +272,4 @@ function readLocalPng(raw: string, tool: string, ctx: CallerContext): Buffer {
     );
   }
   return readFileSync(path);
-}
-
-/**
- * Decode base64, having first checked it is base64 — which Node will not do for you.
- *
- * The alphabet check catches a blob that picked up a stray character; it cannot catch one that
- * was merely cut short, because every character of a truncated string is still valid. The IEND
- * check in {@link decodePng} is what catches that one.
- */
-function decodeBase64(raw: string, tool: string): Buffer {
-  // A data URL is what several capture tools hand back, so it is tolerated rather than refused.
-  const stripped = raw.replace(/^data:image\/[a-z+]+;base64,/i, "");
-  // Whitespace is how a long string survives being wrapped, and carries no meaning.
-  const compact = stripped.replace(/\s+/g, "");
-  // base64url (`-_`) is accepted too: Node decodes it, and refusing it would only be pedantry.
-  if (!/^[A-Za-z0-9+/\-_]*={0,2}$/.test(compact)) {
-    const bad = compact.match(/[^A-Za-z0-9+/\-_=]/)?.[0] ?? "";
-    throw new BadRequestException(
-      `${tool}: \`image\` is not valid base64 — it contains ${JSON.stringify(bad)}. Node would have decoded the part before that character and silently discarded the rest, leaving a half-image nobody could tell from a whole one, so it is refused instead. Send \`imagePath\` (the absolute path to the .png on this machine) and skip encoding altogether.`,
-    );
-  }
-  if (compact.replace(/=+$/, "").length % 4 === 1) {
-    throw new BadRequestException(
-      `${tool}: \`image\` is not a whole base64 string — its length cannot encode any number of bytes, which means it was cut short. Send \`imagePath\` (the absolute path to the .png on this machine) instead of re-sending it.`,
-    );
-  }
-  return Buffer.from(compact, "base64");
 }

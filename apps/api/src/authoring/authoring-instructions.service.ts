@@ -12,8 +12,13 @@ import { DEFAULT_AUTHORING_INSTRUCTIONS, envOperatorInstructions } from "./autho
  * `open_session`'s `mode`, which the server now refuses. Bumping the key retires every such
  * override in one move — the new baked default becomes authoritative — while leaving future
  * customisations durable. The orphaned row is dropped by the bootstrap DDL. The `additional` layer
- * keeps its key: it is team guidance, not the authoring contract. */
-const BASE_KEY = "authoring_instructions_base_v2";
+ * keeps its key: it is team guidance, not the authoring contract.
+ *
+ * `_v3` for the same reason: captures are now files only, and an override stored before that
+ * carries no such rule — so a deployment that had ever edited this prompt would go on letting
+ * Claude reach for base64 and discover it was refused, one wasted call at a time, no matter what
+ * shipped in the default. */
+const BASE_KEY = "authoring_instructions_base_v3";
 const ADDITIONAL_KEY = "authoring_instructions_additional";
 
 /**

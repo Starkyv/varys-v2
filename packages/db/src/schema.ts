@@ -1037,6 +1037,10 @@ CREATE TABLE IF NOT EXISTS app_settings (
 -- deployment falls back to the new baked-in default, which is the only text that matches the
 -- tools. The "additional" layer is untouched — it is team guidance, not the authoring contract.
 DELETE FROM app_settings WHERE key = 'authoring_instructions_base';
+-- _v2 retires the same way, and for the same kind of reason: captures became files only (there is
+-- no base64 argument left to teach), so an override written before that is prose about a tool
+-- surface that no longer exists.
+DELETE FROM app_settings WHERE key = 'authoring_instructions_base_v2';
 -- Auth & multi-user (Slice 10 — better-auth-owned tables). These back Varys's OWN
 -- user authentication (who can use Varys), distinct from the per-environment
 -- app-under-test login vault. better-auth manages these tables itself (via its kysely

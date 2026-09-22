@@ -1,5 +1,5 @@
 import type { IncomingHttpHeaders } from "node:http";
-import { BadRequestException, Controller, Headers, Post, Req, Res } from "@nestjs/common";
+import { BadRequestException, Controller, Headers, Param, Post, Req, Res } from "@nestjs/common";
 import { Public } from "../auth/public.decorator";
 import { McpAuthService, McpUnauthorized } from "./mcp-auth.service";
 import { UploadsService } from "./uploads.service";
@@ -16,6 +16,15 @@ import { UploadsService } from "./uploads.service";
  * uploader is a terminal, not a browser. It is not unauthenticated: every request resolves a real
  * principal through the same `McpAuthService`, and the handle it mints is redeemable only by that
  * principal.
+ *
+ * There are two ways to be that principal, and they exist for two different callers:
+ *
+ *  - **`POST /mcp/uploads`** with the OAuth bearer — for anything that actually HOLDS the token:
+ *    the E2E suite, a script, a person with curl.
+ *  - **`POST /mcp/uploads/:slot`** with no header at all — for the AGENT, which holds no token
+ *    (its MCP client does) and therefore could never use the route above. The slot is minted by
+ *    an authenticated tool call and resolves to that same principal, so this is the same identity
+ *    arriving by a different door, not a way in without one.
  */
 /** The slice of the HTTP response we touch — express types are only available transitively via
  *  @nestjs/platform-express, so `McpController` declares the same shims rather than depend on them. */
@@ -92,5 +101,42 @@ export class UploadsController {
     // signature, IEND and sha256 checks stay in exactly one place and a screenshot cannot reach
     // storage down a path that skipped them.
     return { imageRef, bytes: body.length };
+  }
+
+  /**
+   * The same upload, addressed by CAPABILITY — the route an agent can actually reach.
+   *
+   * No `Authorization` header is read, and that is the design rather than a relaxation: the slot
+   * in the path was minted by an authenticated tool call and carries that call's principal, so
+   * the identity is exactly as strong as the one above. What it removes is the requirement to
+   * hold a token in a shell that never had one.
+   *
+   * The slot is NOT consumed. An agent captures several states per walk and re-mints on every
+   * tool response anyway; making the URL single-use would only force a round trip before each
+   * capture. The single-use property lives on the handle this returns, which is the thing that
+   * must bind to exactly one checkpoint.
+   */
+  @Public()
+  @Post("uploads/:slot")
+  async uploadToSlot(
+    @Param("slot") slot: string,
+    @Req() req: HttpReq,
+    @Res({ passthrough: true }) res: HttpRes,
+  ): Promise<{ imageRef: string; bytes: number } | undefined> {
+    const ownerId = this.uploads.slotOwner(slot);
+    if (!ownerId) {
+      // Unknown and expired read the same, for the reason a handle's failures do: they are both
+      // "this is not your URL", and an oracle that told them apart would only help a guesser.
+      res.status(401);
+      return undefined;
+    }
+
+    const body = await readBody(req);
+    if (body.length === 0) {
+      throw new BadRequestException(
+        "POST the PNG's raw bytes with `Content-Type: image/png` (curl: `--data-binary @shot.png`). This endpoint takes the file itself, not JSON and not base64 — sending base64 here would reintroduce the encoding step it exists to remove.",
+      );
+    }
+    return { imageRef: this.uploads.put(ownerId, body), bytes: body.length };
   }
 }

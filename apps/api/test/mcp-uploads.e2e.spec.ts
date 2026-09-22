@@ -1,5 +1,5 @@
 import "reflect-metadata";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { INestApplication } from "@nestjs/common";
@@ -9,7 +9,14 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
 import { authed, mcpToken, mintUser, prepareAuth, type TestIdentity } from "./auth-harness";
 import { startTestDb, type TestDb } from "./db-harness";
-import { mcpCallTool, mcpTool, pngFixture, pngSha256 } from "./mcp-harness";
+import {
+  mcpCallTool,
+  mcpTool,
+  pngBase64,
+  pngFixture,
+  pngSha256,
+  pngTruncated,
+} from "./mcp-harness";
 
 /**
  * Handing Varys a screenshot OUT OF BAND — `POST /mcp/uploads`.
@@ -23,6 +30,13 @@ import { mcpCallTool, mcpTool, pngFixture, pngSha256 } from "./mcp-harness";
  * What is asserted here is what a handle IS, since everything else about it follows: it is
  * single-use, it is owner-scoped, and it is not a way around the format checks. The bytes still
  * go through `decodePng` when the ref is redeemed — the ref chooses the route, never the rules.
+ *
+ * And what a SLOT is, which is the half that makes the route usable at all. A bearer-only upload
+ * endpoint was one the agent could not call: the OAuth token lives in its MCP client, not in its
+ * shell, so "upload it instead of sending base64" was advice with no command behind it. A slot is
+ * minted by an authenticated tool call and is itself the permission — which is why the tests
+ * below post to it with no `Authorization` header at all, and why that is the assertion rather
+ * than an oversight.
  */
 describe("/mcp/uploads — a screenshot that never passes through the model", () => {
   let app: INestApplication;
@@ -160,6 +174,8 @@ describe("/mcp/uploads — a screenshot that never passes through the model", ()
   it("refuses two sources at once, naming both", async () => {
     const bytes = pngFixture("two-sources");
     const { body } = await upload(bytes, mcpToken()).expect(201);
+    const onDisk = join(storageDir, "two-sources.png");
+    await writeFile(onDisk, bytes);
 
     const refused = await mcpCallTool(app, mcpToken(), "add_agent_checkpoint", {
       testId,
@@ -167,11 +183,118 @@ describe("/mcp/uploads — a screenshot that never passes through the model", ()
       instructions: "Go on.",
       comparePrompt: "Still rendered.",
       imageRef: body.imageRef,
-      image: bytes.toString("base64"),
+      imagePath: onDisk,
       sha256: pngSha256(bytes),
     });
     expect(refused.isError).toBe(true);
     expect(refused.content[0].text).toMatch(/exactly ONE/i);
     expect(refused.content[0].text).toMatch(/imageRef/);
+  });
+
+  it("refuses a truncated capture even though the upload itself succeeded", async () => {
+    // The IEND check outlived the route it was written for. It caught base64 cut short by an
+    // output cap; it now catches a file read while it was still being written, which arrives
+    // byte-for-byte the same and looks just as valid.
+    const { body } = await upload(pngTruncated("half-written"), mcpToken()).expect(201);
+
+    const refused = await mcpCallTool(app, mcpToken(), "add_agent_checkpoint", {
+      testId,
+      name: "half a picture",
+      instructions: "Go on.",
+      comparePrompt: "Still rendered.",
+      imageRef: body.imageRef,
+    });
+    expect(refused.isError).toBe(true);
+    expect(refused.content[0].text).toMatch(/TRUNCATED/);
+  });
+
+  it("refuses base64 outright, and says what to do instead", async () => {
+    // The field is gone from the tool schema — but MCP clients cache the tool list, so an agent
+    // mid-session goes on offering it. The schema stops the model CHOOSING this route; only the
+    // server stops the route existing, which is why the refusal lives here and not in a docstring.
+    const refused = await mcpCallTool(app, mcpToken(), "add_agent_checkpoint", {
+      testId,
+      name: "base64 is gone",
+      instructions: "Go on.",
+      comparePrompt: "Still rendered.",
+      image: pngBase64("through-the-model"),
+    });
+    expect(refused.isError).toBe(true);
+    expect(refused.content[0].text).toMatch(/no longer accepted/i);
+    // An instruction it can act on in one step, not a principle it has to translate.
+    expect(refused.content[0].text).toMatch(/imagePath|curl/);
+    // And the one thing no amount of trying will fix, said plainly.
+    expect(refused.content[0].text).toMatch(/only as an image in your context/i);
+
+    // Nothing was written: the image is decoded before the row, so the name is still free.
+    const after = await mcpTool<{ checkpoint: { name: string } }>(
+      app,
+      mcpToken(),
+      "add_agent_checkpoint",
+      {
+        testId,
+        name: "base64 is gone",
+        instructions: "Go on.",
+        comparePrompt: "Still rendered.",
+        imageRef: (await upload(pngFixture("retry"), mcpToken()).expect(201)).body.imageRef,
+      },
+    );
+    expect(after.checkpoint.name).toBe("base64 is gone");
+  });
+
+  describe("the slot — an upload URL a shell with no token can use", () => {
+    /** A tool call as it arrives on a DEPLOYED Varys: through a proxy, so `imagePath` is refused
+     *  and `upload.url` is the route the response teaches. */
+    const deployedCall = (name: string, args: unknown) =>
+      request(app.getHttpServer())
+        .post("/mcp")
+        .set("Authorization", `Bearer ${mcpToken()}`)
+        .set("X-Forwarded-For", "203.0.113.9")
+        .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } })
+        .expect(200);
+
+    it("rides every agent tool response, and takes a capture with no Authorization header", async () => {
+      const started = await deployedCall("create_agent_test", {
+        name: "slot journey",
+        instructions: "Open the app.",
+      });
+      const json = JSON.parse(started.body.result.content[0].text) as {
+        testId: string;
+        upload?: { url: string; expiresAt: string };
+      };
+      expect(json.upload?.url).toMatch(/\/mcp\/uploads\/slot_/);
+
+      // The agent's shell speaks here: it holds no OAuth token and sends none. The URL is the
+      // permission, and the handle that comes back belongs to whoever minted the slot.
+      const bytes = pngFixture("via-slot");
+      const sent = await request(app.getHttpServer())
+        .post(new URL(json.upload?.url ?? "").pathname)
+        .set("Content-Type", "image/png")
+        .send(bytes)
+        .expect(201);
+      expect(sent.body.imageRef).toMatch(/^upl_/);
+
+      const written = await mcpTool<{ checkpoint: { name: string } }>(
+        app,
+        mcpToken(),
+        "add_agent_checkpoint",
+        {
+          testId: json.testId,
+          name: "reached by slot",
+          instructions: "Open the app.",
+          comparePrompt: "The shell is rendered.",
+          imageRef: sent.body.imageRef,
+        },
+      );
+      expect(written.checkpoint.name).toBe("reached by slot");
+    });
+
+    it("refuses a slot nobody minted", async () => {
+      await request(app.getHttpServer())
+        .post("/mcp/uploads/slot_notaslotanyonemintedatall")
+        .set("Content-Type", "image/png")
+        .send(pngFixture("forged"))
+        .expect(401);
+    });
   });
 });
