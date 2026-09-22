@@ -32,8 +32,13 @@ RUN WXT_API_BASE="$WXT_API_BASE" pnpm --filter @varys/extension exec wxt zip \
 # `npx` installs it straight from here — no npm publish, no registry account, and it can never be
 # a version older than the Varys it was downloaded from. It has NO runtime dependencies (its only
 # import of @varys/review-contract is type-only), so the tarball installs standalone.
+# (npm's --workspace can't see this repo's packages — the workspace is declared in
+# pnpm-workspace.yaml, not in the root package.json — so pack from the package directory.)
 RUN pnpm --filter @varys/connect build \
- && npm pack --pack-destination apps/web/dist/downloads --workspace @varys/connect \
+ && mkdir -p /app/apps/web/dist/downloads \
+ && cd apps/connect \
+ && npm pack --pack-destination /app/apps/web/dist/downloads \
+ && cd /app \
  && mv apps/web/dist/downloads/varys-connect-*.tgz apps/web/dist/downloads/varys-connect.tgz
 
 # Unprivileged nginx (listens on 8080, runs as a non-root user).

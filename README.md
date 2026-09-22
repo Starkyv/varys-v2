@@ -108,6 +108,38 @@ Lease, same review and approval.
 
 See [`apps/connect/README.md`](./apps/connect/README.md) for what the helper will and won't do.
 
+## Getting a screenshot into Varys
+
+Every Checkpoint needs a real capture — Varys refuses the write without one, because prose about a
+state you reached and prose about one you imagined read identically on the page. There are three
+routes to those bytes, and the first two are the ones that matter:
+
+| | When |
+|---|---|
+| **`imageRef`** | Anywhere. Upload the file from your own shell, name the handle in the tool call. |
+| **`imagePath`** | Only when your agent and Varys are the same machine — the file is read on the **server's** filesystem, so a deployed Varys refuses it. |
+| **`image`** (base64) | Last resort. The bytes travel through the agent's own output. |
+
+Upload with the same bearer token the MCP client already holds:
+
+```bash
+curl -s -X POST "$VARYS_URL/mcp/uploads" \
+  -H "Authorization: Bearer $VARYS_TOKEN" \
+  -H "Content-Type: image/png" \
+  --data-binary @shot.png
+# → {"imageRef":"upl_…","bytes":84213}
+```
+
+Then pass `imageRef: "upl_…"` to `add_agent_checkpoint`, `submit_checkpoint` or `submit_evidence`.
+A handle is single-use, expires in ten minutes, and is redeemable only by the principal that minted
+it. The bytes still go through the same signature / IEND / `sha256` checks when it is redeemed —
+the handle picks the route, never the rules.
+
+**Why it exists.** Base64 in `image` makes a few hundred KB of PNG into a few hundred KB of the
+agent's own output, and the limit that bites is the agent's, not Varys's (the body parser takes
+5 MB). The workaround that invites — crop the screenshot until the base64 fits — quietly degrades
+the one artifact a human is going to approve as a baseline. Upload it instead. Never shrink it.
+
 ## Create and review a test
 
 1. **Build + load the recorder extension:**

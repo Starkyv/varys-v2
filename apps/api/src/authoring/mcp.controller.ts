@@ -17,6 +17,7 @@ import {
 import { BridgeService } from "./bridge.service";
 import { McpAuthService, type McpPrincipal, McpUnauthorized } from "./mcp-auth.service";
 import { McpStatusService } from "./mcp-status.service";
+import { UploadsService } from "./uploads.service";
 import type { CallerContext } from "./png";
 import { RunToolService } from "./run-tool.service";
 
@@ -56,11 +57,17 @@ function imageArgs(subject: string, ctx: CallerContext): Record<string, unknown>
       type: "string",
       description: ctx.local
         ? `PREFERRED — the absolute path to ${subject} on this machine, which Varys opens itself. Use it whenever the capture is on disk, and write it to disk if it is not: bytes read from a file cannot be truncated on the way here, and a truncated screenshot is not something anyone can spot afterwards. \`~\` is expanded; a \`file://\` URL is accepted.`
-        : `Not available on this connection — you are not on the same machine as Varys, so a path here would name a file on the server rather than one of yours. Send \`image\` with \`sha256\`.`,
+        : `Not available on this connection — you are not on the same machine as Varys, so a path here would name a file on the server rather than one of yours. Use \`imageRef\`.`,
+    },
+    imageRef: {
+      type: "string",
+      description: ctx.local
+        ? `A handle from \`POST /mcp/uploads\`. \`imagePath\` is simpler on this connection, since you and Varys are the same machine — but this works too.`
+        : `PREFERRED — a handle from \`POST /mcp/uploads\`. Upload the file from your own shell and name the handle it returns: \`curl -s -X POST ${"$"}{VARYS_URL}/mcp/uploads -H "Authorization: Bearer ${"$"}{TOKEN}" -H "Content-Type: image/png" --data-binary @shot.png\`. It answers \`{"imageRef":"upl_…"}\`, good once and for a few minutes. Do this rather than base64: the bytes go straight from disk to Varys, so nothing can cut them short, and a full-size screenshot costs you no output at all. NEVER crop or shrink a capture to make base64 fit — the picture you send becomes the baseline a human approves.`,
     },
     image: {
       type: "string",
-      description: `${subject}, as base64-encoded PNG bytes (a \`data:\` URL is fine too). Needed only when you cannot give \`imagePath\`. Send \`sha256\` with it: a long base64 string is easy to cut short and impossible to recognise as cut short.`,
+      description: `${subject}, as base64-encoded PNG bytes (a \`data:\` URL is fine too). The LAST resort, needed only when you can give neither \`imagePath\` nor \`imageRef\` — it is the one route where the image travels through your own output. Send \`sha256\` with it: a long base64 string is easy to cut short and impossible to recognise as cut short.`,
     },
     sha256: {
       type: "string",
@@ -80,11 +87,15 @@ function imageArgs(subject: string, ctx: CallerContext): Record<string, unknown>
  * socket peer is the proxy and the real client is somewhere else entirely. Varys sets no
  * `trust proxy`, so there is no configured hop to make an exception for.
  */
-function callerContext(req: HttpReq, headers: IncomingHttpHeaders): CallerContext {
+function callerContext(
+  req: HttpReq,
+  headers: IncomingHttpHeaders,
+  takeUpload: (ref: string) => Buffer | null,
+): CallerContext {
   const forwarded = headers["x-forwarded-for"] ?? headers.forwarded;
   const addr = req?.socket?.remoteAddress ?? "";
   const loopback = addr === "::1" || addr === "127.0.0.1" || addr.startsWith("::ffff:127.");
-  return { local: loopback && !forwarded };
+  return { local: loopback && !forwarded, takeUpload };
 }
 
 /**
@@ -221,6 +232,9 @@ export class McpController {
     // WRITING an Agent-Driven Test, as opposed to running one. Human principals only, and only
     // ever into a Draft — see `AgentAuthoringService`.
     @Inject(AgentAuthoringService) private readonly agentAuthoring: AgentAuthoringService,
+    // Screenshots the caller's own shell uploaded, so their bytes never travelled through the
+    // model's output. Redeeming a handle is all this controller does with them.
+    @Inject(UploadsService) private readonly uploads: UploadsService,
   ) {}
 
   // Streamable HTTP: this server doesn't push, so the optional server→client SSE stream
@@ -248,7 +262,9 @@ export class McpController {
     }
 
     this.mcpStatus.touch(user.id); // record activity so THIS user's web app shows "active"
-    const ctx = callerContext(req, headers);
+    // Bound to THIS principal, so a handle minted by one person is unredeemable by another
+    // without `png.ts` having to know that identities exist.
+    const ctx = callerContext(req, headers, (ref) => this.uploads.take(user.id, ref));
     let result: unknown;
     if (Array.isArray(body)) {
       const out = (await Promise.all(body.map((m) => this.handle(m, user, ctx)))).filter(
@@ -793,7 +809,7 @@ export class McpController {
       {
         name: "add_agent_checkpoint",
         description:
-          "Add one **Checkpoint** to a Draft you created with create_agent_test: a state on the journey, how to get back to it, what counts as still being right — and the screenshot proving you actually reached it.\n\nCall it once per state, in journey order. The rows are cumulative: each Checkpoint's `instructions` continue from where the previous one left the app, so write them as the next thing to do and not as a fresh start from the login page.\n\n**The image is required and there is no way around it.** Prose about a state you reached and prose about one you imagined read identically on the page, so the picture is the only thing separating them — which is why Varys refuses the write rather than asking you nicely. Capture the state you are looking at, right now, before you move on.\n\n**Save the capture to a file and send `imagePath`.** Base64 in `image` still works, but it goes through your own output, and base64 that gets cut short decodes into a valid-looking half-image rather than an error — Varys refuses those now, which costs you the call. A path cannot be truncated. If you must send `image`, send `sha256` with it. A Checkpoint's name is permanent and taken once, so a rejected capture is a slot you cannot retry. If you could not reach a state, do not write a Checkpoint for it: say so to the user instead. A Checkpoint nobody can reach is `unreached` in every future run, and because the Manifest is a closed set the only fix is editing the test.\n\n`comparePrompt` is what a future run judges its screenshot against, and both directions of it are worth writing. Say what must hold, and say what is allowed to vary — figures that move, dates, avatars, anything seeded per-environment. Too tight and the test goes red on legitimate change; too loose and it passes through a regression. You have just seen the page, so you know which is which better than the author will.\n\nYour capture is stored as a REFERENCE image, never a baseline. The first run against an environment proposes the baselines and a human approves them there — nothing you submit here can pass a future run on its own.\n\nOnly Drafts can be written to. Once a human promotes the test it is in service and these tools no longer reach it; make the Draft right before it is promoted, because there is no second pass.",
+          "Add one **Checkpoint** to a Draft you created with create_agent_test: a state on the journey, how to get back to it, what counts as still being right — and the screenshot proving you actually reached it.\n\nCall it once per state, in journey order. The rows are cumulative: each Checkpoint's `instructions` continue from where the previous one left the app, so write them as the next thing to do and not as a fresh start from the login page.\n\n**The image is required and there is no way around it.** Prose about a state you reached and prose about one you imagined read identically on the page, so the picture is the only thing separating them — which is why Varys refuses the write rather than asking you nicely. Capture the state you are looking at, right now, before you move on.\n\n**Save the capture to a file and send it out of band** — `imagePath` if you are on the same machine as Varys, otherwise `imageRef` (upload the file with `POST /mcp/uploads` and name the handle it returns). Base64 in `image` still works and is the last resort: it goes through your own output, and base64 that gets cut short decodes into a valid-looking half-image rather than an error — Varys refuses those now, which costs you the call. Neither a path nor an upload can be truncated. If you must send `image`, send `sha256` with it. Whatever you do, do NOT shrink or crop the capture to make base64 fit: the picture you send is the picture a human reviews. A Checkpoint's name is permanent and taken once, so a rejected capture is a slot you cannot retry. If you could not reach a state, do not write a Checkpoint for it: say so to the user instead. A Checkpoint nobody can reach is `unreached` in every future run, and because the Manifest is a closed set the only fix is editing the test.\n\n`comparePrompt` is what a future run judges its screenshot against, and both directions of it are worth writing. Say what must hold, and say what is allowed to vary — figures that move, dates, avatars, anything seeded per-environment. Too tight and the test goes red on legitimate change; too loose and it passes through a regression. You have just seen the page, so you know which is which better than the author will.\n\nYour capture is stored as a REFERENCE image, never a baseline. The first run against an environment proposes the baselines and a human approves them there — nothing you submit here can pass a future run on its own.\n\nOnly Drafts can be written to. Once a human promotes the test it is in service and these tools no longer reach it; make the Draft right before it is promoted, because there is no second pass.",
         inputSchema: {
           type: "object",
           properties: {
@@ -826,6 +842,7 @@ export class McpController {
               comparePrompt: String(args.comparePrompt ?? ""),
               image: String(args.image ?? ""),
               imagePath: String(args.imagePath ?? ""),
+              imageRef: String(args.imageRef ?? ""),
               sha256: String(args.sha256 ?? ""),
             },
             ctx,
@@ -875,7 +892,7 @@ export class McpController {
       {
         name: "submit_checkpoint",
         description:
-          "Fill ONE slot of the Checkpoint Manifest of a run you started with start_agent_run: the screenshot you captured, your verdict on it, and your reasoning.\n\n`name` must be one of the Manifest's own names, spelled exactly. The Manifest is a closed set and anything else is refused — not to be awkward, but because a name that drifts between runs (`Dashboard loaded` this week, `dashboard-empty` last week) makes a test red forever for reasons that have nothing to do with the application.\n\n`reasoning` is REQUIRED and there is no polite default. You drove, and you are also the judge — Varys watched none of it, makes no model call of its own here, and holds no second opinion. Your rationale is the entire audit trail a human will read next to the two pictures, so write what you compared, what matched, and what you decided to overlook. \"Looks right\" is not reviewable.\n\nRead back what Varys actually RECORDED, because it is not always what your verdict asked for. A `pass` on a slot with no approved baseline is stored as `pending-baseline`: there was no golden to compare against, so the verdict is inert and your capture is a proposal awaiting a human's approval. Do not report such a slot as passing, however carefully you looked. A `fail` against a real baseline is stored as `diff` and stands — nothing retries it, and you must not re-capture the slot hoping for a kinder answer.\n\nCapture however you like; say how you did it in `capture` so a reviewer puzzling over two very different pictures can see whether they were even taken the same way. Write it to a file and send `imagePath` rather than base64 — a slot is filled exactly once, so a capture corrupted in transit is not something this run gets a second go at.",
+          "Fill ONE slot of the Checkpoint Manifest of a run you started with start_agent_run: the screenshot you captured, your verdict on it, and your reasoning.\n\n`name` must be one of the Manifest's own names, spelled exactly. The Manifest is a closed set and anything else is refused — not to be awkward, but because a name that drifts between runs (`Dashboard loaded` this week, `dashboard-empty` last week) makes a test red forever for reasons that have nothing to do with the application.\n\n`reasoning` is REQUIRED and there is no polite default. You drove, and you are also the judge — Varys watched none of it, makes no model call of its own here, and holds no second opinion. Your rationale is the entire audit trail a human will read next to the two pictures, so write what you compared, what matched, and what you decided to overlook. \"Looks right\" is not reviewable.\n\nRead back what Varys actually RECORDED, because it is not always what your verdict asked for. A `pass` on a slot with no approved baseline is stored as `pending-baseline`: there was no golden to compare against, so the verdict is inert and your capture is a proposal awaiting a human's approval. Do not report such a slot as passing, however carefully you looked. A `fail` against a real baseline is stored as `diff` and stands — nothing retries it, and you must not re-capture the slot hoping for a kinder answer.\n\nCapture however you like; say how you did it in `capture` so a reviewer puzzling over two very different pictures can see whether they were even taken the same way. Write it to a file and send it out of band rather than as base64 — `imagePath` on this machine, or `imageRef` from `POST /mcp/uploads` anywhere else. A slot is filled exactly once, so a capture corrupted in transit is not something this run gets a second go at, and cropping one to fit an output limit is a baseline nobody can use.",
         inputSchema: {
           type: "object",
           properties: {
@@ -916,6 +933,7 @@ export class McpController {
               name: String(args.name ?? ""),
               image: String(args.image ?? ""),
               imagePath: String(args.imagePath ?? ""),
+              imageRef: String(args.imageRef ?? ""),
               sha256: String(args.sha256 ?? ""),
               verdict: args.verdict as AgentVerdict,
               reasoning: String(args.reasoning ?? ""),
@@ -946,6 +964,7 @@ export class McpController {
               runId: String(args.runId ?? ""),
               image: String(args.image ?? ""),
               imagePath: String(args.imagePath ?? ""),
+              imageRef: String(args.imageRef ?? ""),
               sha256: String(args.sha256 ?? ""),
               note: args.note === undefined ? undefined : String(args.note),
             },

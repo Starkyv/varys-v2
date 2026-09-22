@@ -37,6 +37,9 @@ export interface ImageArg {
   image?: string;
   /** Absolute path to a `.png` on the machine running Varys. Loopback callers only. */
   imagePath?: string;
+  /** A handle from `POST /mcp/uploads`, where the caller's own shell sent the file. The route for
+   *  everyone `imagePath` cannot serve — which is everyone not on the same machine as Varys. */
+  imageRef?: string;
   /** Optional hex SHA-256 of the PNG file's bytes. Verified against what actually arrived. */
   sha256?: string;
 }
@@ -46,6 +49,15 @@ export interface CallerContext {
   /** The request came in over the loopback interface, with no proxy hop claiming otherwise — so
    *  the client is a process on this very machine and `imagePath` means something. */
   local: boolean;
+  /**
+   * Redeem an `imageRef` for the bytes the caller already uploaded, or null if it is not theirs to
+   * redeem. Single use.
+   *
+   * Passed in rather than imported so this module stays pure and knows nothing about who is
+   * calling: the controller closes over the authenticated principal, which is what makes one
+   * person's upload unredeemable by another without this function having to think about identity.
+   */
+  takeUpload?: (ref: string) => Buffer | null;
 }
 
 /**
@@ -80,7 +92,7 @@ export function decodePng(source: ImageArg, tool: string, ctx: CallerContext): B
   }
   if (!bytes.subarray(-PNG_IEND.length).equals(PNG_IEND)) {
     throw new BadRequestException(
-      `${tool}: the image is TRUNCATED — it starts with a valid PNG header but has no IEND terminator, so ${bytes.length} byte(s) arrived and the end of the file did not. Nothing was stored. This almost always means the base64 was cut short on its way here, which base64 decoding cannot detect: the header is at the front and survives, so a half-sent image looks entirely valid until this check. Do not re-send the same string. Pass \`imagePath\` instead — the absolute path to the .png on this machine, which Varys reads itself so the bytes never pass through your output at all — or re-encode the whole file and send \`sha256\` with it so a repeat of this is caught rather than stored.`,
+      `${tool}: the image is TRUNCATED — it starts with a valid PNG header but has no IEND terminator, so ${bytes.length} byte(s) arrived and the end of the file did not. Nothing was stored. This almost always means the base64 was cut short on its way here, which base64 decoding cannot detect: the header is at the front and survives, so a half-sent image looks entirely valid until this check. Do not re-send the same string. Send the file out of band instead, so the bytes never pass through your output at all: \`imageRef\` — upload it with \`POST /mcp/uploads\` and name the handle — or \`imagePath\` if you are on the same machine as Varys. Failing both, re-encode the WHOLE file and send \`sha256\` with it so a repeat of this is caught rather than stored.`,
     );
   }
 
@@ -94,31 +106,63 @@ export function decodePng(source: ImageArg, tool: string, ctx: CallerContext): B
     const actual = createHash("sha256").update(bytes).digest("hex");
     if (actual !== expected) {
       throw new BadRequestException(
-        `${tool}: the image does not match the \`sha256\` you sent with it, so it was corrupted in transit and nothing was stored. You said ${expected}; ${bytes.length} byte(s) arrived hashing to ${actual}. Send \`imagePath\` instead — the absolute path to the file on this machine — so the bytes do not travel through your output.`,
+        `${tool}: the image does not match the \`sha256\` you sent with it, so it was corrupted in transit and nothing was stored. You said ${expected}; ${bytes.length} byte(s) arrived hashing to ${actual}. Send it out of band instead — \`imageRef\` from \`POST /mcp/uploads\`, or \`imagePath\` on this machine — so the bytes do not travel through your output.`,
       );
     }
   }
   return bytes;
 }
 
-/** Resolve the argument pair to bytes. Exactly one route, chosen explicitly: guessing whether a
- *  string is a path or base64 is not possible in general — `/` is in the base64 alphabet — and a
- *  wrong guess here is a file read the caller did not ask for. */
+/** Resolve the argument to bytes down exactly ONE of its three routes, chosen explicitly: guessing
+ *  whether a string is a path or base64 is not possible in general — `/` is in the base64 alphabet
+ *  — and a wrong guess here is a file read the caller did not ask for. */
 function readBytes(source: ImageArg, tool: string, ctx: CallerContext): Buffer {
   const image = (source.image ?? "").trim();
   const imagePath = (source.imagePath ?? "").trim();
+  const imageRef = (source.imageRef ?? "").trim();
 
-  if (image && imagePath) {
+  const given = [
+    image && "`image`",
+    imagePath && "`imagePath`",
+    imageRef && "`imageRef`",
+  ].filter((x): x is string => Boolean(x));
+
+  if (given.length > 1) {
     throw new BadRequestException(
-      `${tool}: send EITHER \`image\` (base64 bytes) or \`imagePath\` (a file on this machine), not both — with two sources there is no saying which one the stored artifact came from.`,
+      `${tool}: send exactly ONE of \`image\`, \`imagePath\` and \`imageRef\` — you sent ${given.join(" and ")}, and with two sources there is no saying which one the stored artifact came from.`,
     );
   }
-  if (!image && !imagePath) {
+  if (given.length === 0) {
     throw new BadRequestException(
-      `${tool} needs the screenshot itself: \`imagePath\`, the absolute path to a .png on this machine, or \`image\`, base64-encoded PNG bytes. Prefer the path — Varys reads the file directly, so the image cannot be truncated on its way through your output.`,
+      `${tool} needs the screenshot itself, by one of three routes: \`imageRef\` — upload the file with \`POST /mcp/uploads\` and name the handle it returns; \`imagePath\` — the absolute path to a .png, if you are on the same machine as Varys; or \`image\` — base64-encoded PNG bytes. Prefer either of the first two: they are the ones where the bytes never pass through your own output, and so cannot be truncated on the way here.`,
     );
   }
-  return imagePath ? readLocalPng(imagePath, tool, ctx) : decodeBase64(image, tool);
+  if (imagePath) return readLocalPng(imagePath, tool, ctx);
+  if (imageRef) return readUploaded(imageRef, tool, ctx);
+  return decodeBase64(image, tool);
+}
+
+/**
+ * Redeem a handle minted by `POST /mcp/uploads`.
+ *
+ * The route that exists for everyone `imagePath` cannot serve. The caller's own shell sent the
+ * file over HTTP, so — exactly as with a path — no encoding happened and there is nothing that
+ * could have been silently truncated. What it costs is one extra call; what it buys is that a
+ * deployed Varys stops forcing a few hundred KB of base64 through the model's output, which is
+ * where the pressure to crop the screenshot until it fits came from.
+ *
+ * A ref is single use and redeemable only by the principal that minted it. Every way it can fail
+ * — unknown, expired, already claimed, somebody else's — reads the same, because they are all
+ * "this is not your image" and telling them apart would only help someone guessing.
+ */
+function readUploaded(ref: string, tool: string, ctx: CallerContext): Buffer {
+  const bytes = ctx.takeUpload?.(ref) ?? null;
+  if (!bytes) {
+    throw new BadRequestException(
+      `${tool}: \`imageRef\` ${JSON.stringify(ref)} is not an upload you can claim — it is unknown, already used, or expired. A handle is good once and for a few minutes. Upload the file again with \`POST /mcp/uploads\` and use the handle it returns.`,
+    );
+  }
+  return bytes;
 }
 
 /**
@@ -135,7 +179,7 @@ function readBytes(source: ImageArg, tool: string, ctx: CallerContext): Buffer {
 function readLocalPng(raw: string, tool: string, ctx: CallerContext): Buffer {
   if (!ctx.local) {
     throw new BadRequestException(
-      `${tool}: \`imagePath\` is only accepted from a client on the same machine as Varys, and this connection is not one — the path would be read on the server's filesystem rather than yours. Send \`image\` (base64 PNG bytes) instead, with \`sha256\` so truncation is caught.`,
+      `${tool}: \`imagePath\` is only accepted from a client on the same machine as Varys, and this connection is not one — the path would be read on the server's filesystem rather than yours. Use \`imageRef\` instead: upload the file with \`POST /mcp/uploads\` and name the handle it returns. That keeps the bytes out of your output exactly as a path would.`,
     );
   }
 

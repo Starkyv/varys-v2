@@ -14,6 +14,8 @@ import { McpAuthService } from "./mcp-auth.service";
 import { McpController } from "./mcp.controller";
 import { McpStatusService } from "./mcp-status.service";
 import { RunToolService } from "./run-tool.service";
+import { UploadsController } from "./uploads.controller";
+import { UploadsService } from "./uploads.service";
 
 @Module({
   // TestsModule exports TestsService — the authoring session persists its result as a
@@ -29,8 +31,15 @@ import { RunToolService } from "./run-tool.service";
   // McpController is the Claude-Code transport (OAuth-bearer authenticated, Slice 16); LivePreviewController is the
   // authenticated in-product live-preview surface (Slice 15); BridgeController is the
   // in-product relay that links a user's Bridge Helper to their chat (Slice 15);
-  // AuthoringInstructionsController is the authenticated editor for the MCP prompt.
-  controllers: [McpController, LivePreviewController, BridgeController, AuthoringInstructionsController],
+  // AuthoringInstructionsController is the authenticated editor for the MCP prompt;
+  // UploadsController takes a screenshot out of band so its bytes never pass through the model.
+  controllers: [
+    McpController,
+    UploadsController,
+    LivePreviewController,
+    BridgeController,
+    AuthoringInstructionsController,
+  ],
   providers: [
     AuthoringSessionService,
     BridgeService,
@@ -40,6 +49,7 @@ import { RunToolService } from "./run-tool.service";
     RunToolService,
     AgentRunService,
     AgentAuthoringService,
+    UploadsService,
   ],
 })
 export class AuthoringModule {}
