@@ -120,7 +120,20 @@ routes to those bytes, and the first two are the ones that matter:
 | **`imagePath`** | Only when your agent and Varys are the same machine — the file is read on the **server's** filesystem, so a deployed Varys refuses it. |
 | **`image`** (base64) | Last resort. The bytes travel through the agent's own output. |
 
-Upload with the same bearer token the MCP client already holds:
+Upload it **either** as the signed-in user in a browser session, or with the MCP bearer token.
+Both resolve to the same user id, so a handle you mint yourself is redeemable by your own agent —
+which matters because Claude Code keeps its OAuth token in the OS keyring, where an agent told to
+`curl` cannot reach it:
+
+```bash
+# as you, with the session cookie your browser already has
+curl -s -X POST "$VARYS_URL/mcp/uploads" \
+  -H "Cookie: better-auth.session_token=…" \
+  -H "Content-Type: image/png" \
+  --data-binary @shot.png
+```
+
+Or with a bearer, where one is to hand:
 
 ```bash
 curl -s -X POST "$VARYS_URL/mcp/uploads" \

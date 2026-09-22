@@ -1,5 +1,7 @@
 import type { IncomingHttpHeaders } from "node:http";
 import { BadRequestException, Controller, Headers, Param, Post, Req, Res } from "@nestjs/common";
+import { fromNodeHeaders } from "better-auth/node";
+import { getAuth } from "../auth/auth";
 import { Public } from "../auth/public.decorator";
 import { McpAuthService, McpUnauthorized } from "./mcp-auth.service";
 import { UploadsService } from "./uploads.service";
@@ -80,11 +82,8 @@ export class UploadsController {
     @Req() req: HttpReq,
     @Res({ passthrough: true }) res: HttpRes,
   ): Promise<{ imageRef: string; bytes: number } | undefined> {
-    let ownerId: string;
-    try {
-      ownerId = (await this.mcpAuth.principal(headers)).id;
-    } catch (err) {
-      if (!(err instanceof McpUnauthorized)) throw err;
+    const ownerId = await this.ownerOf(headers);
+    if (!ownerId) {
       res.status(401);
       return undefined;
     }
@@ -138,5 +137,33 @@ export class UploadsController {
       );
     }
     return { imageRef: this.uploads.put(ownerId, body), bytes: body.length };
+  }
+
+  /**
+   * Who is uploading — by OAuth bearer, or by the web session cookie.
+   *
+   * The bearer is the agent's own credential and the obvious route. The COOKIE matters just as
+   * much, and for a reason worth stating: Claude Code keeps its OAuth tokens in the OS keyring,
+   * not in a file, so an agent asked to `curl` this endpoint cannot reach its own token — it is
+   * authenticated to Varys and unable to prove it to anything but its own MCP client. Without the
+   * cookie route the only person who could upload would be one who already had a token in hand,
+   * which in practice is nobody.
+   *
+   * Both resolve to the same `user.id`, which is what makes them interchangeable here: a handle
+   * minted in a browser is redeemable by that person's own agent, and by nobody else's.
+   */
+  private async ownerOf(headers: IncomingHttpHeaders): Promise<string | null> {
+    if (headers.authorization) {
+      try {
+        return (await this.mcpAuth.principal(headers)).id;
+      } catch (err) {
+        if (!(err instanceof McpUnauthorized)) throw err;
+        return null;
+      }
+    }
+    const session = await getAuth()
+      .api.getSession({ headers: fromNodeHeaders(headers) })
+      .catch(() => null);
+    return session?.user?.id ?? null;
   }
 }

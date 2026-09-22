@@ -95,6 +95,28 @@ describe("/mcp/uploads — a screenshot that never passes through the model", ()
     expect(asJson.body.message).toMatch(/raw bytes/i);
   });
 
+  it("accepts the web session cookie too, so a person can upload what an agent cannot", async () => {
+    // Claude Code keeps its OAuth token in the OS keyring, so an agent told to `curl` this route
+    // cannot reach its own credential. The person running it is signed in to the web app, and
+    // resolves to the SAME user id — which is why the handle they mint is redeemable by their own
+    // agent's MCP session a moment later.
+    const res = await authed(app)
+      .post("/mcp/uploads")
+      .set("Content-Type", "image/png")
+      .send(pngFixture("by-the-person"))
+      .expect(201);
+    expect(res.body.imageRef).toMatch(/^upl_/);
+
+    const written = await mcpCallTool(app, mcpToken(), "add_agent_checkpoint", {
+      testId,
+      name: "uploaded in a browser",
+      instructions: "Open the app.",
+      comparePrompt: "The shell is rendered.",
+      imageRef: res.body.imageRef,
+    });
+    expect(written.isError).toBeFalsy();
+  });
+
   it("mints a handle a checkpoint can be written with, carrying the bytes it was given", async () => {
     const bytes = pngFixture("uploaded-capture");
     const res = await upload(bytes, mcpToken()).expect(201);
