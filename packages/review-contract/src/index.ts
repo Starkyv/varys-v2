@@ -650,6 +650,48 @@ export interface DraftView {
    */
   intent: string | null;
   checkpoints: DraftCheckpointPreview[];
+  /**
+   * Environment names that already hold at least one Baseline for this test.
+   *
+   * Surfaced so the approve control can say what has already been decided. Without it a reviewer
+   * approving captures for an environment twice gets a silent no-op and no way to tell that from
+   * a success — and "did this already happen?" is the question they actually have.
+   */
+  baselinedEnvironments: string[];
+}
+
+/**
+ * Body of `POST /drafts/:id/baselines` — approve an Agent-Driven Draft's authoring **Captures**
+ * as the **Baselines** for one environment.
+ *
+ * It exists because the alternative was ceremony. The agent already produced a picture of every
+ * state it reached; a human is going to look at a picture and approve it either way. Without this
+ * the only way to get one was to spend a whole run re-reaching states that had already been
+ * reached, purely to generate an image to approve.
+ *
+ * What it does NOT do is remove the human. Nothing here is automatic: the reviewer names the
+ * environment, because "this is correct" is a claim about somewhere, and picks which captures
+ * they are vouching for. Separate from promote, for the reason the two have always been separate
+ * — a test can be promoted without anyone having decided what correct looks like yet, and a
+ * capture can be approved for staging long before anyone files the test.
+ */
+export interface SeedBaselinesBody {
+  /** The environment these captures are correct FOR. Required — and an id rather than a name, so
+   *  a reviewer picks from what exists rather than typing a key that silently matches nothing. */
+  environmentId: string;
+  /** Which checkpoints to approve; omitted means every one that has a capture. */
+  checkpointNames?: string[];
+}
+
+/** What `POST /drafts/:id/baselines` actually did — read it back rather than assuming, since a
+ *  checkpoint with a baseline already is left alone rather than overwritten. */
+export interface SeedBaselinesResult {
+  /** The environment name the baselines were keyed under. */
+  environment: string;
+  /** Checkpoint names that now have a baseline they did not have before. */
+  seeded: string[];
+  /** Everything not seeded, and why — no capture to approve, or a baseline already there. */
+  skipped: { name: string; reason: string }[];
 }
 
 /** Body of `POST /drafts/:id/promote` — assign a folder + tags and make the test active

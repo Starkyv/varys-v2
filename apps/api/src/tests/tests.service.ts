@@ -26,6 +26,8 @@ import type {
   TestKind,
   TestStatus,
   TestSummary,
+  SeedBaselinesBody,
+  SeedBaselinesResult,
 } from "@varys/review-contract";
 import { AGENT_LEASE_MAX_SECONDS } from "@varys/review-contract";
 import { summarizeAssertion } from "../assertion-view";
@@ -62,6 +64,7 @@ import {
 } from "../db/schema";
 import { applyFingerprintPatch, hasMatchableSignal } from "../fingerprint-patch";
 import { summarizeFingerprint } from "../fingerprint-summary";
+import { viewportKeyOf } from "../runs/runs.service";
 import { folderChildren, subtreeOf } from "../suites/suite-membership";
 import { STORAGE } from "../storage/storage.module";
 
@@ -246,6 +249,24 @@ function describeValidationError(err: unknown): string {
 function previewKey(testId: string, checkpointName: string): string {
   const safe = checkpointName.replace(/[^\w.-]+/g, "_") || "checkpoint";
   return `drafts/${testId}/${safe}/preview.png`;
+}
+
+/**
+ * Where a Baseline seeded from an authoring Capture is stored.
+ *
+ * A COPY, and that is the whole point of this function existing. The preview key is upserted in
+ * place (`putDraftPreview`), so a checkpoint re-captured later rewrites those bytes — and a
+ * baseline that merely pointed at the preview would silently become a picture nobody approved.
+ * An approved image has to stop moving at the moment it is approved.
+ */
+function seededBaselineKey(
+  testId: string,
+  checkpointName: string,
+  environment: string,
+  viewportKey: string,
+): string {
+  const safe = (v: string): string => v.replace(/[^\w.-]+/g, "_") || "x";
+  return `baselines/${testId}/${safe(environment)}/${safe(viewportKey)}/${safe(checkpointName)}.png`;
 }
 
 /** A short human handle for a selector-wait's target fingerprint (display only). */
@@ -472,6 +493,127 @@ export class TestsService {
   }
 
   /**
+   * Approve an Agent-Driven Draft's authoring **Captures** as the **Baselines** for one
+   * environment — the picture the agent already took, accepted as the golden, without spending a
+   * Run to produce one to look at.
+   *
+   * The Run-and-approve path was never protecting anything a person does here instead. The
+   * reviewer looks at a capture and says "yes, that is right, for staging"; what the extra Run
+   * bought was a *different* picture of the same state, taken later, by the same agent, judged by
+   * the same person. So the ceremony went and the judgement stayed: nothing below is automatic,
+   * the environment is named by the person approving, and the approval is written with their
+   * email on it exactly as `RunsService.approve` writes one.
+   *
+   * **Agent-Driven only.** A pinned checkpoint is pixel-diffed, so its baseline and its captures
+   * must come off the same capture stack at the same viewport — an authoring preview and a run's
+   * screenshot only *look* interchangeable. This kind never pixel-diffs (the comparison is a
+   * judgement about two pictures), which is exactly why a capture taken by the agent's own tooling
+   * can stand as the golden here and cannot there.
+   *
+   * A checkpoint that already HAS a baseline for the environment is skipped, never overwritten.
+   * Replacing a golden is a Run's approval — there you are looking at the thing that disagreed
+   * with it, which is the only context in which "make this the new correct" means anything.
+   */
+  async seedBaselinesFromCaptures(
+    testId: string,
+    body: SeedBaselinesBody,
+    approvedBy: string,
+  ): Promise<SeedBaselinesResult> {
+    const [row] = await this.db
+      .select({ kind: tests.kind, definition: currentDefinition })
+      .from(tests)
+      .where(and(eq(tests.id, testId), isNotNull(currentDefinition)))
+      .limit(1);
+    if (!row) throw new NotFoundException(`Draft ${testId} not found`);
+    if (row.kind !== "agent") {
+      throw new BadRequestException(
+        "Only an Agent-Driven test's captures can be approved as baselines this way. A pinned test's checkpoints are compared pixel to pixel, so its baseline has to be captured by the same runner that will replay it — run the test and approve the capture there.",
+      );
+    }
+
+    const environmentId = (body.environmentId ?? "").trim();
+    if (!environmentId) {
+      throw new BadRequestException(
+        "Name the environment these captures are correct for. A baseline is keyed to one, and approving without saying which would put a golden somewhere nobody chose.",
+      );
+    }
+    const [env] = await this.db
+      .select({ name: environments.name })
+      .from(environments)
+      .where(eq(environments.id, environmentId))
+      .limit(1);
+    if (!env) throw new NotFoundException(`Environment ${environmentId} not found`);
+
+    // The same key the next run looks a baseline up by — see `AgentRunService.start`, which
+    // derives it from the definition for exactly this reason: the two sides must agree.
+    const viewportKey = viewportKeyOf((row.definition as TestDefinition).viewport);
+
+    const manifest = await this.db
+      .select({ name: agentCheckpoints.name })
+      .from(agentCheckpoints)
+      .where(eq(agentCheckpoints.testId, testId))
+      .orderBy(asc(agentCheckpoints.position));
+    const wanted = body.checkpointNames?.length ? new Set(body.checkpointNames) : null;
+    const names = manifest.map((c) => c.name).filter((n) => !wanted || wanted.has(n));
+
+    const previews = await this.db
+      .select({ name: draftPreviews.checkpointName, artifactKey: draftPreviews.artifactKey })
+      .from(draftPreviews)
+      .where(eq(draftPreviews.testId, testId));
+    const captureKeyOf = new Map(previews.map((p) => [p.name, p.artifactKey]));
+
+    const existing = await this.db
+      .select({ name: baselines.checkpointName })
+      .from(baselines)
+      .where(
+        and(
+          eq(baselines.testId, testId),
+          eq(baselines.environment, env.name),
+          eq(baselines.viewportKey, viewportKey),
+        ),
+      );
+    const already = new Set(existing.map((b) => b.name));
+
+    const seeded: string[] = [];
+    const skipped: { name: string; reason: string }[] = [];
+    for (const name of names) {
+      if (already.has(name)) {
+        skipped.push({
+          name,
+          reason: `already has a baseline for ${env.name} — replacing a golden is a Run's approval, not this`,
+        });
+        continue;
+      }
+      const captureKey = captureKeyOf.get(name);
+      if (!captureKey) {
+        skipped.push({ name, reason: "no capture was submitted for it" });
+        continue;
+      }
+      const bytes = await this.storage.get(captureKey);
+      if (!bytes) {
+        // The row survived its bytes. Reported rather than thrown: one lost artifact must not
+        // stop the other checkpoints from being approved.
+        skipped.push({ name, reason: "its capture is missing from storage" });
+        continue;
+      }
+      const key = seededBaselineKey(testId, name, env.name, viewportKey);
+      await this.storage.put(key, bytes);
+      await this.db.insert(baselines).values({
+        testId,
+        checkpointName: name,
+        environment: env.name,
+        viewportKey,
+        artifactKey: key,
+        approvedBy,
+        approvedAt: new Date(),
+      });
+      seeded.push(name);
+    }
+
+    return { environment: env.name, seeded, skipped };
+  }
+
+  /**
    * The AI-authored Draft review queue, newest first — each draft's checkpoint count and Brief,
    * so a reviewer can triage and open it.
    *
@@ -587,6 +729,13 @@ export class TestsService {
       return key ? this.storage.getUrl(key) : null;
     };
 
+    // What has already been decided for this test, so the approve control can say so rather than
+    // silently no-op on a second press.
+    const baselined = await this.db
+      .selectDistinct({ environment: baselines.environment })
+      .from(baselines)
+      .where(eq(baselines.testId, id));
+
     let checkpoints: DraftCheckpointPreview[];
     if (row.kind === "agent") {
       const cps = await this.db
@@ -626,6 +775,7 @@ export class TestsService {
       createdAt: row.createdAt.toISOString(),
       intent: row.intent,
       checkpoints,
+      baselinedEnvironments: baselined.map((b) => b.environment).sort(),
     };
   }
 

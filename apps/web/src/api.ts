@@ -21,6 +21,8 @@ import type {
   LocatorVerifyRequest,
   LocatorVerifyResult,
   PromoteDraftBody,
+  SeedBaselinesBody,
+  SeedBaselinesResult,
   PersistResult,
   ReEvaluation,
   RunSummary,
@@ -326,6 +328,33 @@ export async function promoteDraft(id: string, body: PromoteDraftBody): Promise<
         : `Failed to promote draft (${res.status})`,
     );
   }
+}
+
+/**
+ * Approve an Agent-Driven Draft's authoring captures as the baselines for one environment.
+ *
+ * Distinct call from promote because it is a distinct decision: this one declares what "correct"
+ * looks like for an environment, and it can happen before or after the test is filed.
+ */
+export async function seedDraftBaselines(
+  id: string,
+  body: SeedBaselinesBody,
+): Promise<SeedBaselinesResult> {
+  const res = await fetch(`${API_BASE}/drafts/${id}/baselines`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    // The server's own wording, when it sent one — it says which environment and why, and a
+    // generic "failed" here would throw that away.
+    const detail = await res
+      .json()
+      .then((b: { message?: string }) => b?.message)
+      .catch(() => undefined);
+    throw new Error(detail ?? `Failed to approve captures as baselines (${res.status})`);
+  }
+  return (await res.json()) as SeedBaselinesResult;
 }
 
 /** Discard a draft — hard-delete (irreversible). Throws on a non-2xx response. */

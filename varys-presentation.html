@@ -1,0 +1,767 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Varys — What we built, and what kept breaking</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=Inter:wght@400;700&display=swap" rel="stylesheet">
+<style>
+/* ─────────────────────────────────────────────────────────────
+   WIRED design language — strict black-on-white editorial duet.
+   Tokens transcribed from "Design System Analysis WIRED.md".
+   Square corners everywhere. No shadows. Hairlines carry elevation.
+   ───────────────────────────────────────────────────────────── */
+:root{
+  --ink:#000; --ink-soft:#1a1a1a; --body:#757575;
+  --hairline:#e0e0e0; --canvas:#fff; --canvas-soft:#f5f5f5; --link:#057dbc;
+
+  --display:"Playfair Display","Times New Roman",Georgia,serif;
+  --serif:"Source Serif 4",Lora,Georgia,"Times New Roman",serif;
+  --sans:Inter,"Helvetica Neue",Helvetica,Arial,sans-serif;
+
+  --xxs:2px; --xs:4px; --sm:8px; --md:12px; --lg:16px; --xl:20px;
+  --2xl:24px; --3xl:32px; --4xl:48px;
+  --shell:1400px;
+}
+*{box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{
+  margin:0; background:var(--canvas); color:var(--ink);
+  font-family:var(--serif); -webkit-font-smoothing:antialiased;
+  scroll-snap-type:y mandatory; overflow-y:scroll; height:100vh;
+}
+
+/* ── masthead band ─────────────────────────────────────────── */
+.masthead{
+  position:fixed; top:0; left:0; right:0; z-index:40;
+  display:flex; align-items:center; justify-content:space-between;
+  padding:var(--md) var(--xl);
+  background:var(--canvas); border-bottom:1px solid var(--hairline);
+  font-family:var(--sans); font-size:14px; font-weight:700; letter-spacing:.4px;
+  mix-blend-mode:normal;
+}
+.masthead .wordmark{
+  font-family:var(--display); font-weight:400; font-size:20px;
+  letter-spacing:.32em; text-transform:uppercase;
+}
+.masthead .slot{flex:1 1 0; color:var(--body); font-size:12px; letter-spacing:.14em; text-transform:uppercase;}
+.masthead .slot.right{text-align:right;}
+.progress{position:fixed; top:0; left:0; height:2px; background:var(--ink); z-index:50; width:0; transition:background .25s;}
+
+/* the fixed chrome follows the active slide's polarity */
+body.dark .masthead{background:var(--ink); color:#fff; border-bottom-color:rgba(255,255,255,.28);}
+body.dark .masthead .slot{color:rgba(255,255,255,.66);}
+body.dark .progress{background:#fff;}
+body.dark .hint{color:rgba(255,255,255,.6);}
+.masthead{transition:background .25s, color .25s, border-color .25s;}
+
+/* ── section shell ─────────────────────────────────────────── */
+section{
+  scroll-snap-align:start; min-height:100vh;
+  display:flex; align-items:center;
+  padding:calc(var(--4xl) + 32px) var(--xl) var(--4xl);
+  border-bottom:1px solid var(--hairline);
+}
+.shell{width:100%; max-width:var(--shell); margin:0 auto;}
+section.invert{background:var(--ink); color:#fff; border-bottom-color:var(--ink);}
+section.invert .eyebrow,section.invert .lede,section.invert .meta,section.invert .kicker{color:rgba(255,255,255,.72);}
+section.invert .rule,section.invert .row,section.invert li{border-color:rgba(255,255,255,.28);}
+section.invert .num{color:rgba(255,255,255,.3);}
+section.invert .tag{border-color:rgba(255,255,255,.5); color:#fff;}
+
+/* ── type ──────────────────────────────────────────────────── */
+.eyebrow{
+  font-family:var(--sans); font-size:14px; font-weight:700; letter-spacing:.16em;
+  text-transform:uppercase; color:var(--ink); margin:0 0 var(--2xl);
+}
+h1{font-family:var(--display); font-weight:400; font-size:clamp(44px,7.4vw,96px); line-height:.94; letter-spacing:-.5px; margin:0 0 var(--2xl);}
+h2{font-family:var(--display); font-weight:400; font-size:clamp(34px,4.6vw,58px); line-height:1.02; letter-spacing:-.4px; margin:0 0 var(--xl); max-width:22ch;}
+h3{font-family:var(--sans); font-weight:700; font-size:20px; line-height:1.2; letter-spacing:-.28px; margin:0 0 var(--sm);}
+.lede{font-family:var(--serif); font-size:clamp(18px,1.55vw,21px); line-height:1.47; letter-spacing:.108px; color:var(--ink-soft); max-width:62ch; margin:0 0 var(--2xl);}
+p{font-family:var(--serif); font-size:17px; line-height:1.5; margin:0 0 var(--lg); max-width:68ch;}
+.meta{font-family:var(--serif); font-weight:600; font-size:13px; line-height:2.1; letter-spacing:.108px; color:var(--body);}
+.kicker{font-family:var(--serif); font-size:17px; line-height:1.5; color:var(--body); max-width:72ch; margin-top:var(--2xl); padding-top:var(--lg); border-top:1px solid var(--hairline);}
+section.invert .kicker{border-top-color:rgba(255,255,255,.28);}
+.small{font-family:var(--sans); font-size:14px; line-height:1.4; letter-spacing:.4px; color:var(--body);}
+.tag{display:inline-block; font-family:var(--sans); font-size:12px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; border:1px solid var(--ink); padding:var(--xs) var(--sm); margin-bottom:var(--lg);}
+em.q{font-family:var(--serif); font-style:italic;}
+.rule{border:0; border-top:1px solid var(--hairline); margin:var(--2xl) 0;}
+
+/* ── typographic devices (no diagrams, no imagery) ─────────── */
+.num{font-family:var(--display); font-weight:400; font-size:clamp(64px,11vw,168px); line-height:1; color:var(--hairline); letter-spacing:-.04em; display:block; margin-bottom:var(--md);}
+.numsm{font-family:var(--display); font-weight:400; font-size:44px; line-height:1; color:var(--body);}
+
+.cols{display:grid; gap:var(--3xl); grid-template-columns:repeat(auto-fit,minmax(260px,1fr));}
+.cols-2{display:grid; gap:var(--4xl); grid-template-columns:1fr 1fr;}
+.cols-hold{display:grid; gap:var(--4xl); grid-template-columns:minmax(0,1.1fr) minmax(0,1fr); align-items:start;}
+@media (max-width:900px){.cols-2,.cols-hold{grid-template-columns:1fr; gap:var(--2xl);}}
+
+ul.rows{list-style:none; margin:0; padding:0; max-width:1040px;}
+ul.rows > li{
+  border-top:1px solid var(--hairline); padding:var(--lg) 0;
+  display:grid; grid-template-columns:2.6rem 1fr; gap:var(--lg); align-items:baseline;
+}
+ul.rows > li:last-child{border-bottom:1px solid var(--hairline);}
+ul.rows .idx{font-family:var(--sans); font-size:14px; font-weight:700; letter-spacing:.4px; color:var(--body);}
+ul.rows .t{font-family:var(--sans); font-size:17px; font-weight:700; line-height:1.3; letter-spacing:-.144px; display:block; margin-bottom:var(--xs);}
+ul.rows .d{font-family:var(--serif); font-size:16px; line-height:1.45; color:var(--ink-soft); display:block;}
+section.invert ul.rows .d{color:rgba(255,255,255,.82);}
+ul.rows.tight > li{padding:var(--md) 0;}
+.cols-hold ul.rows,.cols-2 ul.rows{max-width:none;}
+
+/* row-heavy sections: five stacked rows plus a headline need a tighter measure */
+section.compact h2{font-size:clamp(24px,2.7vw,36px); margin-bottom:var(--lg); max-width:34ch;}
+section.compact .eyebrow{margin-bottom:var(--lg);}
+section.compact ul.rows > li{padding:var(--md) 0;}
+section.compact ul.rows .d{font-size:15px; line-height:1.4;}
+@media (max-height:880px){ section.compact ul.rows > li{padding:var(--sm) 0;} section.compact ul.rows .d{font-size:14px; line-height:1.36;} section.compact h2{font-size:clamp(22px,2.3vw,30px);} }
+@media (max-height:700px){ section.compact ul.rows .t{font-size:15px;} section.compact ul.rows .d{font-size:13.5px;} }
+section.compact .kicker{margin-top:var(--lg); padding-top:var(--md); font-size:16px;}
+
+ul.plain{list-style:none; margin:0; padding:0;}
+ul.plain > li{border-top:1px solid var(--hairline); padding:var(--md) 0; font-family:var(--serif); font-size:16px; line-height:1.45;}
+ul.plain > li:last-child{border-bottom:1px solid var(--hairline);}
+ul.plain b{font-family:var(--sans); font-size:14px; font-weight:700; letter-spacing:.4px; text-transform:uppercase; display:block; margin-bottom:var(--xxs);}
+
+.ledger{display:grid; grid-template-columns:1fr 1fr; gap:0 var(--3xl);}
+.ledger .hd{font-family:var(--sans); font-size:14px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; padding-bottom:var(--md); border-bottom:2px solid var(--ink);}
+.ledger .cell{font-family:var(--serif); font-size:16px; line-height:1.4; padding:var(--md) 0; border-bottom:1px solid var(--hairline);}
+@media (max-width:900px){.ledger{grid-template-columns:1fr;} .ledger .hd:nth-child(2){margin-top:var(--2xl);}}
+
+.stat{display:flex; align-items:baseline; gap:var(--lg); margin-bottom:var(--lg);}
+.stat .v{font-family:var(--display); font-size:clamp(40px,5vw,72px); line-height:.9;}
+.stat .l{font-family:var(--sans); font-size:14px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:var(--body);}
+
+.pull{font-family:var(--display); font-weight:400; font-size:clamp(26px,3vw,40px); line-height:1.12; letter-spacing:-.3px; border-top:2px solid currentColor; border-bottom:2px solid currentColor; padding:var(--2xl) 0; margin:var(--2xl) 0 0; max-width:30ch;}
+
+/* ── overview (Esc) ───────────────────────────────────────── */
+#overview{
+  position:fixed; inset:0; background:var(--canvas); z-index:60; display:none;
+  overflow:auto; padding:var(--4xl) var(--xl);
+}
+#overview.on{display:block;}
+#overview h4{font-family:var(--sans); font-size:14px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; margin:0 0 var(--2xl);}
+#overview ol{list-style:none; margin:0 auto; padding:0; max-width:var(--shell); columns:3; column-gap:var(--4xl);}
+@media (max-width:1000px){#overview ol{columns:2;}}
+@media (max-width:640px){#overview ol{columns:1;}}
+#overview li{break-inside:avoid; border-top:1px solid var(--hairline); padding:var(--md) 0; cursor:pointer; font-family:var(--serif); font-size:16px;}
+#overview li:hover{background:var(--canvas-soft);}
+#overview li span{font-family:var(--sans); font-size:12px; font-weight:700; letter-spacing:.14em; color:var(--body); margin-right:var(--md);}
+
+.hint{position:fixed; bottom:var(--md); right:var(--xl); z-index:40; font-family:var(--sans); font-size:12px; letter-spacing:.08em; color:var(--body); text-transform:uppercase;}
+
+/* ── short viewports: a projector is rarely 900px tall ──────── */
+@media (max-height:880px){
+  section{padding:calc(var(--3xl) + 30px) var(--xl) var(--3xl);}
+  h1{font-size:clamp(38px,6vw,76px);}
+  h2{font-size:clamp(28px,3.4vw,44px); margin-bottom:var(--lg);}
+  .lede{font-size:18px; margin-bottom:var(--xl);}
+  .eyebrow{margin-bottom:var(--lg);}
+  .num{font-size:clamp(56px,8vw,120px); margin-bottom:var(--sm);}
+  ul.rows > li{padding:var(--md) 0;}
+  ul.rows .d{font-size:15px; line-height:1.4;}
+  ul.plain > li{padding:var(--sm) 0; font-size:15px;}
+  .ledger .cell{padding:var(--sm) 0; font-size:15px;}
+  .kicker{margin-top:var(--lg); padding-top:var(--md); font-size:16px;}
+  .pull{padding:var(--lg) 0; margin-top:var(--lg);}
+  .cols-hold,.cols-2{gap:var(--3xl);}
+}
+@media (max-height:760px){
+  section{padding:calc(var(--2xl) + 28px) var(--xl) var(--2xl);}
+  h1{font-size:clamp(34px,5.2vw,62px);}
+  h2{font-size:clamp(24px,2.9vw,36px);}
+  .lede{font-size:17px;}
+  .num{font-size:clamp(44px,6vw,88px); margin-bottom:var(--xs);}
+  ul.rows > li{padding:var(--sm) 0;}
+  ul.rows .t{font-size:16px;}
+  ul.rows .d{font-size:14px; line-height:1.38;}
+  ul.plain > li{padding:6px 0; font-size:14px; line-height:1.4;}
+  .ledger .cell{padding:6px 0; font-size:14px;}
+  .kicker{font-size:15px;}
+  p{font-size:16px; margin-bottom:var(--md);}
+}
+
+@media print{
+  body{height:auto; overflow:visible;}
+  section{min-height:auto; page-break-after:always; border:0;}
+  .masthead,.progress,.hint,#overview{display:none;}
+}
+</style>
+</head>
+<body>
+
+<div class="progress" id="progress"></div>
+<header class="masthead">
+  <div class="slot" id="mh-label">Internal review</div>
+  <div class="wordmark">Varys</div>
+  <div class="slot right"><span id="mh-num">01</span> / <span id="mh-total">27</span></div>
+</header>
+
+<!-- 01 ─ COVER ───────────────────────────────────────────── -->
+<section data-label="Cover" data-title="Cover">
+  <div class="shell">
+    <p class="eyebrow">Internal review · 22 September 2026</p>
+    <h1>What we built,<br>and what kept<br>breaking.</h1>
+    <p class="lede">Varys began as a browser extension for recording test cases. Three months later it is two different kinds of test, and knowing which one to reach for is most of what those three months bought.</p>
+    <p class="meta">By Mothil V, with Samarth · 12 June – 22 September 2026</p>
+  </div>
+</section>
+
+<!-- 02 ─ WHAT VARYS IS ───────────────────────────────────── -->
+<section data-label="What it is" data-title="What Varys is">
+  <div class="shell">
+    <p class="eyebrow">Definition</p>
+    <div class="cols-hold">
+      <div>
+        <h2>Varys tells you when the app stopped looking like it did the last time someone said it was right.</h2>
+        <p class="kicker">Four words. Every one of them turned out to be harder than it sounds, and each of the next five slides is one of them fighting back.</p>
+      </div>
+      <ul class="rows">
+        <li><span class="idx">01</span><span><span class="t">Record</span><span class="d">Somebody walks the app once — clicking, typing, naming the screens worth watching.</span></span></li>
+        <li><span class="idx">02</span><span><span class="t">Approve</span><span class="d">A human looks at the pictures it took and says <em class="q">that is correct</em>. Only then is anything being watched.</span></span></li>
+        <li><span class="idx">03</span><span><span class="t">Rerun</span><span class="d">Whenever you want, against whichever environment you want — on a button, or on a schedule.</span></span></li>
+        <li><span class="idx">04</span><span><span class="t">Compare</span><span class="d">Every new picture against the approved one, and anything that moved goes in front of a person.</span></span></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 03 ─ WHY ─────────────────────────────────────────────── -->
+<section data-label="Why" data-title="Why it was started">
+  <div class="shell">
+    <p class="eyebrow">Why we started</p>
+    <div class="cols-2">
+      <div>
+        <h2>Checking how the app looks is the work everybody skips.</h2>
+        <p>It is slow, it is boring, and it is the first thing dropped when a release is due. So it doesn't happen — and a broken chart, a collapsed layout, or a KPI quietly showing the wrong number ships, and a customer finds it.</p>
+      </div>
+      <div>
+        <p class="numsm">The bet</p>
+        <p>If catching that could be made cheap enough — cheap to write, cheap to run, cheap to read — it would stop being the thing that gets skipped.</p>
+        <div class="pull">Everything that follows is the cost of the word <em class="q">cheap</em>.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 04 ─ CHALLENGE 1 ─────────────────────────────────────── -->
+<section data-label="Challenge 1" data-title="Recording is expensive">
+  <div class="shell">
+    <p class="eyebrow">Challenge one · 12 June</p>
+    <div class="cols-hold">
+      <div>
+        <div class="num">01</div>
+        <h2>Recording a test is cheap. Recording forty is not.</h2>
+        <p>The first answer was a browser extension. You click through your app and it writes down every step and every screen worth watching. In three days the whole loop worked end to end.</p>
+      </div>
+      <div>
+        <span class="tag">What it cost</span>
+        <ul class="plain">
+          <li><b>Twenty careful minutes</b>Per test, and it has to be careful — a mis-click is a step you didn't want.</li>
+          <li><b>The scarcest person you have</b>Only someone who knows what <em class="q">right</em> looks like can record it.</li>
+          <li><b>Every single time</b>Not hard. Just costly, repeatedly, forever.</li>
+        </ul>
+        <p class="kicker">A tool whose adoption cost is a scarce person's afternoon does not get adopted.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 05 ─ CHALLENGE 2 ─────────────────────────────────────── -->
+<section data-label="Challenge 2" data-title="Claude writes the test">
+  <div class="shell">
+    <p class="eyebrow">Challenge two · 16 June · Varys MCP</p>
+    <div class="cols-hold">
+      <div>
+        <div class="num">02</div>
+        <h2>So describe the test in a sentence, and let Claude walk it.</h2>
+        <p>Claude connects to Varys, is handed a real browser, and drives it from a plain-English brief — reading the page, clicking, typing, naming checkpoints.</p>
+      </div>
+      <div>
+        <span class="tag">The important part</span>
+        <p>Claude does not write a script that runs later. It drives the app <em class="q">once</em>, and Varys writes down what it did using exactly the same code the human recorder uses. What comes out is an ordinary test — you cannot tell it apart from a hand-recorded one, and no AI is involved in running it ever again.</p>
+        <ul class="plain">
+          <li><b>Minutes, from a sentence</b>Instead of a careful half hour.</li>
+          <li><b>It lands as a draft</b>AI-written tests sit in a review queue until a human promotes them. Claude cannot put a test into the release gate on its own.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 06 ─ CHALLENGE 3 ─────────────────────────────────────── -->
+<section data-label="Challenge 3" data-title="Pixels lie">
+  <div class="shell">
+    <p class="eyebrow">Challenge three · 23 July · Contextual comparison</p>
+    <div class="cols-hold">
+      <div>
+        <div class="num">03</div>
+        <h2>Pixels have no opinion about what matters.</h2>
+        <p>A softened edge, a chart that animates in one frame later, a timestamp that is <em class="q">supposed</em> to change — all read as failure in exactly the same way a genuinely broken layout does.</p>
+        <div class="pull">A suite that cries wolf gets ignored, then deleted.</div>
+      </div>
+      <div>
+        <span class="tag">Two answers, both shipped</span>
+        <ul class="rows tight">
+          <li><span class="idx">i</span><span><span class="t">Masks and sensitivity</span><span class="d">Paint over the region that always changes; set how much movement counts. Adjustable right on the failing run, re-checked instantly.</span></span></li>
+          <li><span class="idx">ii</span><span><span class="t">Contextual comparison</span><span class="d">For screens where <em class="q">the same</em> cannot be defined in pixels at all, the two pictures are judged on whether they <em class="q">mean</em> the same thing — with the reasoning written down beside them.</span></span></li>
+        </ul>
+        <p class="kicker">And one rule that came with it: if the judgement can't be made at all, the run says so. A model outage never reads as green.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 07 ─ CHALLENGE 4 ─────────────────────────────────────── -->
+<section data-label="Challenge 4" data-title="The app moved">
+  <div class="shell">
+    <p class="eyebrow">Challenge four · 27 August · Repair mode</p>
+    <div class="cols-hold">
+      <div>
+        <div class="num">04</div>
+        <h2>Then the app moves, and the test is pointing at something that isn't there.</h2>
+        <p>A button gets renamed, a layout gets reorganised. The run goes red for a reason that is not a bug — and fixing it by hand means re-recording the whole journey.</p>
+      </div>
+      <div>
+        <span class="tag">Repair mode</span>
+        <p>You read the failure and ask your Claude to fix it, naming the run. Varys re-drives the test to the exact step that broke — against the page that broke it, not the app as it stands today — and parks there. Claude looks at the real page, re-points the step, and the fix is written onto the test.</p>
+        <div class="pull" style="font-size:clamp(20px,2.1vw,28px); max-width:38ch;">Nobody needs a test repaired at 3am. The failure is still there in the morning, and the person who reads it is the person who knows whether the app changed on purpose.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 08 ─ CHALLENGE 5 ─────────────────────────────────────── -->
+<section data-label="Challenge 5" data-title="Some journeys can't be pinned">
+  <div class="shell">
+    <p class="eyebrow">Challenge five · 16 September · Agent-driven tests</p>
+    <div class="cols-hold">
+      <div>
+        <div class="num">05</div>
+        <h2>Some journeys refuse to be written down as steps at all.</h2>
+        <p>The page takes a different amount of time on every run. A control is there only sometimes. The route through the app legitimately differs. Repair can't help: there is no single correct step to repair it to.</p>
+      </div>
+      <div>
+        <span class="tag">A test with no steps</span>
+        <p>Just a list of checkpoints — how to reach each one, in plain English, and what should be true when you get there. Your own Claude re-walks the whole thing on every run, on your machine, on your subscription, and reaches each state however it judges best.</p>
+        <p class="small" style="margin-bottom:var(--md);">The obvious risk is an agent that quietly checks less and still reports pass. That is handled by machinery, not by asking politely:</p>
+        <ul class="plain">
+          <li>The checkpoint list is a <b style="display:inline">closed set</b> it must fill — a name outside it is refused.</li>
+          <li>Every slot starts red. A slot never reached stays red, even if the agent crashes or says nothing.</li>
+          <li>It cannot approve a baseline, and it cannot set its own verdict.</li>
+          <li>There is a wall-clock limit it cannot talk its way out of.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 09 ─ TWO TRACKS ──────────────────────────────────────── -->
+<section data-label="The ending" data-title="Two tracks — the real ending">
+  <div class="shell">
+    <p class="eyebrow">Where it actually landed</p>
+    <h2 style="max-width:30ch;">The last one did not replace the first. We ended up with two tracks, on purpose.</h2>
+    <div class="ledger" style="margin-top:var(--2xl);">
+      <div class="hd">Pinned tests</div>
+      <div class="hd">Agent-driven tests</div>
+      <div class="cell">Recorded by a person, or authored by Claude and stored as fixed steps</div>
+      <div class="cell">No steps at all — checkpoints described in plain English</div>
+      <div class="cell">Replayed by Varys' own runner. No AI in the loop</div>
+      <div class="cell">Re-walked by your Claude, on your machine, every run</div>
+      <div class="cell">Seconds. Costs nothing per run</div>
+      <div class="cell">Minutes. Costs your own subscription</div>
+      <div class="cell">Compared pixel to pixel</div>
+      <div class="cell">Compared on meaning, never on pixels</div>
+      <div class="cell"><b>Runs unattended — suites and schedules</b></div>
+      <div class="cell"><b>On demand, started by a person</b></div>
+      <div class="cell">→ This is the release gate</div>
+      <div class="cell">→ This is for the journeys the gate can't hold</div>
+    </div>
+    <p class="kicker">Three months did not end with one of these winning. It ended with us knowing which is which — and that is the thing that cannot be bought quickly.</p>
+  </div>
+</section>
+
+<!-- 10 ─ LOCATOR A ───────────────────────────────────────── -->
+<section class="compact" data-label="Diagnosis" data-title="“Locator not found” — five causes">
+  <div class="shell">
+    <p class="eyebrow">The most common red that isn't a bug</p>
+    <h2 style="max-width:26ch;">“Locator not found” is five different problems wearing one error message.</h2>
+    <ul class="rows tight" style="margin-top:var(--2xl);">
+      <li><span class="idx">01</span><span><span class="t">The element never rendered — because the app failed</span><span class="d">An API returned a 500, or never answered. The button is missing because the data is. <b>The most common cause — and not a locator problem at all. That's the test doing its job.</b></span></span></li>
+      <li><span class="idx">02</span><span><span class="t">It rendered late</span><span class="d">Varys waits, patiently, up to thirty seconds. A streaming answer or a slow chart can take longer than that.</span></span></li>
+      <li><span class="idx">03</span><span><span class="t">It's there twice</span><span class="d">Thirteen identical delete buttons. Two score within a hair of each other, so Varys refuses to guess — and says <em class="q">not found</em> rather than clicking the wrong one.</span></span></li>
+      <li><span class="idx">04</span><span><span class="t">The signals rotted</span><span class="d">Class names that change every build, ids generated fresh every page load, a label with yesterday's date in it. The element is there; nothing about it still matches what we wrote down.</span></span></li>
+      <li><span class="idx">05</span><span><span class="t">It's there, but unreachable</span><span class="d">Hidden until you hover. Inside an embedded frame. Scrolled out of a long list that only renders what's on screen.</span></span></li>
+    </ul>
+  </div>
+</section>
+
+<!-- 11 ─ LOCATOR B ───────────────────────────────────────── -->
+<section class="compact" data-label="Diagnosis" data-title="What we did about each">
+  <div class="shell">
+    <p class="eyebrow">And what each one led to</p>
+    <ul class="rows tight">
+      <li><span class="idx">01</span><span><span class="t">Every run now records the API calls it saw</span><span class="d">Failures and slow successes, attached to the step that was running. You open the red run and see the 500 that explains the missing button — instead of spending an hour on selectors.</span></span></li>
+      <li><span class="idx">02</span><span><span class="t">Waits that understand a page that's still thinking</span><span class="d">Hold until the page actually stops changing, rather than until a fixed timer expires — up to two minutes for a streaming answer.</span></span></li>
+      <li><span class="idx">03</span><span><span class="t">Refusing to guess <em class="q">is</em> the fix</span><span class="d">Ambiguity is reported as ambiguity and never acted on. The scoring was retuned so that a unique parent can break a tie between thirteen identical siblings.</span></span></li>
+      <li><span class="idx">04</span><span><span class="t">No fix — this one is a property of the world</span><span class="d">Signals decay because apps get rebuilt. This is exactly why repair mode exists.</span></span></li>
+      <li><span class="idx">05</span><span><span class="t">Reveal on hover, descend into frames, respect what's visible</span><span class="d">And for a screenshot only, fall back to the recorded path — marked on that run so you know it happened. A click never falls back: a wrong screenshot is cheap, a wrong click is not.</span></span></li>
+    </ul>
+    <p class="kicker">Three of the five were engineering problems, and they were engineered. Two are properties of the world — and they are the reason the second half of this timeline exists.</p>
+  </div>
+</section>
+
+<!-- 12 ─ TIMELINE TITLE ──────────────────────────────────── -->
+<section class="invert" data-label="Timeline" data-title="Timeline — 12 June to 22 September">
+  <div class="shell">
+    <p class="eyebrow">Act one, part two</p>
+    <h1>12 June —<br>22 September</h1>
+    <p class="lede" style="max-width:52ch;">Not three months of work. Three months of calendar, and about eight or nine weeks of build inside it. Here is where each of those weeks went.</p>
+  </div>
+</section>
+
+<!-- 13 ─ PHASE I ─────────────────────────────────────────── -->
+<section data-label="Phase I" data-title="Phase I — the loop, in three days">
+  <div class="shell">
+    <p class="eyebrow">Phase one · 12 – 14 June · three days</p>
+    <div class="cols-hold">
+      <div>
+        <h2>The whole loop worked in three days.</h2>
+        <div class="stat"><span class="v">3</span><span class="l">days</span></div>
+        <p class="kicker" style="border-top:0; padding-top:0;">This is the part that looks like the product. It is also the part that took the least time — and saying so is the honest way to explain the rest.</p>
+      </div>
+      <div>
+        <span class="tag">What landed</span>
+        <ul class="plain">
+          <li>Record → approve → rerun → compare, working end to end</li>
+          <li>The browser extension, with an in-page overlay for taking checkpoints</li>
+          <li>The review screen: side by side, overlay, approve, reject</li>
+          <li>Folders, tags and <b style="display:inline">suites</b></li>
+          <li>Scheduled runs</li>
+          <li>A run dashboard and a step-by-step timeline of what happened</li>
+          <li>Multiple environments, and the design system for the whole app</li>
+        </ul>
+        <p class="kicker">Everything after this is what it takes to survive contact with a real application.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 14 ─ PHASE II ────────────────────────────────────────── -->
+<section data-label="Phase II" data-title="Phase II — a team's tool">
+  <div class="shell">
+    <p class="eyebrow">Phase two · 16 – 25 June · ten days</p>
+    <div class="cols-hold">
+      <div>
+        <h2>Turning a working loop into something a team can share.</h2>
+        <p>A tool one person runs on their laptop and a tool a team logs into are not the same tool. Most of this phase is the difference.</p>
+      </div>
+      <div>
+        <ul class="plain">
+          <li><b>Logins, ownership, audit</b>Who recorded it, who approved it, who changed it, and when.</li>
+          <li><b>Claude authoring over MCP</b>The whole of challenge two.</li>
+          <li><b>The review queue</b>AI-written tests arrive as drafts and a human promotes them.</li>
+          <li><b>The locator editor</b>Point a step somewhere else by hand, and verify it against the live page before saving.</li>
+          <li><b>A real verdict on every run</b>Passed, changed, failed, or needs review — never a bare red.</li>
+          <li><b>Deployed, with documentation</b>Running on our own infrastructure, with an end-user guide.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 15 ─ PHASE III ───────────────────────────────────────── -->
+<section data-label="Phase III" data-title="Phase III — survive a real app">
+  <div class="shell">
+    <p class="eyebrow">Phase three · 29 June – 29 July · one month</p>
+    <div class="cols-hold">
+      <div>
+        <h2>The month the real application pushed back.</h2>
+        <p>Nothing on this list was on any plan. Every item is something that went wrong the first time a genuine, data-heavy, chart-heavy screen was put in front of it.</p>
+        <p class="kicker" style="border-top:0;padding-top:0;">This is also where <b>contextual image comparison</b> landed — a month <em class="q">before</em> repair mode, not after it.</p>
+      </div>
+      <div>
+        <ul class="plain">
+          <li>Add and edit steps by hand, without re-recording</li>
+          <li>Masks — and editing them on the very first baseline</li>
+          <li><b style="display:inline">Contextual (AI) image comparison</b> · 23 July</li>
+          <li>Waiting for streaming pages to settle before taking the picture</li>
+          <li>Screenshots of a single element, not just whole pages</li>
+          <li>Three tests running in parallel</li>
+          <li>Scheduling for suites, and Slack notifications</li>
+          <li>Nested folders; environments simplified down to what was actually used</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 16 ─ THE PAUSE ───────────────────────────────────────── -->
+<section data-label="Pause" data-title="The pause — four weeks">
+  <div class="shell">
+    <p class="eyebrow">29 July – 24 August</p>
+    <h1 style="font-size:clamp(40px,6vw,84px);">Four weeks,<br>nothing shipped.</h1>
+    <p class="lede">Varys was put down while other work took priority. It is on this slide because it is on the timeline and somebody would find it.</p>
+    <div class="pull">Elapsed time: three months. Build time: closer to eight or nine weeks.</div>
+  </div>
+</section>
+
+<!-- 17 ─ PHASE IV ────────────────────────────────────────── -->
+<section data-label="Phase IV" data-title="Phase IV — when a test breaks">
+  <div class="shell">
+    <p class="eyebrow">Phase four · 25 August – 22 September · four weeks</p>
+    <div class="cols-hold">
+      <div>
+        <h2>Everything about what happens after a test goes red.</h2>
+        <p>The first three phases built a thing that watches. This one built what to do when what it's watching changes — and it is where challenges four and five both got answered.</p>
+      </div>
+      <div>
+        <ul class="plain">
+          <li><b>Repair sessions</b>Re-drive to the broken step and fix the test in place · 27 Aug</li>
+          <li><b>Assertions</b>A check across two things on the page — <em class="q">this total equals the sum of that column</em> — evaluated exactly, with no AI involved</li>
+          <li><b>Failures that explain themselves</b>Every red run now says what kind of red it is</li>
+          <li><b>Charts that hold still</b>Wait for the animation and the data before capturing</li>
+          <li><b>Agent-driven tests</b>With the closed checklist, the pre-seeded reds and the wall-clock limit · 16 Sep</li>
+          <li><b>Screenshots stopped going through the model</b>They used to be read out as text, character by character — roughly 95% of the time a checkpoint took. Now they travel as files.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 18 ─ ACT II TITLE ────────────────────────────────────── -->
+<section class="invert" data-label="Act two" data-title="Act II — the next release">
+  <div class="shell">
+    <p class="eyebrow">Act two</p>
+    <h1>So there's a<br>release next<br>week.</h1>
+    <p class="lede" style="max-width:52ch;">Six steps. This is what I'm proposing we actually do — not a description of what already happens.</p>
+  </div>
+</section>
+
+<!-- 19 ─ STEP 1 ──────────────────────────────────────────── -->
+<section data-label="Step 1" data-title="Step 1 — build the suite">
+  <div class="shell">
+    <p class="eyebrow">Step one</p>
+    <div class="cols-hold">
+      <div><div class="num">01</div><h2>Build a suite.</h2></div>
+      <div>
+        <p>A suite is a saved group of tests you want to run together — say, everything that matters for a release. You fill it two ways, and you can mix them:</p>
+        <ul class="plain">
+          <li><b>By folder</b>Everything in it — including anything filed there later. A standing selection, so a suite keeps up with itself.</li>
+          <li><b>By individual test</b>For the handful that don't fit a folder.</li>
+        </ul>
+        <p class="kicker">One suite per area, or one per release. Suites are free — make several. Only promoted, live tests go in.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 20 ─ STEP 2 ──────────────────────────────────────────── -->
+<section data-label="Step 2" data-title="Step 2 — run it">
+  <div class="shell">
+    <p class="eyebrow">Step two</p>
+    <div class="cols-hold">
+      <div><div class="num">02</div><h2>Run it against the release.</h2></div>
+      <div>
+        <ul class="plain">
+          <li><b>One press</b>Against one environment, or several at once — staging and production in a single go.</li>
+          <li><b>It runs in the background</b>Three tests at a time. Nobody sits and watches; the page updates itself.</li>
+          <li><b>Or don't press anything</b>Give the suite a schedule and it runs nightly, or every hour, in whichever timezone you mean.</li>
+          <li><b>Slack says when it's done</b>Which is usually how you'll find out.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 21 ─ STEP 3 ──────────────────────────────────────────── -->
+<section data-label="Step 3" data-title="Step 3 — read one report">
+  <div class="shell">
+    <p class="eyebrow">Step three</p>
+    <div class="cols-hold">
+      <div><div class="num">03</div><h2>Read one combined report.</h2><p>Not forty results. One, with four possible outcomes — and they mean genuinely different things.</p></div>
+      <div>
+        <ul class="plain">
+          <li><b>Passed</b>Every picture matched what was approved.</li>
+          <li><b>Changed</b>Something looks different. Might be intended, might be a bug — that's step four.</li>
+          <li><b>Failed</b>The test couldn't get where it was going. Nothing was compared.</li>
+          <li><b>Needs review</b>Nothing was compared, and that's not a failure either — a first run in a new environment has nothing to compare against yet.</li>
+        </ul>
+        <p class="kicker">Deliberately: if a comparison could not be made at all, it never reads as a pass.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 22 ─ STEP 4 ──────────────────────────────────────────── -->
+<section data-label="Step 4" data-title="Step 4 — approve or reject">
+  <div class="shell">
+    <p class="eyebrow">Step four · this is how you update</p>
+    <div class="cols-hold">
+      <div><div class="num">04</div><h2>Decide, one screen at a time.</h2><p>Side by side, overlay, swipe, or blink between the two — whichever makes the difference obvious.</p></div>
+      <div>
+        <ul class="plain">
+          <li><b>Approve</b>The new look is correct. It becomes the baseline from now on. Permanent — the old one is replaced and does not come back — so it asks you to confirm, and records who did it and when.</li>
+          <li><b>Reject</b>It's a bug. File it.</li>
+          <li><b>Approve all</b>When a whole screen legitimately changed, one press takes the lot.</li>
+          <li><b>There is no bulk reject</b>On purpose. Accepting a redesign wholesale is routine; throwing away a run's worth of evidence in one click is not.</li>
+        </ul>
+        <p class="kicker">Getting false alarms from a region that always changes? Adjust the mask and the sensitivity right there on the run, and re-check instantly.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 23 ─ STEP 5 ──────────────────────────────────────────── -->
+<section data-label="Step 5" data-title="Step 5 — when a test can't get there">
+  <div class="shell">
+    <p class="eyebrow">Step five</p>
+    <div class="cols-hold">
+      <div><div class="num">05</div><h2>When a test couldn't get there at all.</h2></div>
+      <div>
+        <ul class="rows tight">
+          <li><span class="idx">i</span><span><span class="t">Check the API panel first</span><span class="d">Before anything else. The button may be missing because the backend is. That is a real finding, and no amount of repairing the test will help.</span></span></li>
+          <li><span class="idx">ii</span><span><span class="t">If the app genuinely moved, ask Claude to repair it</span><span class="d">Name the run. It re-drives to the broken step, looks at the page that actually broke, re-points the test and writes the fix in place.</span></span></li>
+          <li><span class="idx">iii</span><span><span class="t">Rerun to prove it</span><span class="d">A repair isn't finished because Claude says so. It's finished when the run is green.</span></span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 24 ─ STEP 6 ──────────────────────────────────────────── -->
+<section data-label="Step 6" data-title="Step 6 — outside the suite">
+  <div class="shell">
+    <p class="eyebrow">Step six</p>
+    <div class="cols-hold">
+      <div><div class="num">06</div><h2>And the journeys the suite can't hold.</h2><p>Agent-driven tests do not join suites and cannot be scheduled. Nothing can run one unattended — that is the design, not a gap.</p></div>
+      <div>
+        <ul class="plain">
+          <li><b>Run them by hand before the release</b>From Varys, or by asking your own Claude directly. Ten minutes of someone's attention, on the two or three journeys worth that attention.</li>
+          <li><b>Their baselines are approved from the review queue</b>No run needed just to produce a picture — the pictures from authoring are the pictures.</li>
+          <li><b>They still can't grade themselves</b>A human approves what <em class="q">correct</em> means. Always.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 25 ─ NON-GOALS ───────────────────────────────────────── -->
+<section class="compact" data-label="Non-goals" data-title="What it deliberately won't do">
+  <div class="shell">
+    <p class="eyebrow">Before you ask</p>
+    <h2 style="max-width:26ch;">Five things Varys deliberately will not do.</h2>
+    <ul class="rows tight" style="margin-top:var(--2xl);">
+      <li><span class="idx">01</span><span><span class="t">It won't repair anything unattended</span><span class="d">No 3am auto-fix. The person who reads the failure is the person who knows whether the app changed on purpose.</span></span></li>
+      <li><span class="idx">02</span><span><span class="t">It keeps no version history, and nothing rolls back</span><span class="d">A test has exactly one definition. The past lives on the runs — each one keeps a copy of what it walked, as evidence. Nothing can be restored from it.</span></span></li>
+      <li><span class="idx">03</span><span><span class="t">Agent-driven tests never join the release gate</span><span class="d">They cost your subscription and take minutes. A gate has to be cheap and unattended; they are neither.</span></span></li>
+      <li><span class="idx">04</span><span><span class="t">Every environment approves its own baselines</span><span class="d">A new environment starts blind, on purpose. <em class="q">Correct on staging</em> is not a claim about production.</span></span></li>
+      <li><span class="idx">05</span><span><span class="t">Varys never pays for the AI</span><span class="d">Authoring, repair and agent runs all happen on the asker's own Claude. Which is also why none of them can happen without a person asking.</span></span></li>
+    </ul>
+  </div>
+</section>
+
+<!-- 26 ─ THE ASK ─────────────────────────────────────────── -->
+<section class="invert compact" data-label="The ask" data-title="The ask">
+  <div class="shell">
+    <p class="eyebrow">What I'm asking for</p>
+    <h1 style="font-size:clamp(38px,5.4vw,72px);">Four things,<br>this week.</h1>
+    <ul class="rows" style="margin-top:var(--2xl);">
+      <li><span class="idx">01</span><span><span class="t">Pick your area</span><span class="d">The screens you'd be embarrassed to ship broken.</span></span></li>
+      <li><span class="idx">02</span><span><span class="t">Get two or three journeys in</span><span class="d">Record them, or describe them to Claude and let it write them. Fifteen minutes either way.</span></span></li>
+      <li><span class="idx">03</span><span><span class="t">Put them in a suite, and we run it against the next release together</span><span class="d">And read the report as a group, once, so we agree on what the outcomes mean.</span></span></li>
+      <li><span class="idx">04</span><span><span class="t">Bring back everything it got wrong</span><span class="d">Every false red is a bug in Varys, not in you. That list is the most valuable thing anyone can hand me right now.</span></span></li>
+    </ul>
+  </div>
+</section>
+
+<!-- 27 ─ COLOPHON ────────────────────────────────────────── -->
+<section data-label="End" data-title="Colophon">
+  <div class="shell" style="text-align:center;">
+    <p class="eyebrow" style="text-align:center;">Varys</p>
+    <h1 style="font-size:clamp(40px,6vw,88px);">Ten decisions.<br>Four of them<br>reversals.</h1>
+    <p class="lede" style="margin:0 auto var(--2xl); max-width:54ch;">The architecture record has ten entries, and four of them exist to undo an earlier one — the queue that turned out not to be needed, the test kind that was ruled out and then built anyway. That is what the three months actually bought.</p>
+    <p class="meta">Mothil V · Samarth · 12 June – 22 September 2026</p>
+  </div>
+</section>
+
+<div id="overview"><h4>Contents — click to jump · Esc to close</h4><ol id="ovlist"></ol></div>
+<div class="hint">← → navigate · Esc contents</div>
+
+<script>
+(function () {
+  var sections = Array.prototype.slice.call(document.querySelectorAll('section'));
+  var total = sections.length;
+  var current = 0;
+  var numEl = document.getElementById('mh-num');
+  var totEl = document.getElementById('mh-total');
+  var labEl = document.getElementById('mh-label');
+  var barEl = document.getElementById('progress');
+  var ov = document.getElementById('overview');
+  var ovList = document.getElementById('ovlist');
+
+  var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+  totEl.textContent = pad(total);
+
+  // contents overlay
+  sections.forEach(function (s, i) {
+    var li = document.createElement('li');
+    li.innerHTML = '<span>' + pad(i + 1) + '</span>' + (s.dataset.title || 'Slide');
+    li.addEventListener('click', function () { closeOverview(); go(i); });
+    ovList.appendChild(li);
+  });
+
+  function paint(i) {
+    current = i;
+    numEl.textContent = pad(i + 1);
+    labEl.textContent = sections[i].dataset.label || '';
+    barEl.style.width = (total < 2 ? 100 : (i / (total - 1)) * 100) + '%';
+    document.body.classList.toggle('dark', sections[i].classList.contains('invert'));
+  }
+
+  function go(i) {
+    if (i < 0) i = 0;
+    if (i > total - 1) i = total - 1;
+    sections[i].scrollIntoView({ behavior: 'smooth', block: 'start' });
+    paint(i);
+  }
+
+  // which section is on screen
+  if ('IntersectionObserver' in window) {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (e.isIntersecting && e.intersectionRatio > 0.5) paint(sections.indexOf(e.target));
+      });
+    }, { threshold: [0.5] });
+    sections.forEach(function (s) { io.observe(s); });
+  }
+
+  function openOverview() { ov.classList.add('on'); }
+  function closeOverview() { ov.classList.remove('on'); }
+
+  document.addEventListener('keydown', function (e) {
+    var k = e.key;
+    if (k === 'Escape') {
+      e.preventDefault();
+      ov.classList.contains('on') ? closeOverview() : openOverview();
+      return;
+    }
+    if (ov.classList.contains('on')) return;
+    if (k === 'ArrowRight' || k === 'ArrowDown' || k === 'PageDown' || k === ' ' || k === 'Spacebar') {
+      e.preventDefault(); go(current + 1);
+    } else if (k === 'ArrowLeft' || k === 'ArrowUp' || k === 'PageUp') {
+      e.preventDefault(); go(current - 1);
+    } else if (k === 'Home') {
+      e.preventDefault(); go(0);
+    } else if (k === 'End') {
+      e.preventDefault(); go(total - 1);
+    }
+  });
+
+  paint(0);
+})();
+</script>
+</body>
+</html>

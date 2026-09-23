@@ -1,5 +1,5 @@
 import { Body, Controller, Delete, Get, Inject, Param, Post } from "@nestjs/common";
-import type { PromoteDraftBody } from "@varys/review-contract";
+import type { PromoteDraftBody, SeedBaselinesBody } from "@varys/review-contract";
 import { type AuthUser, CurrentUser } from "../auth/current-user.decorator";
 import { TestsService } from "./tests.service";
 
@@ -28,6 +28,24 @@ export class DraftsController {
   @Post(":id/promote")
   promote(@Param("id") id: string, @Body() body: PromoteDraftBody, @CurrentUser() user: AuthUser) {
     return this.tests.promote(id, body ?? {}, user.email);
+  }
+
+  /**
+   * Approve an Agent-Driven Draft's authoring captures as the baselines for one environment.
+   *
+   * Deliberately its own route and not a flag on promote. They are different decisions with
+   * different blast radii — promote files a test and makes it eligible to run, this one declares
+   * what "correct" means — and a reviewer must be able to do either without the other. Web-UI
+   * only, like promote and for the same reason: an agent must not be able to approve its own
+   * capture as the standard it will later be judged against.
+   */
+  @Post(":id/baselines")
+  seedBaselines(
+    @Param("id") id: string,
+    @Body() body: SeedBaselinesBody,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.tests.seedBaselinesFromCaptures(id, body ?? ({} as SeedBaselinesBody), user.email);
   }
 
   /** Discard a draft — reuses the hard-delete path (irreversible). */

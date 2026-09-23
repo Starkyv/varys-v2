@@ -1,11 +1,11 @@
 import type { DraftSummary } from "@varys/review-contract";
-import { AlertTriangle, Badge, Button, Check, Eye, IconButton, Pencil, Play, Skeleton, Trash } from "@varys/ui";
+import { AlertTriangle, Badge, Button, Check, Eye, IconButton, Pencil, Play, Select, Skeleton, Trash } from "@varys/ui";
 import { useEffect, useState } from "react";
 import { AgentCheckpointList } from "../../../../components/AgentCheckpointList";
 import { ZoomableImage } from "../../../../components/ZoomableImage";
 import { useToast } from "../../../../context/toast";
 import { relativeTime } from "../../../../lib/format";
-import { useDraft, useRenameDraft } from "../../../../queries";
+import { useDraft, useEnvironments, useRenameDraft, useSeedDraftBaselines } from "../../../../queries";
 import styles from "./styles.module.scss";
 
 /**
@@ -46,6 +46,37 @@ export function DraftInspector({
   const rename = useRenameDraft();
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState("");
+
+  // Approving the authoring captures as baselines. Only an Agent-Driven Draft offers it: a
+  // pinned checkpoint is pixel-diffed, so its golden has to come off the runner that will
+  // replay it, and the server refuses this route for that kind.
+  const environments = useEnvironments({ enabled: agent });
+  const seed = useSeedDraftBaselines();
+  const [envId, setEnvId] = useState("");
+
+  // Clear the pick when a different draft is selected — an environment chosen for one draft is
+  // not a choice anyone made about the next.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset only on selection change.
+  useEffect(() => setEnvId(""), [draft.id]);
+
+  function approveCaptures() {
+    if (!envId) return;
+    seed.mutate(
+      { id: draft.id, body: { environmentId: envId } },
+      {
+        onSuccess: (r) => {
+          // Report what was RECORDED, never what was asked for: a checkpoint with no capture, or
+          // one already baselined, is skipped — and "approved" over the top of that would be a
+          // reviewer believing they had decided something they had not.
+          const done = r.seeded.length
+            ? `Approved ${r.seeded.length} capture${r.seeded.length === 1 ? "" : "s"} as ${r.environment} baselines`
+            : `Nothing approved for ${r.environment}`;
+          toast(r.skipped.length ? `${done} — ${r.skipped.length} skipped` : done);
+        },
+        onError: (e) => toast(e instanceof Error ? e.message : "Could not approve the captures"),
+      },
+    );
+  }
 
   // Drop out of edit mode when a different draft is selected.
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset only on selection change.
@@ -212,11 +243,41 @@ export function DraftInspector({
               </div>
             )}
             {agent && (
-              <p className={styles.cpNote}>
-                The captures are what Claude saw when it reached each state — evidence the journey
-                is walkable, not baselines. The first run against an environment proposes those,
-                and you approve them there.
-              </p>
+              <div className={styles.baselineBox}>
+                <p className={styles.cpNote}>
+                  The captures are what Claude saw when it reached each state. They are evidence
+                  until you say otherwise — approve them below and they become the baselines this
+                  test is judged against, for the environment you pick. Approving is the whole
+                  decision: nothing else here declares what “correct” looks like.
+                </p>
+                <div className={styles.baselineRow}>
+                  <Select
+                    className={styles.baselineSelect}
+                    ariaLabel="Environment these captures are correct for"
+                    options={(environments.data ?? []).map((e) => ({ value: e.id, label: e.name }))}
+                    value={envId}
+                    onValueChange={setEnvId}
+                    placeholder={environments.isLoading ? "Loading…" : "Pick an environment"}
+                    selectSize="sm"
+                    disabled={seed.isPending || (environments.data ?? []).length === 0}
+                  />
+                  <Button
+                    variant="secondary"
+                    iconLeft={<Check size={14} />}
+                    disabled={!envId || seed.isPending || checkpoints.length === 0}
+                    onClick={approveCaptures}
+                  >
+                    {seed.isPending ? "Approving…" : "Approve as baselines"}
+                  </Button>
+                </div>
+                {detail.data?.baselinedEnvironments.length ? (
+                  <p className={styles.baselineDone}>
+                    Already has baselines for{" "}
+                    {detail.data.baselinedEnvironments.join(", ")} — approving again leaves those
+                    alone. Replacing a baseline is done from the run that disagreed with it.
+                  </p>
+                ) : null}
+              </div>
             )}
           </section>
         )}

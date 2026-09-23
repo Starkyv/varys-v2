@@ -232,3 +232,24 @@ front of it), which records nothing in the test and is evidence of nothing. The 
 serve both, but they are different claims — one says "this is what the page looks like to me right
 now", the other says "this is what a human should review, and may approve".
 _Avoid_: screenshot, shot, image, snapshot
+
+**Baseline**:
+The approved image a **Checkpoint** is compared against, keyed per **environment** and viewport —
+so one Checkpoint has as many baselines as the environments it runs in, and never one that spans
+them. It is what "correct" means for that slot, and only a human makes one. Always separate from
+**Promote**: a test can be filed with nobody having decided yet what it should look like.
+
+Distinct from a **Capture**, which is evidence offered; a baseline is evidence accepted. The
+difference is a person, not a provenance — which is why an **Agent-Driven Test**'s authoring
+Captures can be approved as its baselines directly, rather than a Run being spent to produce a
+second picture of a state that was already reached. A pinned test's cannot: its checkpoints are
+compared pixel to pixel, so its baseline has to be captured by the same runner that replays it.
+
+Approving a first Capture and REPLACING a live baseline are different acts with different homes.
+The first is a judgement about a picture and can be made wherever the picture is. The second is
+only ever made on the **Run** that disagreed, because the thing that disagreed is the context in
+which "this is the new correct" means anything at all.
+
+A checkpoint with no baseline for its environment is `pending-baseline`: nothing was compared, so
+it is neither a pass nor a failure.
+_Avoid_: golden, approved image, reference image (that names the agent's capture, not this)

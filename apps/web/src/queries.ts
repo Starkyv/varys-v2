@@ -6,6 +6,7 @@ import type {
   JudgeSettingsPatch,
   LocatorVerifyRequest,
   PromoteDraftBody,
+  SeedBaselinesBody,
   SlackSettingsPatch,
   TestConfigPatch,
   TestScheduleInput,
@@ -65,6 +66,7 @@ import {
   persistCheckpointMasks,
   postDecision,
   promoteDraft,
+  seedDraftBaselines,
   reEvaluateCheckpoint,
   renameFolder,
   runTest,
@@ -320,6 +322,25 @@ export function usePromoteDraft() {
       qc.invalidateQueries({ queryKey: testsQueryKey() });
       qc.invalidateQueries({ queryKey: foldersQueryKey() });
       qc.invalidateQueries({ queryKey: tagsQueryKey() });
+    },
+  });
+}
+
+/**
+ * Approve an Agent-Driven Draft's captures as the baselines for one environment.
+ *
+ * Invalidates the draft itself (its `baselinedEnvironments` is what the control reads back) and
+ * the runs list, because a test whose baselines now exist reports differently the next time it is
+ * run — `pending-baseline` was never a failure, but it was never a pass either.
+ */
+export function useSeedDraftBaselines() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { id: string; body: SeedBaselinesBody }) =>
+      seedDraftBaselines(vars.id, vars.body),
+    onSuccess: (_result, vars) => {
+      qc.invalidateQueries({ queryKey: draftQueryKey(vars.id) });
+      qc.invalidateQueries({ queryKey: draftsQueryKey() });
     },
   });
 }

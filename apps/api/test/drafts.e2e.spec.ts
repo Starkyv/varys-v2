@@ -8,6 +8,11 @@ import request from "supertest";
 import { authed, prepareAuth } from "./auth-harness";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
+import type { StorageAdapter } from "@varys/storage-adapter";
+import { eq } from "drizzle-orm";
+import { DB, type Db } from "../src/db/db.module";
+import { baselines } from "../src/db/schema";
+import { STORAGE } from "../src/storage/storage.module";
 import { AgentTestsService } from "../src/tests/agent-tests.service";
 import { TestsService } from "../src/tests/tests.service";
 import { startTestDb, type TestDb } from "./db-harness";
@@ -220,6 +225,79 @@ describe("Draft lifecycle", () => {
 
       const drafts = await http().get("/drafts").expect(200);
       expect((drafts.body as Array<{ id: string }>).some((d) => d.id === id)).toBe(false);
+    });
+
+    describe("approving the captures as baselines", () => {
+      /** An environment to approve INTO. A baseline is keyed to one, so there is no such thing
+       *  as approving a capture in general. */
+      async function environment(name: string): Promise<string> {
+        const res = await http()
+          .post("/environments")
+          .send({ name, baseUrl: "http://localhost:3000" })
+          .expect(201);
+        return res.body.id as string;
+      }
+
+      it("makes the agent's own captures the golden for the chosen environment", async () => {
+        const id = await authoredDraft("seeded journey", ["landing", "filtered"]);
+        const envId = await environment(`staging-${Date.now()}`);
+
+        const res = await http().post(`/drafts/${id}/baselines`).send({ environmentId: envId }).expect(201);
+        expect(res.body.seeded).toEqual(["landing", "filtered"]);
+        expect(res.body.skipped).toEqual([]);
+
+        // The whole point: the bytes a human approved are the agent's own capture, so the run
+        // that was previously required to produce a picture to approve is not required.
+        const detail = await http().get(`/drafts/${id}`).expect(200);
+        expect(detail.body.baselinedEnvironments).toEqual([res.body.environment]);
+      });
+
+      it("copies the capture rather than pointing at it, so a re-capture cannot rewrite a golden", async () => {
+        const id = await authoredDraft("re-captured journey", ["landing"]);
+        const envId = await environment(`copy-${Date.now()}`);
+        await http().post(`/drafts/${id}/baselines`).send({ environmentId: envId }).expect(201);
+
+        // Claude re-captures the state — same checkpoint, new picture. `putDraftPreview` upserts
+        // in place, so anything that merely REFERENCED the preview key would now be showing a
+        // baseline nobody ever approved.
+        await tests.putDraftPreview(id, "landing", png("a completely different landing"));
+
+        const dbi = app.get<Db>(DB);
+        const [baseline] = await dbi
+          .select({ artifactKey: baselines.artifactKey })
+          .from(baselines)
+          .where(eq(baselines.testId, id));
+        const bytes = await app.get<StorageAdapter>(STORAGE).get(baseline.artifactKey);
+        expect(bytes?.equals(png("landing"))).toBe(true);
+      });
+
+      it("skips a checkpoint that already has a baseline instead of overwriting it", async () => {
+        const id = await authoredDraft("twice-approved journey", ["landing"]);
+        const envId = await environment(`twice-${Date.now()}`);
+        await http().post(`/drafts/${id}/baselines`).send({ environmentId: envId }).expect(201);
+
+        // Replacing a golden is a Run's approval — there you are looking at the capture that
+        // disagreed with it, which is the only context where "this is the new correct" means
+        // anything. A second press here must not quietly re-decide that.
+        const again = await http().post(`/drafts/${id}/baselines`).send({ environmentId: envId }).expect(201);
+        expect(again.body.seeded).toEqual([]);
+        expect(again.body.skipped[0].name).toBe("landing");
+        expect(again.body.skipped[0].reason).toMatch(/already has a baseline/i);
+      });
+
+      it("refuses a pinned Draft, whose baseline must come off the runner that replays it", async () => {
+        const { id } = await tests.create(DEFINITION, "qa@acme.io");
+        const envId = await environment(`pinned-${Date.now()}`);
+
+        const refused = await http().post(`/drafts/${id}/baselines`).send({ environmentId: envId }).expect(400);
+        expect(refused.body.message).toMatch(/pixel/i);
+      });
+
+      it("refuses to approve into an environment nobody named", async () => {
+        const id = await authoredDraft("unnamed environment", ["landing"]);
+        const refused = await http().post(`/drafts/${id}/baselines`).send({}).expect(400);
+        expect(refused.body.message).toMatch(/environment/i);
+      });
     });
 
     it("leaves a pinned Draft reading exactly as it did", async () => {
